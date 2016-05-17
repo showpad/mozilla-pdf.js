@@ -1108,7 +1108,7 @@ html[dir='rtl'] .verticalToolbarSeparator {
   margin: -1px -1px 4px -1px;
 }
 
-.thumbnailImage {
+.pdfjs-viewer-body .thumbnailImage {
   border: 1px solid transparent;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
   opacity: 0.8;
@@ -1117,7 +1117,7 @@ html[dir='rtl'] .verticalToolbarSeparator {
   background-clip: content-box;
 }
 
-.thumbnailSelectionRing {
+.pdfjs-viewer-body .thumbnailSelectionRing {
   border-radius: 2px;
   padding: 7px;
 }
@@ -1138,12 +1138,12 @@ a:focus > .thumbnail > .thumbnailSelectionRing,
   color: hsla(0,0%,100%,.9);
 }
 
-.thumbnail.selected > .thumbnailSelectionRing > .thumbnailImage {
+.pdfjs-viewer-body .thumbnail.selected > .thumbnailSelectionRing > .thumbnailImage {
   box-shadow: 0 0 0 1px hsla(0,0%,0%,.5);
   opacity: 1;
 }
 
-.thumbnail.selected > .thumbnailSelectionRing {
+.pdfjs-viewer-body .thumbnail.selected > .thumbnailSelectionRing {
   background-color: hsla(0,0%,100%,.3);
   background-image: linear-gradient(hsla(0,0%,100%,.05), hsla(0,0%,100%,0));
   background-clip: padding-box;

@@ -6117,6 +6117,7 @@ var PDFViewerApplication = (function(){
     this.loadingBar = null;
     this.container = container ? container : null;
     this.animationStartedClosure();
+    this.__listeners = {};
   }
 
   PDFViewerApplication.prototype = {
@@ -6702,7 +6703,7 @@ var PDFViewerApplication = (function(){
   //#else
   //  console.error(message + '\n' + moreInfoText);
   //  this.fallback();
-  //#endif      
+  //#endif
     },
 
     progress: function pdfViewProgress(level) {
@@ -7542,6 +7543,8 @@ var PDFViewerApplication = (function(){
         thumbnailView.setImage(pageView);
       }
 
+      this.fire('pagerendered', e);
+
       if (PDFJS.pdfBug && Stats.enabled && pageView.stats) {
         Stats.add(pageNumber, pageView.stats);
       }
@@ -7668,7 +7671,7 @@ var PDFViewerApplication = (function(){
         });
       });
       var href = this.pdfLinkService.getAnchorUrl(location.pdfOpenParams);
-      
+
       document.getElementById('viewBookmark').href = href;
       document.getElementById('secondaryViewBookmark').href = href;
 
@@ -7833,6 +7836,8 @@ var PDFViewerApplication = (function(){
 
       document.getElementById('firstPage').disabled = (page <= 1);
       document.getElementById('lastPage').disabled = (page >= numPages);
+
+      this.fire('pagechange', evt);
 
       // we need to update stats
       if (PDFJS.pdfBug && Stats.enabled) {
@@ -8194,9 +8199,47 @@ var PDFViewerApplication = (function(){
       });
     },
 
+    /**
+     * Add event listener for a specific event
+     * @param {string} event
+     * @param {function} callback
+     */
+    on (event, callback)
+    {
+        if (!this.__listeners.hasOwnProperty(event)) {
+            this.__listeners[event] = [];
+        }
+
+        this.__listeners[event].push(callback);
+    }
+
+    /**
+     * Remove all listeners for a specific event
+     * @param {string} event
+     */
+    off (event)
+    {
+        delete this.__listeners[event];
+    }
+
+    /**
+     * Fire a specific event with all the specified arguments
+     */
+    fire ()
+    {
+        var params = Array.prototype.slice.call(arguments);
+        var event = params.splice(0, 1);
+
+        if (this.__listeners.hasOwnProperty(event)) {
+            this.__listeners[event].forEach(callback => callback.apply(this, params));
+        }
+    }
+
+
   }
 
   return PDFViewerApplication;
 
 })();
+
 

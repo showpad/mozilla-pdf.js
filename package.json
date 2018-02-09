@@ -21,9 +21,11 @@
     "jasmine": "^2.8.0",
     "jasmine-core": "^2.8.0",
     "jsdoc": "^3.5.5",
+    "json": "^9.0.6",
     "merge-stream": "^1.0.1",
     "mkdirp": "^0.5.1",
     "node-ensure": "^0.0.0",
+    "np": "^2.19.0",
     "rimraf": "^2.6.2",
     "streamqueue": "^1.1.1",
     "systemjs": "^0.20.19",
@@ -40,7 +42,11 @@
     "yargs": "^9.0.1"
   },
   "scripts": {
-    "test": "gulp lint unittestcli externaltest"
+    "test": "gulp lint unittestcli externaltest",
+    "build": "gulp dist",
+    "rename-dist-package": "json -I -f build/dist/package.json -e 'this.name=`@showpad/pdfjs-dist`'",
+    "copy-npmrc": "cp .npmrc build/dist/.npmrc",
+    "release": "npm run build && npm run copy-npmrc && npm run rename-dist-package && cd build/dist && np --any-branch"
   },
   "repository": {
     "type": "git",

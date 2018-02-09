@@ -45,6 +45,7 @@
     "test": "gulp lint unittestcli externaltest",
     "build": "gulp dist",
     "rename-dist-package": "json -I -f build/dist/package.json -e 'this.name=`@showpad/pdfjs-dist`'",
+    "add-publish-config": "json -I -f build/dist/package.json -e 'this.publishConfig={registry:`https://npm.showpad.io:8080`}'",
     "copy-npmrc": "cp .npmrc build/dist/.npmrc",
     "release": "npm run build && npm run copy-npmrc && npm run rename-dist-package && cd build/dist && np --any-branch"
   },

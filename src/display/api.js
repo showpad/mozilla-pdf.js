@@ -1955,6 +1955,13 @@ var WorkerTransport = (function WorkerTransportClosure() {
 
             // Immediately release the image data once decoding has finished.
             releaseImageResources(img);
+
+            // Zeroing the width and height cause Firefox to release graphics
+            // resources immediately, which can greatly reduce memory consumption.
+            tmpCanvas.width = 0;
+            tmpCanvas.height = 0;
+            tmpCanvas = null;
+            tmpCtx = null;
           };
           img.onerror = function () {
             reject(new Error('JpegDecode failed to load image'));

@@ -451,7 +451,16 @@ var WorkerMessageHandler = {
         return pdfManagerCapability.promise;
       }
 
-      var fullRequest = pdfStream.getFullReader();
+      const mockFullRequest = {
+        headersReady: Promise.resolve(),
+        isRangeSupported: !source.disableRange,
+        contentLength: source.contentLength,
+        isStreamingSupported: !source.disableStream,
+      };
+      const useRangeRequests = !source.disableRange && source.contentLength && (source.contentLength > (source.rangeChunkSize * 2));
+      var fullRequest = useRangeRequests ?
+        mockFullRequest :
+        pdfStream.getFullReader();
       fullRequest.headersReady.then(function () {
         if (!fullRequest.isRangeSupported) {
           return;
@@ -500,7 +509,7 @@ var WorkerMessageHandler = {
         }
         cachedChunks = [];
       };
-      var readPromise = new Promise(function (resolve, reject) {
+      var readPromise = useRangeRequests ? Promise.resolve() : new Promise(function (resolve, reject) {
         var readChunk = function (chunk) {
           try {
             ensureNotTerminated();
@@ -595,7 +604,7 @@ var WorkerMessageHandler = {
             ensureNotTerminated();
 
             loadDocument(true).then(onSuccess, onFailure);
-          });
+          }).catch(onFailure);
         }, onFailure);
       }
 
@@ -622,7 +631,7 @@ var WorkerMessageHandler = {
         handler.send('PDFManagerReady', null);
         pdfManager.onLoadedStream().then(function(stream) {
           handler.send('DataLoaded', { length: stream.bytes.byteLength, });
-        });
+        }).catch(onFailure);
       }).then(pdfManagerReady, onFailure);
     }
 

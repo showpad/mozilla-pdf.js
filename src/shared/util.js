@@ -1182,9 +1182,18 @@ function makeReasonSerializable(reason) {
       reason instanceof MissingPDFException ||
       reason instanceof UnexpectedResponseException ||
       reason instanceof UnknownErrorException) {
-    return reason;
+    // Angular adds zone/promise related logic to the Error class making it non serializable
+    try {
+      // strip all functions from object
+      return JSON.parse(JSON.stringify(reason));
+    } catch (e) {
+      return reason;
+    }
   }
-  return new UnknownErrorException(reason.message, reason.toString());
+  const unknownErrorException =
+    new UnknownErrorException(reason.message, reason.toString());
+
+  return JSON.parse(JSON.stringify(unknownErrorException));
 }
 
 function resolveOrReject(capability, success, reason) {
@@ -1394,8 +1403,9 @@ MessageHandler.prototype = {
 
     let sendStreamRequest = ({ stream, chunk, transfers,
                                success, reason, }) => {
+      const serializableErrorReason = makeReasonSerializable(reason);
       this.postMessage({ sourceName, targetName, stream, streamId,
-                         chunk, success, reason, }, transfers);
+                         chunk, success, reason: serializableErrorReason, }, transfers);
     };
 
     let streamSink = {
@@ -1429,6 +1439,13 @@ MessageHandler.prototype = {
           return;
         }
         this.isCancelled = true;
+        // network error: workaround Chrome issue: net::ERR_CACHE_OPERATION_NOT_SUPPORTED
+        // network error: workaround Chrome issue: net::ERR_CACHE_READ_FAILURE
+        // postMessage can't clone network error
+        if (reason && reason.message === 'network error') {
+          console.error(reason);
+          return;
+        }
         sendStreamRequest({ stream: 'error', reason, });
       },
 
@@ -1574,6 +1591,17 @@ MessageHandler.prototype = {
   },
 };
 
+function releaseImageResources(img) {
+  assert(img instanceof Image, 'Invalid img parameter.');
+
+  const url = img.src;
+  if (typeof url === 'string' && url.startsWith('blob:') &&
+      URL.revokeObjectURL) {
+    URL.revokeObjectURL(url);
+  }
+  img.removeAttribute('src');
+}
+
 function loadJpegStream(id, imageUrl, objs) {
   var img = new Image();
   img.onload = (function loadJpegStream_onloadClosure() {
@@ -1582,6 +1610,9 @@ function loadJpegStream(id, imageUrl, objs) {
   img.onerror = (function loadJpegStream_onerrorClosure() {
     objs.resolve(id, null);
     warn('Error during JPEG image loading');
+
+    // Always remember to release the image data if errors occurred.
+    releaseImageResources(img);
   });
   img.src = imageUrl;
 }
@@ -1643,6 +1674,7 @@ export {
   readInt8,
   readUint16,
   readUint32,
+  releaseImageResources,
   removeNullCharacters,
   ReadableStream,
   setVerbosityLevel,

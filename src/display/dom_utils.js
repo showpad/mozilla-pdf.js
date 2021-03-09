@@ -85,7 +85,8 @@ class DOMCMapReaderFactory {
         request.responseType = 'arraybuffer';
       }
       request.onreadystatechange = () => {
-        if (request.readyState !== XMLHttpRequest.DONE) {
+        // This was originally using XMLHttpRequest.DONE however in centralstation the XMLHttpRequest is tampered with and this value is !== 4!
+        if (request.readyState !== 4) {
           return;
         }
         if (request.status === 200 || request.status === 0) {
@@ -390,6 +391,8 @@ function getDefaultSetting(id) {
       return globalSettings ? globalSettings.externalLinkRel : DEFAULT_LINK_REL;
     case 'enableStats':
       return !!(globalSettings && globalSettings.enableStats);
+    case 'maxImageSizeToStore':
+      return globalSettings && globalSettings.maxImageSizeToStore;
     default:
       throw new Error('Unknown default setting: ' + id);
   }

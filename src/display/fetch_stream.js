@@ -21,6 +21,21 @@ import {
   validateResponseStatus
 } from './network_utils';
 
+function errorHasKnownResponseCode(error) {
+  if (
+    error && (
+      error.status === 404 ||
+      error.status === 401 ||
+      error.status === 403 ||
+      error.status === 500 ||
+      error.status === 416
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function createFetchOptions(headers, withCredentials) {
   return {
     method: 'GET',
@@ -47,7 +62,12 @@ class PDFFetchStream {
     return this._fullRequestReader;
   }
 
-  getRangeReader(begin, end) {
+  getRangeReader(begin, end, cachebust) {
+    if (cachebust) {
+      this.source.url = this.source.url.indexOf('?') > -1 ?
+        this.source.url + '&cachebust=' + Date.now() :
+        this.source.url + '?cachebust=' + Date.now();
+    }
     let reader = new PDFFetchStreamRangeReader(this, begin, end);
     this._rangeRequestReaders.push(reader);
     return reader;
@@ -187,14 +207,48 @@ class PDFFetchStreamRangeReader {
     let rangeStr = begin + '-' + (end - 1);
     this._headers.append('Range', 'bytes=' + rangeStr);
     let url = source.url;
+
     fetch(url, createFetchOptions(this._headers, this._withCredentials)).
-        then((response) => {
-      if (!validateResponseStatus(response.status)) {
-        throw createResponseStatusError(response.status, url);
-      }
-      this._readCapability.resolve();
-      this._reader = response.body.getReader();
-    });
+      then(
+        (response) => {
+          if (!validateResponseStatus(response.status)) {
+            throw createResponseStatusError(response.status, url);
+          }
+          this._readCapability.resolve();
+          this._reader = response.body.getReader();
+        },
+        (error) => {
+          if (errorHasKnownResponseCode(error)) {
+            throw createResponseStatusError(error.status, url);
+          }
+          // network error: workaround Chrome issue: net::ERR_CACHE_OPERATION_NOT_SUPPORTED
+          console.log(
+            'ERROR: possible Chrome cache fail: ' +
+            'net::ERR_CACHE_OPERATION_NOT_SUPPORTED. Retry with cachebusted url',
+            error.message
+          );
+          let cachebustedUrl = url.indexOf('?') > -1 ?
+            url + '&cachebust=' + Date.now() :
+            url + '?cachebust=' + Date.now();
+          return fetch(cachebustedUrl, createFetchOptions(this._headers, this._withCredentials)).
+            then(
+              (response) => {
+                if (!validateResponseStatus(response.status)) {
+                  throw createResponseStatusError(response.status, url);
+                }
+                this._readCapability.resolve();
+                this._reader = response.body.getReader();
+              },
+              (error) => {
+                throw createResponseStatusError(error.status, cachebustedUrl);
+              }
+            );
+        }
+      )
+      .catch((error) => {
+        console.error(error);
+        this._readCapability.reject(error);
+      });
 
     this.onProgress = null;
   }

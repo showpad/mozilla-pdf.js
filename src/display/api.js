@@ -16,7 +16,7 @@
 
 import {
   assert, createPromiseCapability, getVerbosityLevel, info, InvalidPDFException,
-  isArrayBuffer, isSameOrigin, loadJpegStream, MessageHandler,
+  isArrayBuffer, isSameOrigin, loadJpegStream, releaseImageResources, MessageHandler,
   MissingPDFException, NativeImageDecoding, PageViewport, PasswordException,
   stringToBytes, UnexpectedResponseException, UnknownErrorException,
   unreachable, Util, warn
@@ -81,6 +81,21 @@ if (typeof PDFJSDev !== 'undefined' &&
       callback(worker.WorkerMessageHandler);
     });
   }) : null;
+}
+
+function errorHasKnownResponseCode(error) {
+  if (
+    error && (
+      error.status === 404 ||
+      error.status === 401 ||
+      error.status === 403 ||
+      error.status === 500 ||
+      error.status === 416
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** @type IPDFStream */
@@ -297,6 +312,7 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
     source: {
       data: source.data,
       url: source.url,
+      contentLength: source.contentLength,
       password: source.password,
       disableAutoFetch: source.disableAutoFetch,
       rangeChunkSize: source.rangeChunkSize,
@@ -872,7 +888,7 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
       var internalRenderTask = new InternalRenderTask(complete, params,
                                                       this.objs,
                                                       this.commonObjs,
-                                                      intentState.operatorList,
+                                                      params.operatorList || intentState.operatorList,
                                                       this.pageNumber,
                                                       canvasFactory,
                                                       webGLContext);
@@ -1638,7 +1654,36 @@ var WorkerTransport = (function WorkerTransportClosure() {
             assert(isArrayBuffer(value));
             sink.enqueue(new Uint8Array(value), 1, [value]);
           }).catch((reason) => {
-            sink.error(reason);
+            if (errorHasKnownResponseCode(reason)) {
+              sink.error(reason);
+            } else if (
+              reason && reason.message === 'network error' &&
+              // Only cachebust once
+              this._networkStream.source.url.indexOf('cachebust') === -1
+            ) {
+              // network error: workaround Chrome issue: net::ERR_CACHE_READ_FAILURE
+              console.log(
+                'ERROR: possible Chrome cache fail: ' +
+                'net::ERR_CACHE_READ_FAILURE. Retry with cachebusted url',
+                reason.message
+              );
+              _rangeReader.cancel(reason);
+              let cachebust = true;
+              _rangeReader = this._networkStream.getRangeReader(data.begin, data.end, cachebust);
+              _rangeReader.read().then(function({ value, done, }) {
+                if (done) {
+                  sink.close();
+                  return;
+                }
+                assert(isArrayBuffer(value));
+                sink.enqueue(new Uint8Array(value), 1, [value]);
+              })
+                .catch(reason => {
+                  sink.error(reason);
+                });
+            } else {
+              sink.error(reason);
+            }
           });
         };
 
@@ -1800,7 +1845,10 @@ var WorkerTransport = (function WorkerTransportClosure() {
             pageProxy.objs.resolve(id, imageData);
 
             // heuristics that will allow not to store large data
-            var MAX_IMAGE_SIZE_TO_STORE = 8000000;
+            var MAX_IMAGE_SIZE_TO_STORE =
+              typeof getDefaultSetting('maxImageSizeToStore') === 'number' ?
+                getDefaultSetting('maxImageSizeToStore') :
+                8000000;
             if (imageData && 'data' in imageData &&
                 imageData.data.length > MAX_IMAGE_SIZE_TO_STORE) {
               pageProxy.cleanupAfterRender = true;
@@ -1904,9 +1952,22 @@ var WorkerTransport = (function WorkerTransportClosure() {
               }
             }
             resolve({ data: buf, width, height, });
+
+            // Immediately release the image data once decoding has finished.
+            releaseImageResources(img);
+
+            // Zeroing the width and height cause Firefox to release graphics
+            // resources immediately, which can greatly reduce memory consumption.
+            tmpCanvas.width = 0;
+            tmpCanvas.height = 0;
+            tmpCanvas = null;
+            tmpCtx = null;
           };
           img.onerror = function () {
             reject(new Error('JpegDecode failed to load image'));
+
+            // Always remember to release the image data if errors occurred.
+            releaseImageResources(img);
           };
           img.src = imageUrl;
         });
@@ -2124,6 +2185,16 @@ var PDFObjects = (function PDFObjectsClosure() {
     },
 
     clear: function PDFObjects_clear() {
+      var objs = this.objs;
+      for (const objId in objs) {
+        const data = objs[objId].data;
+  
+        if (typeof Image !== 'undefined' && data instanceof Image) {
+          // Always release the image data when clearing out the cached objects.
+          releaseImageResources(data);
+        }
+      }
+
       this.objs = Object.create(null);
     },
   };

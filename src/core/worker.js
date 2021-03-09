@@ -402,19 +402,15 @@ var WorkerMessageHandler = {
       var loadDocumentCapability = createPromiseCapability();
 
       var parseSuccess = function parseSuccess() {
-        var numPagesPromise = pdfManager.ensureDoc('numPages');
-        var fingerprintPromise = pdfManager.ensureDoc('fingerprint');
-        var encryptedPromise = pdfManager.ensureXRef('encrypt');
-        Promise.all([numPagesPromise, fingerprintPromise,
-                     encryptedPromise]).then(function onDocReady(results) {
-          var doc = {
-            numPages: results[0],
-            fingerprint: results[1],
-            encrypted: !!results[2],
-          };
-          loadDocumentCapability.resolve(doc);
-        },
-        parseFailure);
+        Promise.all([
+          pdfManager.ensureDoc('numPages'),
+          pdfManager.ensureDoc('fingerprint'),
+        ]).then(function([numPages, fingerprint]) {
+          loadDocumentCapability.resolve({
+            numPages,
+            fingerprint,
+          });
+        }, parseFailure);
       };
 
       var parseFailure = function parseFailure(e) {
@@ -455,7 +451,16 @@ var WorkerMessageHandler = {
         return pdfManagerCapability.promise;
       }
 
-      var fullRequest = pdfStream.getFullReader();
+      const mockFullRequest = {
+        headersReady: Promise.resolve(),
+        isRangeSupported: !source.disableRange,
+        contentLength: source.contentLength,
+        isStreamingSupported: !source.disableStream,
+      };
+      const useRangeRequests = !source.disableRange && source.contentLength && (source.contentLength > (source.rangeChunkSize * 2));
+      var fullRequest = useRangeRequests ?
+        mockFullRequest :
+        pdfStream.getFullReader();
       fullRequest.headersReady.then(function () {
         if (!fullRequest.isRangeSupported) {
           return;
@@ -504,7 +509,7 @@ var WorkerMessageHandler = {
         }
         cachedChunks = [];
       };
-      var readPromise = new Promise(function (resolve, reject) {
+      var readPromise = useRangeRequests ? Promise.resolve() : new Promise(function (resolve, reject) {
         var readChunk = function (chunk) {
           try {
             ensureNotTerminated();
@@ -599,7 +604,7 @@ var WorkerMessageHandler = {
             ensureNotTerminated();
 
             loadDocument(true).then(onSuccess, onFailure);
-          });
+          }).catch(onFailure);
         }, onFailure);
       }
 
@@ -626,7 +631,7 @@ var WorkerMessageHandler = {
         handler.send('PDFManagerReady', null);
         pdfManager.onLoadedStream().then(function(stream) {
           handler.send('DataLoaded', { length: stream.bytes.byteLength, });
-        });
+        }).catch(onFailure);
       }).then(pdfManagerReady, onFailure);
     }
 

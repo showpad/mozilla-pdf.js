@@ -14,8 +14,8 @@
  */
 
 import {
-  assert, CMapCompressionType, createValidAbsoluteUrl, deprecated,
-  removeNullCharacters, stringToBytes, warn
+  assert, CMapCompressionType, removeNullCharacters, stringToBytes,
+  unreachable, warn
 } from '../shared/util';
 import globalScope from '../shared/global_scope';
 
@@ -85,7 +85,8 @@ class DOMCMapReaderFactory {
         request.responseType = 'arraybuffer';
       }
       request.onreadystatechange = () => {
-        if (request.readyState !== XMLHttpRequest.DONE) {
+        // This was originally using XMLHttpRequest.DONE however in centralstation the XMLHttpRequest is tampered with and this value is !== 4!
+        if (request.readyState !== 4) {
           return;
         }
         if (request.status === 200 || request.status === 0) {
@@ -261,60 +262,6 @@ class SimpleXMLParser {
   }
 }
 
-/**
- * Optimised CSS custom property getter/setter.
- * @class
- */
-var CustomStyle = (function CustomStyleClosure() {
-
-  // As noted on: http://www.zachstronaut.com/posts/2009/02/17/
-  //              animate-css-transforms-firefox-webkit.html
-  // in some versions of IE9 it is critical that ms appear in this list
-  // before Moz
-  var prefixes = ['ms', 'Moz', 'Webkit', 'O'];
-  var _cache = Object.create(null);
-
-  function CustomStyle() {}
-
-  CustomStyle.getProp = function get(propName, element) {
-    // check cache only when no element is given
-    if (arguments.length === 1 && typeof _cache[propName] === 'string') {
-      return _cache[propName];
-    }
-
-    element = element || document.documentElement;
-    var style = element.style, prefixed, uPropName;
-
-    // test standard property first
-    if (typeof style[propName] === 'string') {
-      return (_cache[propName] = propName);
-    }
-
-    // capitalize
-    uPropName = propName.charAt(0).toUpperCase() + propName.slice(1);
-
-    // test vendor specific properties
-    for (var i = 0, l = prefixes.length; i < l; i++) {
-      prefixed = prefixes[i] + uPropName;
-      if (typeof style[prefixed] === 'string') {
-        return (_cache[propName] = prefixed);
-      }
-    }
-
-    // If all fails then set to undefined.
-    return (_cache[propName] = 'undefined');
-  };
-
-  CustomStyle.setProp = function set(propName, element, str) {
-    var prop = this.getProp(propName);
-    if (prop !== 'undefined') {
-      element.style[prop] = str;
-    }
-  };
-
-  return CustomStyle;
-})();
-
 var RenderingCancelledException = (function RenderingCancelledException() {
   function RenderingCancelledException(msg, type) {
     this.message = msg;
@@ -444,8 +391,8 @@ function getDefaultSetting(id) {
       return globalSettings ? globalSettings.externalLinkRel : DEFAULT_LINK_REL;
     case 'enableStats':
       return !!(globalSettings && globalSettings.enableStats);
-    case 'pdfjsNext':
-      return !!(globalSettings && globalSettings.pdfjsNext);
+    case 'maxImageSizeToStore':
+      return globalSettings && globalSettings.maxImageSizeToStore;
     default:
       throw new Error('Unknown default setting: ' + id);
   }
@@ -464,18 +411,90 @@ function isExternalLinkTargetSet() {
   }
 }
 
-function isValidUrl(url, allowRelative) {
-  deprecated('isValidUrl(), please use createValidAbsoluteUrl() instead.');
-  var baseUrl = allowRelative ? 'http://example.com' : null;
-  return createValidAbsoluteUrl(url, baseUrl) !== null;
+class StatTimer {
+  constructor(enable = true) {
+    this.enabled = !!enable;
+    this.reset();
+  }
+
+  reset() {
+    this.started = Object.create(null);
+    this.times = [];
+  }
+
+  time(name) {
+    if (!this.enabled) {
+      return;
+    }
+    if (name in this.started) {
+      warn('Timer is already running for ' + name);
+    }
+    this.started[name] = Date.now();
+  }
+
+  timeEnd(name) {
+    if (!this.enabled) {
+      return;
+    }
+    if (!(name in this.started)) {
+      warn('Timer has not been started for ' + name);
+    }
+    this.times.push({
+      'name': name,
+      'start': this.started[name],
+      'end': Date.now(),
+    });
+    // Remove timer from started so it can be called again.
+    delete this.started[name];
+  }
+
+  toString() {
+    let times = this.times;
+    // Find the longest name for padding purposes.
+    let out = '', longest = 0;
+    for (let i = 0, ii = times.length; i < ii; ++i) {
+      let name = times[i]['name'];
+      if (name.length > longest) {
+        longest = name.length;
+      }
+    }
+    for (let i = 0, ii = times.length; i < ii; ++i) {
+      let span = times[i];
+      let duration = span.end - span.start;
+      out += `${span['name'].padEnd(longest)} ${duration}ms\n`;
+    }
+    return out;
+  }
+}
+
+/**
+ * Helps avoid having to initialize {StatTimer} instances, e.g. one for every
+ * page, in cases where the collected stats are not actually being used.
+ * This (dummy) class can thus, since all its methods are `static`, be directly
+ * shared between multiple call-sites without the need to be initialized first.
+ *
+ * NOTE: This must implement the same interface as {StatTimer}.
+ */
+class DummyStatTimer {
+  constructor() {
+    unreachable('Cannot initialize DummyStatTimer.');
+  }
+
+  static reset() {}
+
+  static time(name) {}
+
+  static timeEnd(name) {}
+
+  static toString() {
+    return '';
+  }
 }
 
 export {
-  CustomStyle,
   RenderingCancelledException,
   addLinkAttributes,
   isExternalLinkTargetSet,
-  isValidUrl,
   getFilenameFromUrl,
   LinkTarget,
   getDefaultSetting,
@@ -484,4 +503,6 @@ export {
   DOMCMapReaderFactory,
   DOMSVGFactory,
   SimpleXMLParser,
+  StatTimer,
+  DummyStatTimer,
 };

@@ -19,7 +19,7 @@ import {
 
 function validateRangeRequestCapabilities({ getResponseHeader, isHttp,
                                             rangeChunkSize, disableRange, }) {
-  assert(rangeChunkSize > 0);
+  assert(rangeChunkSize > 0, 'Range chunk size must be larger than zero');
   let returnValues = {
     allowRangeRequests: false,
     suggestedLength: undefined,
@@ -27,9 +27,10 @@ function validateRangeRequestCapabilities({ getResponseHeader, isHttp,
   if (disableRange || !isHttp) {
     return returnValues;
   }
-  if (getResponseHeader('Accept-Ranges') !== 'bytes') {
-    return returnValues;
-  }
+  // Chrome doesn't return the Accept-Ranges header from cache
+  // if (getResponseHeader('Accept-Ranges') !== 'bytes') {
+  //   return returnValues;
+  // }
 
   let contentEncoding = getResponseHeader('Content-Encoding') || 'identity';
   if (contentEncoding !== 'identity') {

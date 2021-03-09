@@ -38,7 +38,6 @@ describe('api', function() {
 
   beforeAll(function(done) {
     if (isNodeJS()) {
-      PDFJS.pdfjsNext = true;
       // NOTE: To support running the canvas-related tests in Node.js,
       // a `NodeCanvasFactory` would need to be added (in test_utils.js).
     } else {
@@ -684,7 +683,7 @@ describe('api', function() {
     it('gets javascript', function(done) {
       var promise = doc.getJavaScript();
       promise.then(function (data) {
-        expect(data).toEqual([]);
+        expect(data).toEqual(null);
         done();
       }).catch(function (reason) {
         done.fail(reason);
@@ -979,6 +978,18 @@ describe('api', function() {
       expect(viewport.transform).toEqual([0, 1.5, 1.5, 0, 0, 0]);
       expect(viewport.width).toEqual(1262.835);
       expect(viewport.height).toEqual(892.92);
+    });
+    it('gets viewport respecting "dontFlip" argument', function () {
+      const scale = 1;
+      const rotation = 135;
+      let viewport = page.getViewport(scale, rotation);
+      let dontFlipViewport = page.getViewport(scale, rotation, true);
+
+      expect(dontFlipViewport).not.toEqual(viewport);
+      expect(dontFlipViewport).toEqual(viewport.clone({ dontFlip: true, }));
+
+      expect(viewport.transform).toEqual([1, 0, 0, -1, 0, 841.89]);
+      expect(dontFlipViewport.transform).toEqual([1, 0, -0, 1, 0, 0]);
     });
     it('gets annotations', function (done) {
       var defaultPromise = page.getAnnotations().then(function (data) {

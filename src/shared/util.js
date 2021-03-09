@@ -600,13 +600,14 @@ function string32(value) {
                              (value >> 8) & 0xff, value & 0xff);
 }
 
+// Calculate the base 2 logarithm of the number `x`. This differs from the
+// native function in the sense that it returns the ceiling value and that it
+// returns 0 instead of `Infinity`/`NaN` for `x` values smaller than/equal to 0.
 function log2(x) {
-  var n = 1, i = 0;
-  while (x > n) {
-    n <<= 1;
-    i++;
+  if (x <= 0) {
+    return 0;
   }
-  return i;
+  return Math.ceil(Math.log2(x));
 }
 
 function readInt8(data, start) {
@@ -1118,66 +1119,6 @@ function createPromiseCapability() {
   return capability;
 }
 
-var StatTimer = (function StatTimerClosure() {
-  function rpad(str, pad, length) {
-    while (str.length < length) {
-      str += pad;
-    }
-    return str;
-  }
-  function StatTimer() {
-    this.started = Object.create(null);
-    this.times = [];
-    this.enabled = true;
-  }
-  StatTimer.prototype = {
-    time: function StatTimer_time(name) {
-      if (!this.enabled) {
-        return;
-      }
-      if (name in this.started) {
-        warn('Timer is already running for ' + name);
-      }
-      this.started[name] = Date.now();
-    },
-    timeEnd: function StatTimer_timeEnd(name) {
-      if (!this.enabled) {
-        return;
-      }
-      if (!(name in this.started)) {
-        warn('Timer has not been started for ' + name);
-      }
-      this.times.push({
-        'name': name,
-        'start': this.started[name],
-        'end': Date.now(),
-      });
-      // Remove timer from started so it can be called again.
-      delete this.started[name];
-    },
-    toString: function StatTimer_toString() {
-      var i, ii;
-      var times = this.times;
-      var out = '';
-      // Find the longest name for padding purposes.
-      var longest = 0;
-      for (i = 0, ii = times.length; i < ii; ++i) {
-        var name = times[i]['name'];
-        if (name.length > longest) {
-          longest = name.length;
-        }
-      }
-      for (i = 0, ii = times.length; i < ii; ++i) {
-        var span = times[i];
-        var duration = span.end - span.start;
-        out += rpad(span['name'], ' ', longest) + ' ' + duration + 'ms\n';
-      }
-      return out;
-    },
-  };
-  return StatTimer;
-})();
-
 var createBlob = function createBlob(data, contentType) {
   if (typeof Blob !== 'undefined') {
     return new Blob([data], { type: contentType, });
@@ -1241,9 +1182,18 @@ function makeReasonSerializable(reason) {
       reason instanceof MissingPDFException ||
       reason instanceof UnexpectedResponseException ||
       reason instanceof UnknownErrorException) {
-    return reason;
+    // Angular adds zone/promise related logic to the Error class making it non serializable
+    try {
+      // strip all functions from object
+      return JSON.parse(JSON.stringify(reason));
+    } catch (e) {
+      return reason;
+    }
   }
-  return new UnknownErrorException(reason.message, reason.toString());
+  const unknownErrorException =
+    new UnknownErrorException(reason.message, reason.toString());
+
+  return JSON.parse(JSON.stringify(unknownErrorException));
 }
 
 function resolveOrReject(capability, success, reason) {
@@ -1453,8 +1403,9 @@ MessageHandler.prototype = {
 
     let sendStreamRequest = ({ stream, chunk, transfers,
                                success, reason, }) => {
+      const serializableErrorReason = makeReasonSerializable(reason);
       this.postMessage({ sourceName, targetName, stream, streamId,
-                         chunk, success, reason, }, transfers);
+                         chunk, success, reason: serializableErrorReason, }, transfers);
     };
 
     let streamSink = {
@@ -1488,6 +1439,13 @@ MessageHandler.prototype = {
           return;
         }
         this.isCancelled = true;
+        // network error: workaround Chrome issue: net::ERR_CACHE_OPERATION_NOT_SUPPORTED
+        // network error: workaround Chrome issue: net::ERR_CACHE_READ_FAILURE
+        // postMessage can't clone network error
+        if (reason && reason.message === 'network error') {
+          console.error(reason);
+          return;
+        }
         sendStreamRequest({ stream: 'error', reason, });
       },
 
@@ -1633,6 +1591,17 @@ MessageHandler.prototype = {
   },
 };
 
+function releaseImageResources(img) {
+  assert(img instanceof Image, 'Invalid img parameter.');
+
+  const url = img.src;
+  if (typeof url === 'string' && url.startsWith('blob:') &&
+      URL.revokeObjectURL) {
+    URL.revokeObjectURL(url);
+  }
+  img.removeAttribute('src');
+}
+
 function loadJpegStream(id, imageUrl, objs) {
   var img = new Image();
   img.onload = (function loadJpegStream_onloadClosure() {
@@ -1641,6 +1610,9 @@ function loadJpegStream(id, imageUrl, objs) {
   img.onerror = (function loadJpegStream_onerrorClosure() {
     objs.resolve(id, null);
     warn('Error during JPEG image loading');
+
+    // Always remember to release the image data if errors occurred.
+    releaseImageResources(img);
   });
   img.src = imageUrl;
 }
@@ -1668,7 +1640,6 @@ export {
   PageViewport,
   PasswordException,
   PasswordResponses,
-  StatTimer,
   StreamType,
   TextRenderingMode,
   UnexpectedResponseException,
@@ -1703,6 +1674,7 @@ export {
   readInt8,
   readUint16,
   readUint32,
+  releaseImageResources,
   removeNullCharacters,
   ReadableStream,
   setVerbosityLevel,

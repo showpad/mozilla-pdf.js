@@ -18,8 +18,7 @@ import {
   RendererType, roundToDivide
 } from './ui_utils';
 import {
-  createPromiseCapability, CustomStyle, PDFJS, RenderingCancelledException,
-  SVGGraphics
+  createPromiseCapability, PDFJS, RenderingCancelledException, SVGGraphics
 } from 'pdfjs-lib';
 import { getGlobalEventBus } from './dom_events';
 import { RenderingStates } from './pdf_rendering_queue';
@@ -280,7 +279,7 @@ class PDFPageView {
     }
     let cssTransform = 'rotate(' + relativeRotation + 'deg) ' +
       'scale(' + scaleX + ',' + scaleY + ')';
-    CustomStyle.setProp('transform', target, cssTransform);
+    target.style.transform = cssTransform;
 
     if (this.textLayer) {
       // Rotating the text layer is more complicated since the divs inside the
@@ -317,11 +316,12 @@ class PDFPageView {
           console.error('Bad rotation value.');
           break;
       }
-      CustomStyle.setProp('transform', textLayerDiv,
-          'rotate(' + textAbsRotation + 'deg) ' +
-          'scale(' + scale + ', ' + scale + ') ' +
-          'translate(' + transX + ', ' + transY + ')');
-      CustomStyle.setProp('transformOrigin', textLayerDiv, '0% 0%');
+
+      textLayerDiv.style.transform =
+        'rotate(' + textAbsRotation + 'deg) ' +
+        'scale(' + scale + ', ' + scale + ') ' +
+        'translate(' + transX + ', ' + transY + ')';
+      textLayerDiv.style.transformOrigin = '0% 0%';
     }
 
     if (redrawAnnotations && this.annotationLayer) {
@@ -412,9 +412,7 @@ class PDFPageView {
         this.paintTask = null;
       }
 
-      if (((typeof PDFJSDev === 'undefined' ||
-            !PDFJSDev.test('PDFJS_NEXT')) && error === 'cancelled') ||
-          error instanceof RenderingCancelledException) {
+      if (error instanceof RenderingCancelledException) {
         this.error = null;
         return Promise.resolve(undefined);
       }
@@ -561,7 +559,7 @@ class PDFPageView {
     };
     let renderTask = this.pdfPage.render(renderContext);
     renderTask.onContinue = function (cont) {
-      showCanvas();
+      // showCanvas();
       if (result.onRenderContinue) {
         result.onRenderContinue(cont);
       } else {
@@ -573,7 +571,7 @@ class PDFPageView {
       showCanvas();
       renderCapability.resolve(undefined);
     }, function(error) {
-      showCanvas();
+      // showCanvas();
       renderCapability.reject(error);
     });
     return result;
@@ -594,13 +592,8 @@ class PDFPageView {
     let cancelled = false;
     let ensureNotCancelled = () => {
       if (cancelled) {
-        if ((typeof PDFJSDev !== 'undefined' &&
-             PDFJSDev.test('PDFJS_NEXT')) || PDFJS.pdfjsNext) {
-          throw new RenderingCancelledException(
-            'Rendering cancelled, page ' + this.id, 'svg');
-        } else {
-          throw 'cancelled'; // eslint-disable-line no-throw-literal
-        }
+        throw new RenderingCancelledException(
+          'Rendering cancelled, page ' + this.id, 'svg');
       }
     };
 

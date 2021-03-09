@@ -1,7 +1,7 @@
 
 # SHOWPAD RELEASE
 
-Update version https://github.com/showpad/mozilla-pdf.js/blob/a5f8e1d0e7642b074bdc302807201a1a135b918c/gulpfile.js#L430
+Update version https://github.com/showpad/mozilla-pdf.js/blob/a5f8e1d0e7642b074bdc302807201a1a135b918c/gulpfile.js#L430 and in build/dist/package.json
 Run gulp dist-pre ( node version 6 )
 cd to build/dist and npm publish
 

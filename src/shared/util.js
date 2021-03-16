@@ -970,6 +970,20 @@ function createObjectURL(data, contentType = "", forceDataSchema = false) {
   return buffer;
 }
 
+function releaseImageResources(img) {
+  assert(img instanceof Image, "Invalid img parameter.");
+
+  const url = img.src;
+  if (
+    typeof url === "string" &&
+    url.startsWith("blob:") &&
+    URL.revokeObjectURL
+  ) {
+    URL.revokeObjectURL(url);
+  }
+  img.removeAttribute("src");
+}
+
 export {
   AbortException,
   AnnotationActionEventType,
@@ -1018,6 +1032,7 @@ export {
   PasswordException,
   PasswordResponses,
   PermissionFlag,
+  releaseImageResources,
   removeNullCharacters,
   setVerbosityLevel,
   shadow,

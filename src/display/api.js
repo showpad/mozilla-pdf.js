@@ -28,6 +28,7 @@ import {
   isSameOrigin,
   MissingPDFException,
   PasswordException,
+  releaseImageResources,
   setVerbosityLevel,
   shadow,
   stringToBytes,
@@ -2908,6 +2909,16 @@ class PDFObjects {
   }
 
   clear() {
+    const objs = this.objs;
+    for (const objId in objs) {
+      const data = objs[objId].data;
+
+      if (typeof Image !== "undefined" && data instanceof Image) {
+        // Always release the image data when clearing out the cached objects.
+        releaseImageResources(data);
+      }
+    }
+
     this._objs = Object.create(null);
   }
 }

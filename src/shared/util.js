@@ -597,9 +597,14 @@ function objectSize(obj) {
   return Object.keys(obj).length;
 }
 
-// Ensures that the returned Object has a `null` prototype.
-function objectFromEntries(iterable) {
-  return Object.assign(Object.create(null), Object.fromEntries(iterable));
+// Ensure that the returned Object has a `null` prototype; hence why
+// `Object.fromEntries(...)` is not used.
+function objectFromMap(map) {
+  const obj = Object.create(null);
+  for (const [key, value] of map) {
+    obj[key] = value;
+  }
+  return obj;
 }
 
 // Checks the endianness of the platform.
@@ -720,7 +725,7 @@ class Util {
 
     // Solve the second degree polynomial to get roots.
     const first = (a + d) / 2;
-    const second = Math.sqrt((a + d) * (a + d) - 4 * (a * d - c * b)) / 2;
+    const second = Math.sqrt((a + d) ** 2 - 4 * (a * d - c * b)) / 2;
     const sx = first + second || 1;
     const sy = first - second || 1;
 
@@ -884,9 +889,12 @@ function isArrayEqual(arr1, arr2) {
   if (arr1.length !== arr2.length) {
     return false;
   }
-  return arr1.every(function (element, index) {
-    return element === arr2[index];
-  });
+  for (let i = 0, ii = arr1.length; i < ii; i++) {
+    if (arr1[i] !== arr2[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function getModificationDate(date = new Date()) {
@@ -940,78 +948,26 @@ function createPromiseCapability() {
   return capability;
 }
 
-const createObjectURL = (function createObjectURLClosure() {
+function createObjectURL(data, contentType = "", forceDataSchema = false) {
+  if (URL.createObjectURL && !forceDataSchema) {
+    return URL.createObjectURL(new Blob([data], { type: contentType }));
+  }
   // Blob/createObjectURL is not available, falling back to data schema.
   const digits =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
 
-  // eslint-disable-next-line no-shadow
-  return function createObjectURL(data, contentType, forceDataSchema = false) {
-    if (!forceDataSchema && URL.createObjectURL) {
-      const blob = new Blob([data], { type: contentType });
-      return URL.createObjectURL(blob);
-    }
-
-    let buffer = `data:${contentType};base64,`;
-    for (let i = 0, ii = data.length; i < ii; i += 3) {
-      const b1 = data[i] & 0xff;
-      const b2 = data[i + 1] & 0xff;
-      const b3 = data[i + 2] & 0xff;
-      const d1 = b1 >> 2,
-        d2 = ((b1 & 3) << 4) | (b2 >> 4);
-      const d3 = i + 1 < ii ? ((b2 & 0xf) << 2) | (b3 >> 6) : 64;
-      const d4 = i + 2 < ii ? b3 & 0x3f : 64;
-      buffer += digits[d1] + digits[d2] + digits[d3] + digits[d4];
-    }
-    return buffer;
-  };
-})();
-
-const XMLEntities = {
-  /* < */ 0x3c: "&lt;",
-  /* > */ 0x3e: "&gt;",
-  /* & */ 0x26: "&amp;",
-  /* " */ 0x22: "&quot;",
-  /* ' */ 0x27: "&apos;",
-};
-
-function encodeToXmlString(str) {
-  const buffer = [];
-  let start = 0;
-  for (let i = 0, ii = str.length; i < ii; i++) {
-    const char = str.codePointAt(i);
-    if (0x20 <= char && char <= 0x7e) {
-      // ascii
-      const entity = XMLEntities[char];
-      if (entity) {
-        if (start < i) {
-          buffer.push(str.substring(start, i));
-        }
-        buffer.push(entity);
-        start = i + 1;
-      }
-    } else {
-      if (start < i) {
-        buffer.push(str.substring(start, i));
-      }
-      buffer.push(`&#x${char.toString(16).toUpperCase()};`);
-      if (char > 0xd7ff && (char < 0xe000 || char > 0xfffd)) {
-        // char is represented by two u16
-        i++;
-      }
-      start = i + 1;
-    }
+  let buffer = `data:${contentType};base64,`;
+  for (let i = 0, ii = data.length; i < ii; i += 3) {
+    const b1 = data[i] & 0xff;
+    const b2 = data[i + 1] & 0xff;
+    const b3 = data[i + 2] & 0xff;
+    const d1 = b1 >> 2,
+      d2 = ((b1 & 3) << 4) | (b2 >> 4);
+    const d3 = i + 1 < ii ? ((b2 & 0xf) << 2) | (b3 >> 6) : 64;
+    const d4 = i + 2 < ii ? b3 & 0x3f : 64;
+    buffer += digits[d1] + digits[d2] + digits[d3] + digits[d4];
   }
-
-  if (buffer.length === 0) {
-    return str;
-  }
-
-  if (start < str.length) {
-    buffer.push(str.substring(start, str.length));
-  }
-
-  return buffer.join("");
+  return buffer;
 }
 
 export {
@@ -1035,7 +991,6 @@ export {
   createPromiseCapability,
   createValidAbsoluteUrl,
   DocumentActionEventType,
-  encodeToXmlString,
   escapeString,
   FONT_IDENTITY_MATRIX,
   FontType,
@@ -1056,7 +1011,7 @@ export {
   isSameOrigin,
   isString,
   MissingPDFException,
-  objectFromEntries,
+  objectFromMap,
   objectSize,
   OPS,
   PageActionEventType,

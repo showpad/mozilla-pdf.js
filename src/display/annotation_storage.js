@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-import { objectFromEntries } from "../shared/util.js";
+import { deprecated } from "./display_utils.js";
+import { objectFromMap } from "../shared/util.js";
 
 /**
  * Key/value storage for annotation data in forms.
@@ -32,8 +33,7 @@ class AnnotationStorage {
   }
 
   /**
-   * Get the value for a given key if it exists
-   * or store and return the default value
+   * Get the value for a given key if it exists, or return the default value.
    *
    * @public
    * @memberof AnnotationStorage
@@ -41,7 +41,16 @@ class AnnotationStorage {
    * @param {Object} defaultValue
    * @returns {Object}
    */
+  getValue(key, defaultValue) {
+    const obj = this._storage.get(key);
+    return obj !== undefined ? obj : defaultValue;
+  }
+
+  /**
+   * @deprecated
+   */
   getOrCreateValue(key, defaultValue) {
+    deprecated("Use getValue instead.");
     if (this._storage.has(key)) {
       return this._storage.get(key);
     }
@@ -78,10 +87,7 @@ class AnnotationStorage {
   }
 
   getAll() {
-    if (this._storage.size === 0) {
-      return null;
-    }
-    return objectFromEntries(this._storage);
+    return this._storage.size > 0 ? objectFromMap(this._storage) : null;
   }
 
   get size() {
@@ -107,6 +113,14 @@ class AnnotationStorage {
         this.onResetModified();
       }
     }
+  }
+
+  /**
+   * PLEASE NOTE: Only intended for usage within the API itself.
+   * @ignore
+   */
+  get serializable() {
+    return this._storage.size > 0 ? this._storage : null;
   }
 }
 

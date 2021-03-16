@@ -76,6 +76,7 @@
 !issue8798r.pdf
 !issue8823.pdf
 !issue9084.pdf
+!issue12963.pdf
 !issue9105_reduced.pdf
 !issue9252.pdf
 !issue9262_reduced.pdf
@@ -244,6 +245,7 @@
 !personwithdog.pdf
 !helloworld-bad.pdf
 !zerowidthline.pdf
+!js-colors.pdf
 !issue12841_reduced.pdf
 !bug868745.pdf
 !mmtype1.pdf
@@ -391,8 +393,10 @@
 !issue12418_reduced.pdf
 !annotation-freetext.pdf
 !annotation-line.pdf
+!annotation-line-without-appearance.pdf
 !bug1669099.pdf
 !annotation-square-circle.pdf
+!annotation-square-circle-without-appearance.pdf
 !annotation-stamp.pdf
 !annotation-fileattachment.pdf
 !annotation-text-widget.pdf

@@ -64,7 +64,6 @@ import {
   WinAnsiEncoding,
   ZapfDingbatsEncoding,
 } from "./encodings.js";
-import { getLookupTableFactory, MissingDataException } from "./core_utils.js";
 import {
   getNormalizedUnicodes,
   getUnicodeForGlyph,
@@ -87,6 +86,7 @@ import {
 import { bidi } from "./bidi.js";
 import { ColorSpace } from "./colorspace.js";
 import { getGlyphsUnicode } from "./glyphlist.js";
+import { getLookupTableFactory } from "./core_utils.js";
 import { getMetrics } from "./metrics.js";
 import { MurmurHash3_64 } from "./murmurhash3.js";
 import { OperatorList } from "./operator_list.js";
@@ -267,9 +267,6 @@ class PartialEvaluator {
             try {
               graphicState = xref.fetch(graphicState);
             } catch (ex) {
-              if (ex instanceof MissingDataException) {
-                throw ex;
-              }
               // Avoid parsing a corrupt ExtGState more than once.
               processed.put(graphicState);
 
@@ -316,9 +313,6 @@ class PartialEvaluator {
           try {
             xObject = xref.fetch(xObject);
           } catch (ex) {
-            if (ex instanceof MissingDataException) {
-              throw ex;
-            }
             // Avoid parsing a corrupt XObject more than once.
             processed.put(xObject);
 
@@ -1270,9 +1264,6 @@ class PartialEvaluator {
           operatorList.addOp(fn, tilingPatternIR);
           return undefined;
         } catch (ex) {
-          if (ex instanceof MissingDataException) {
-            throw ex;
-          }
           // Handle any errors during normal TilingPattern parsing.
         }
       }
@@ -2077,20 +2068,19 @@ class PartialEvaluator {
       textContentItem.transform = trm;
       if (!font.vertical) {
         textContentItem.width = 0;
-        textContentItem.height = Math.sqrt(trm[2] * trm[2] + trm[3] * trm[3]);
+        textContentItem.height = Math.hypot(trm[2], trm[3]);
         textContentItem.vertical = false;
       } else {
-        textContentItem.width = Math.sqrt(trm[0] * trm[0] + trm[1] * trm[1]);
+        textContentItem.width = Math.hypot(trm[0], trm[1]);
         textContentItem.height = 0;
         textContentItem.vertical = true;
       }
 
-      var a = textState.textLineMatrix[0];
-      var b = textState.textLineMatrix[1];
-      var scaleLineX = Math.sqrt(a * a + b * b);
-      a = textState.ctm[0];
-      b = textState.ctm[1];
-      var scaleCtmX = Math.sqrt(a * a + b * b);
+      const scaleLineX = Math.hypot(
+        textState.textLineMatrix[0],
+        textState.textLineMatrix[1]
+      );
+      const scaleCtmX = Math.hypot(textState.ctm[0], textState.ctm[1]);
       textContentItem.textAdvanceScale = scaleCtmX * scaleLineX;
       textContentItem.lastAdvanceWidth = 0;
       textContentItem.lastAdvanceHeight = 0;

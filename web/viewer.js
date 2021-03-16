@@ -61,6 +61,18 @@ if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("CHROME || GENERIC")) {
 }
 
 function getViewerConfiguration() {
+  let errorWrapper = null;
+  if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
+    errorWrapper = {
+      container: document.getElementById("errorWrapper"),
+      errorMessage: document.getElementById("errorMessage"),
+      closeButton: document.getElementById("errorClose"),
+      errorMoreInfo: document.getElementById("errorMoreInfo"),
+      moreInfoButton: document.getElementById("errorShowMore"),
+      lessInfoButton: document.getElementById("errorShowLess"),
+    };
+  }
+
   return {
     appContainer: document.body,
     mainContainer: document.getElementById("viewerContainer"),
@@ -110,12 +122,6 @@ function getViewerConfiguration() {
       spreadOddButton: document.getElementById("spreadOdd"),
       spreadEvenButton: document.getElementById("spreadEven"),
       documentPropertiesButton: document.getElementById("documentProperties"),
-    },
-    fullscreen: {
-      contextFirstPage: document.getElementById("contextFirstPage"),
-      contextLastPage: document.getElementById("contextLastPage"),
-      contextPageRotateCw: document.getElementById("contextPageRotateCw"),
-      contextPageRotateCcw: document.getElementById("contextPageRotateCcw"),
     },
     sidebar: {
       // Divs (and sidebar button)
@@ -183,14 +189,7 @@ function getViewerConfiguration() {
         linearized: document.getElementById("linearizedField"),
       },
     },
-    errorWrapper: {
-      container: document.getElementById("errorWrapper"),
-      errorMessage: document.getElementById("errorMessage"),
-      closeButton: document.getElementById("errorClose"),
-      errorMoreInfo: document.getElementById("errorMoreInfo"),
-      moreInfoButton: document.getElementById("errorShowMore"),
-      lessInfoButton: document.getElementById("errorShowLess"),
-    },
+    errorWrapper,
     printContainer: document.getElementById("printContainer"),
     openFileInputName: "fileInput",
     debuggerScriptPath: "./debugger.js",

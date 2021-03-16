@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
-import { CSS_UNITS, NullL10n } from "./ui_utils.js";
 import { PDFPrintServiceFactory, PDFViewerApplication } from "./app.js";
+import { CSS_UNITS } from "./ui_utils.js";
 import { viewerCompatibilityParams } from "./viewer_compatibility.js";
 
 let activeService = null;
@@ -82,7 +82,7 @@ function PDFPrintService(
   this._printResolution = printResolution || 150;
   this._optionalContentConfigPromise =
     optionalContentConfigPromise || pdfDocument.getOptionalContentConfig();
-  this.l10n = l10n || NullL10n;
+  this.l10n = l10n;
   this.currentPage = -1;
   // The temporary canvas where renderPage paints one page at a time.
   this.scratchCanvas = document.createElement("canvas");
@@ -120,15 +120,7 @@ PDFPrintService.prototype = {
     this.pageStyleSheet = document.createElement("style");
     const pageSize = this.pagesOverview[0];
     this.pageStyleSheet.textContent =
-      // "size:<width> <height>" is what we need. But also add "A4" because
-      // Firefox incorrectly reports support for the other value.
-      "@supports ((size:A4) and (size:1pt 1pt)) {" +
-      "@page { size: " +
-      pageSize.width +
-      "pt " +
-      pageSize.height +
-      "pt;}" +
-      "}";
+      "@page { size: " + pageSize.width + "pt " + pageSize.height + "pt;}";
     body.appendChild(this.pageStyleSheet);
   },
 
@@ -206,6 +198,8 @@ PDFPrintService.prototype = {
 
     const wrapper = document.createElement("div");
     wrapper.appendChild(img);
+    wrapper.style.width = img.style.width;
+    wrapper.style.height = img.style.height;
     this.printContainer.appendChild(wrapper);
 
     return new Promise(function (resolve, reject) {
@@ -308,7 +302,7 @@ function renderProgress(index, total, l10n) {
   const progressBar = progressContainer.querySelector("progress");
   const progressPerc = progressContainer.querySelector(".relative-progress");
   progressBar.value = progress;
-  l10n.get("print_progress_percent", { progress }, progress + "%").then(msg => {
+  l10n.get("print_progress_percent", { progress }).then(msg => {
     progressPerc.textContent = msg;
   });
 }

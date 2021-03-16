@@ -73,7 +73,8 @@ function initSandbox(params) {
       const obj = objs[0];
       obj.send = send;
       obj.globalEval = globalEval;
-      obj.doc = _document.wrapped;
+      obj.doc = _document;
+      obj.fieldPath = name;
       let field;
       if (obj.type === "radiobutton") {
         const otherButtons = objs.slice(1);
@@ -113,6 +114,12 @@ function initSandbox(params) {
   globalThis.style = Style;
   globalThis.trans = Trans;
   globalThis.zoomtype = ZoomType;
+
+  // Avoid to have a popup asking to update Acrobat.
+  globalThis.ADBE = {
+    Reader_Value_Asked: true,
+    Viewer_Value_Asked: true,
+  };
 
   // AF... functions
   const aform = new AForm(doc, app, util, color);

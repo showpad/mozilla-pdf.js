@@ -13,14 +13,19 @@
  * limitations under the License.
  */
 
-import { $buildXFAObject, NamespaceIds } from "./namespaces.js";
 import {
+  $appendChild,
   $content,
   $finalize,
+  $hasItem,
+  $hasSettableValue,
   $isTransparent,
   $namespaceId,
   $nodeName,
   $onChild,
+  $removeChild,
+  $setSetAttributes,
+  $setValue,
   ContentObject,
   Option01,
   OptionObject,
@@ -28,6 +33,7 @@ import {
   XFAObject,
   XFAObjectArray,
 } from "./xfa_object.js";
+import { $buildXFAObject, NamespaceIds } from "./namespaces.js";
 import {
   getBBox,
   getColor,
@@ -42,6 +48,15 @@ import {
 import { warn } from "../../shared/util.js";
 
 const TEMPLATE_NS_ID = NamespaceIds.template.id;
+
+function _setValue(templateNode, value) {
+  if (!templateNode.value) {
+    const nodeValue = new Value({});
+    templateNode[$appendChild](nodeValue);
+    templateNode.value = nodeValue;
+  }
+  templateNode.value[$setValue](value);
+}
 
 class AppearanceFilter extends StringObject {
   constructor(attributes) {
@@ -495,6 +510,10 @@ class Caption extends XFAObject {
     this.para = null;
     this.value = null;
   }
+
+  [$setValue](value) {
+    _setValue(this, value);
+  }
 }
 
 class Certificate extends StringObject {
@@ -584,6 +603,10 @@ class Color extends XFAObject {
     this.usehref = attributes.usehref || "";
     this.value = getColor(attributes.value);
     this.extras = null;
+  }
+
+  [$hasSettableValue]() {
+    return false;
   }
 }
 
@@ -868,6 +891,10 @@ class Draw extends XFAObject {
     this.value = null;
     this.setProperty = new XFAObjectArray();
   }
+
+  [$setValue](value) {
+    _setValue(this, value);
+  }
 }
 
 class Edge extends XFAObject {
@@ -1044,7 +1071,7 @@ class Event extends XFAObject {
 }
 
 class ExData extends ContentObject {
-  constructor(builder, attributes) {
+  constructor(attributes) {
     super(TEMPLATE_NS_ID, "exData");
     this.contentType = attributes.contentType || "";
     this.href = attributes.href || "";
@@ -1071,9 +1098,15 @@ class ExData extends ContentObject {
       child[$namespaceId] === NamespaceIds.xhtml.id
     ) {
       this[$content] = child;
-    } else if (this.contentType === "text/xml") {
-      this[$content] = child;
+      return true;
     }
+
+    if (this.contentType === "text/xml") {
+      this[$content] = child;
+      return true;
+    }
+
+    return false;
   }
 }
 
@@ -1181,6 +1214,32 @@ class ExclGroup extends XFAObject {
     this.field = new XFAObjectArray();
     this.setProperty = new XFAObjectArray();
   }
+
+  [$hasSettableValue]() {
+    return true;
+  }
+
+  [$setValue](value) {
+    for (const field of this.field.children) {
+      if (!field.value) {
+        const nodeValue = new Value({});
+        field[$appendChild](nodeValue);
+        field.value = nodeValue;
+      }
+
+      const nodeBoolean = new BooleanElement({});
+      nodeBoolean[$content] = 0;
+
+      for (const item of field.items.children) {
+        if (item[$hasItem](value)) {
+          nodeBoolean[$content] = 1;
+          break;
+        }
+      }
+
+      field.value[$setValue](nodeBoolean);
+    }
+  }
 }
 
 class Execute extends XFAObject {
@@ -1287,6 +1346,8 @@ class Field extends XFAObject {
     this.extras = null;
     this.font = null;
     this.format = null;
+    // For a choice list, one list is used to have display entries
+    // and the other for the exported values
     this.items = new XFAObjectArray(2);
     this.keep = null;
     this.margin = null;
@@ -1299,6 +1360,10 @@ class Field extends XFAObject {
     this.connect = new XFAObjectArray();
     this.event = new XFAObjectArray();
     this.setProperty = new XFAObjectArray();
+  }
+
+  [$setValue](value) {
+    _setValue(this, value);
   }
 }
 
@@ -1582,6 +1647,15 @@ class Items extends XFAObject {
     this.integer = new XFAObjectArray();
     this.text = new XFAObjectArray();
     this.time = new XFAObjectArray();
+  }
+
+  [$hasItem](value) {
+    return (
+      this.hasOwnProperty(value[$nodeName]) &&
+      this[value[$nodeName]].children.some(
+        node => node[$content] === value[$content]
+      )
+    );
   }
 }
 
@@ -1910,10 +1984,7 @@ class Para extends XFAObject {
       "right",
     ]);
     this.id = attributes.id || "";
-    this.lineHeight = getMeasurement(attributes.lineHeight, [
-      "0pt",
-      "measurement",
-    ]);
+    this.lineHeight = getMeasurement(attributes.lineHeight, "0pt");
     this.marginLeft = getMeasurement(attributes.marginLeft, "0");
     this.marginRight = getMeasurement(attributes.marginRight, "0");
     this.orphans = getInteger({
@@ -2531,9 +2602,10 @@ class Text extends ContentObject {
   [$onChild](child) {
     if (child[$namespaceId] === NamespaceIds.xhtml.id) {
       this[$content] = child;
-    } else {
-      warn(`XFA - Invalid content in Text: ${child[$nodeName]}.`);
+      return true;
     }
+    warn(`XFA - Invalid content in Text: ${child[$nodeName]}.`);
+    return false;
   }
 }
 
@@ -2727,6 +2799,26 @@ class Value extends XFAObject {
     this.text = null;
     this.time = null;
   }
+
+  [$setValue](value) {
+    const valueName = value[$nodeName];
+    if (this[valueName] !== null) {
+      this[valueName][$content] = value[$content];
+      return;
+    }
+
+    // Reset all the properties.
+    for (const name of Object.getOwnPropertyNames(this)) {
+      const obj = this[name];
+      if (obj instanceof XFAObject) {
+        this[name] = null;
+        this[$removeChild](obj);
+      }
+    }
+
+    this[value[$nodeName]] = value;
+    this[$appendChild](value);
+  }
 }
 
 class Variables extends XFAObject {
@@ -2757,7 +2849,9 @@ class Variables extends XFAObject {
 class TemplateNamespace {
   static [$buildXFAObject](name, attributes) {
     if (TemplateNamespace.hasOwnProperty(name)) {
-      return TemplateNamespace[name](attributes);
+      const node = TemplateNamespace[name](attributes);
+      node[$setSetAttributes](attributes);
+      return node;
     }
     return undefined;
   }
@@ -3215,4 +3309,13 @@ class TemplateNamespace {
   }
 }
 
-export { TemplateNamespace };
+export {
+  BindItems,
+  Field,
+  Items,
+  SetProperty,
+  Template,
+  TemplateNamespace,
+  Text,
+  Value,
+};

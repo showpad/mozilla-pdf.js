@@ -18,7 +18,6 @@ import {
   CSS_UNITS,
   DEFAULT_SCALE,
   getOutputScale,
-  NullL10n,
   RendererType,
   roundToDivide,
   TextLayerMode,
@@ -28,6 +27,7 @@ import {
   RenderingCancelledException,
   SVGGraphics,
 } from "pdfjs-lib";
+import { NullL10n } from "./l10n_utils.js";
 import { RenderingStates } from "./pdf_rendering_queue.js";
 import { viewerCompatibilityParams } from "./viewer_compatibility.js";
 
@@ -94,10 +94,7 @@ class PDFPageView {
       ? options.textLayerMode
       : TextLayerMode.ENABLE;
     this.imageResourcesPath = options.imageResourcesPath || "";
-    this.renderInteractiveForms =
-      typeof options.renderInteractiveForms === "boolean"
-        ? options.renderInteractiveForms
-        : true;
+    this.renderInteractiveForms = options.renderInteractiveForms !== false;
     this.useOnlyCssZoom = options.useOnlyCssZoom || false;
     this.maxCanvasPixels = options.maxCanvasPixels || MAX_CANVAS_PIXELS;
 
@@ -108,7 +105,7 @@ class PDFPageView {
     this.renderer = options.renderer || RendererType.CANVAS;
     this.enableWebGL = options.enableWebGL || false;
     this.l10n = options.l10n || NullL10n;
-    this.enableScripting = options.enableScripting || false;
+    this.enableScripting = options.enableScripting === true;
 
     this.paintTask = null;
     this.paintedViewportMap = new WeakMap();
@@ -296,7 +293,7 @@ class PDFPageView {
         });
         return;
       }
-      if (!this.zoomLayer && !this.canvas.hasAttribute("hidden")) {
+      if (!this.zoomLayer && !this.canvas.hidden) {
         this.zoomLayer = this.canvas.parentNode;
         this.zoomLayer.style.position = "absolute";
       }
@@ -579,19 +576,17 @@ class PDFPageView {
 
     const viewport = this.viewport;
     const canvas = document.createElement("canvas");
-    this.l10n
-      .get("page_canvas", { page: this.id }, "Page {{page}}")
-      .then(msg => {
-        canvas.setAttribute("aria-label", msg);
-      });
+    this.l10n.get("page_canvas", { page: this.id }).then(msg => {
+      canvas.setAttribute("aria-label", msg);
+    });
 
     // Keep the canvas hidden until the first draw callback, or until drawing
     // is complete when `!this.renderingQueue`, to prevent black flickering.
-    canvas.setAttribute("hidden", "hidden");
+    canvas.hidden = true;
     let isCanvasHidden = true;
     const showCanvas = function () {
       if (isCanvasHidden) {
-        canvas.removeAttribute("hidden");
+        canvas.hidden = false;
         isCanvasHidden = false;
       }
     };
@@ -704,7 +699,11 @@ class PDFPageView {
     const actualSizeViewport = this.viewport.clone({ scale: CSS_UNITS });
     const promise = pdfPage.getOperatorList().then(opList => {
       ensureNotCancelled();
-      const svgGfx = new SVGGraphics(pdfPage.commonObjs, pdfPage.objs);
+      const svgGfx = new SVGGraphics(
+        pdfPage.commonObjs,
+        pdfPage.objs,
+        /* forceDataSchema = */ viewerCompatibilityParams.disableCreateObjectURL
+      );
       return svgGfx.getSVG(opList, actualSizeViewport).then(svg => {
         ensureNotCancelled();
         this.svg = svg;

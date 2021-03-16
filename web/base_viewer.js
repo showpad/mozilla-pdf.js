@@ -25,7 +25,6 @@ import {
   isValidSpreadMode,
   MAX_AUTO_SCALE,
   moveToEndOfArray,
-  NullL10n,
   PresentationModeState,
   RendererType,
   SCROLLBAR_PADDING,
@@ -39,6 +38,7 @@ import {
 } from "./ui_utils.js";
 import { PDFRenderingQueue, RenderingStates } from "./pdf_rendering_queue.js";
 import { AnnotationLayerBuilder } from "./annotation_layer_builder.js";
+import { NullL10n } from "./l10n_utils.js";
 import { PDFPageView } from "./pdf_page_view.js";
 import { SimpleLinkService } from "./pdf_link_service.js";
 import { TextLayerBuilder } from "./text_layer_builder.js";
@@ -54,6 +54,8 @@ const DEFAULT_CACHE_SIZE = 10;
  * @property {DownloadManager} [downloadManager] - The download manager
  *   component.
  * @property {PDFFindController} [findController] - The find controller
+ *   component.
+ * @property {PDFScriptingManager} [scriptingManager] - The scripting manager
  *   component.
  * @property {PDFRenderingQueue} [renderingQueue] - The rendering queue object.
  * @property {boolean} [removePageBorders] - Removes the border shadow around
@@ -77,10 +79,8 @@ const DEFAULT_CACHE_SIZE = 10;
  *   total pixels, i.e. width * height. Use -1 for no limit. The default value
  *   is 4096 * 4096 (16 mega-pixels).
  * @property {IL10n} l10n - Localization service.
- * @property {boolean} [enableScripting] - Enable embedded script execution.
- *   The default value is `false`.
- * @property {Object} [mouseState] - The mouse button state. The default value
- *   is `null`.
+ * @property {boolean} [enableScripting] - Enable embedded script execution
+ *   (also requires {scriptingManager} being set). The default value is `false`.
  */
 
 function PDFPageViewBuffer(size) {
@@ -172,7 +172,10 @@ class BaseViewer {
         throw new Error("Invalid `container` and/or `viewer` option.");
       }
 
-      if (getComputedStyle(this.container).position !== "absolute") {
+      if (
+        this.container.offsetParent &&
+        getComputedStyle(this.container).position !== "absolute"
+      ) {
         throw new Error("The `container` must be absolutely positioned.");
       }
     }
@@ -180,23 +183,21 @@ class BaseViewer {
     this.linkService = options.linkService || new SimpleLinkService();
     this.downloadManager = options.downloadManager || null;
     this.findController = options.findController || null;
+    this._scriptingManager = options.scriptingManager || null;
     this.removePageBorders = options.removePageBorders || false;
     this.textLayerMode = Number.isInteger(options.textLayerMode)
       ? options.textLayerMode
       : TextLayerMode.ENABLE;
     this.imageResourcesPath = options.imageResourcesPath || "";
-    this.renderInteractiveForms =
-      typeof options.renderInteractiveForms === "boolean"
-        ? options.renderInteractiveForms
-        : true;
+    this.renderInteractiveForms = options.renderInteractiveForms !== false;
     this.enablePrintAutoRotate = options.enablePrintAutoRotate || false;
     this.renderer = options.renderer || RendererType.CANVAS;
     this.enableWebGL = options.enableWebGL || false;
     this.useOnlyCssZoom = options.useOnlyCssZoom || false;
     this.maxCanvasPixels = options.maxCanvasPixels;
     this.l10n = options.l10n || NullL10n;
-    this.enableScripting = options.enableScripting || false;
-    this._mouseState = options.mouseState || null;
+    this.enableScripting =
+      options.enableScripting === true && !!this._scriptingManager;
 
     this.defaultRenderingQueue = !options.renderingQueue;
     if (this.defaultRenderingQueue) {
@@ -468,6 +469,9 @@ class BaseViewer {
       if (this.findController) {
         this.findController.setDocument(null);
       }
+      if (this._scriptingManager) {
+        this._scriptingManager.setDocument(null);
+      }
     }
 
     this.pdfDocument = pdfDocument;
@@ -561,6 +565,9 @@ class BaseViewer {
         this._onePageRenderedOrForceFetch().then(() => {
           if (this.findController) {
             this.findController.setDocument(pdfDocument); // Enable searching.
+          }
+          if (this.enableScripting) {
+            this._scriptingManager.setDocument(pdfDocument);
           }
 
           // In addition to 'disableAutoFetch' being set, also attempt to reduce
@@ -660,8 +667,6 @@ class BaseViewer {
       this.eventBus._off("pagerendered", this._onAfterDraw);
       this._onAfterDraw = null;
     }
-    this._resetScriptingEvents();
-
     // Remove the pages from the DOM...
     this.viewer.textContent = "";
     // ... and reset the Scroll mode CSS class(es) afterwards.
@@ -737,8 +742,8 @@ class BaseViewer {
    */
   get _pageWidthScaleFactor() {
     if (
-      this.spreadMode !== SpreadMode.NONE &&
-      this.scrollMode !== ScrollMode.HORIZONTAL &&
+      this._spreadMode !== SpreadMode.NONE &&
+      this._scrollMode !== ScrollMode.HORIZONTAL &&
       !this.isInPresentationMode
     ) {
       return 2;
@@ -1299,7 +1304,7 @@ class BaseViewer {
       enableScripting,
       hasJSActionsPromise:
         hasJSActionsPromise || this.pdfDocument?.hasJSActions(),
-      mouseState: mouseState || this._mouseState,
+      mouseState: mouseState || this._scriptingManager?.mouseState,
     });
   }
 
@@ -1637,87 +1642,6 @@ class BaseViewer {
 
     this.currentPageNumber = Math.max(currentPageNumber - advance, 1);
     return true;
-  }
-
-  initializeScriptingEvents() {
-    if (!this.enableScripting || this._pageOpenPendingSet) {
-      return;
-    }
-    const eventBus = this.eventBus,
-      pageOpenPendingSet = (this._pageOpenPendingSet = new Set()),
-      scriptingEvents = (this._scriptingEvents ||= Object.create(null));
-
-    const dispatchPageClose = pageNumber => {
-      if (pageOpenPendingSet.has(pageNumber)) {
-        return; // No "pageopen" event was dispatched for the previous page.
-      }
-      eventBus.dispatch("pageclose", { source: this, pageNumber });
-    };
-    const dispatchPageOpen = pageNumber => {
-      const pageView = this._pages[pageNumber - 1];
-      if (pageView?.renderingState === RenderingStates.FINISHED) {
-        pageOpenPendingSet.delete(pageNumber);
-
-        eventBus.dispatch("pageopen", {
-          source: this,
-          pageNumber,
-          actionsPromise: pageView.pdfPage?.getJSActions(),
-        });
-      } else {
-        pageOpenPendingSet.add(pageNumber);
-      }
-    };
-
-    scriptingEvents.onPageChanging = ({ pageNumber, previous }) => {
-      if (pageNumber === previous) {
-        return; // The active page didn't change.
-      }
-      dispatchPageClose(previous);
-      dispatchPageOpen(pageNumber);
-    };
-    eventBus._on("pagechanging", scriptingEvents.onPageChanging);
-
-    scriptingEvents.onPageRendered = ({ pageNumber }) => {
-      if (!pageOpenPendingSet.has(pageNumber)) {
-        return; // No pending "pageopen" event for the newly rendered page.
-      }
-      if (pageNumber !== this._currentPageNumber) {
-        return; // The newly rendered page is no longer the current one.
-      }
-      dispatchPageOpen(pageNumber);
-    };
-    eventBus._on("pagerendered", scriptingEvents.onPageRendered);
-
-    scriptingEvents.onPagesDestroy = () => {
-      dispatchPageClose(this._currentPageNumber);
-    };
-    eventBus._on("pagesdestroy", scriptingEvents.onPagesDestroy);
-
-    // Ensure that a "pageopen" event is dispatched for the initial page.
-    dispatchPageOpen(this._currentPageNumber);
-  }
-
-  /**
-   * @private
-   */
-  _resetScriptingEvents() {
-    if (!this.enableScripting || !this._pageOpenPendingSet) {
-      return;
-    }
-    const eventBus = this.eventBus,
-      scriptingEvents = this._scriptingEvents;
-
-    // Remove the event listeners.
-    eventBus._off("pagechanging", scriptingEvents.onPageChanging);
-    scriptingEvents.onPageChanging = null;
-
-    eventBus._off("pagerendered", scriptingEvents.onPageRendered);
-    scriptingEvents.onPageRendered = null;
-
-    eventBus._off("pagesdestroy", scriptingEvents.onPagesDestroy);
-    scriptingEvents.onPagesDestroy = null;
-
-    this._pageOpenPendingSet = null;
   }
 }
 

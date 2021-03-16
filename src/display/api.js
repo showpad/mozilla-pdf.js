@@ -261,10 +261,21 @@ function getDocument(src) {
     } else if (key === "worker") {
       worker = source[key];
       continue;
-    } else if (key === "data" && !(source[key] instanceof Uint8Array)) {
+    } else if (key === "data") {
       // Converting string or array-like data to Uint8Array.
       const pdfBytes = source[key];
-      if (typeof pdfBytes === "string") {
+      if (
+        typeof PDFJSDev !== "undefined" &&
+        PDFJSDev.test("GENERIC") &&
+        isNodeJS &&
+        typeof Buffer !== "undefined" && // eslint-disable-line no-undef
+        pdfBytes instanceof Buffer // eslint-disable-line no-undef
+      ) {
+        params[key] = new Uint8Array(pdfBytes);
+      } else if (pdfBytes instanceof Uint8Array) {
+        // Use the data as-is when it's already a Uint8Array.
+        params[key] = pdfBytes;
+      } else if (typeof pdfBytes === "string") {
         params[key] = stringToBytes(pdfBytes);
       } else if (
         typeof pdfBytes === "object" &&
@@ -277,8 +288,7 @@ function getDocument(src) {
       } else {
         throw new Error(
           "Invalid PDF binary data: either typed array, " +
-            "string or array-like object is expected in the " +
-            "data property."
+            "string, or array-like object is expected in the data property."
         );
       }
       continue;
@@ -352,6 +362,7 @@ function getDocument(src) {
               length: params.length,
               initialData: params.initialData,
               progressiveDone: params.progressiveDone,
+              contentDispositionFilename: params.contentDispositionFilename,
               disableRange: params.disableRange,
               disableStream: params.disableStream,
             },
@@ -419,6 +430,8 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
     source.length = pdfDataRangeTransport.length;
     source.initialData = pdfDataRangeTransport.initialData;
     source.progressiveDone = pdfDataRangeTransport.progressiveDone;
+    source.contentDispositionFilename =
+      pdfDataRangeTransport.contentDispositionFilename;
   }
   return worker.messageHandler
     .sendWithPromise("GetDocRequest", {
@@ -573,11 +586,18 @@ class PDFDataRangeTransport {
    * @param {number} length
    * @param {Uint8Array} initialData
    * @param {boolean} [progressiveDone]
+   * @param {string} [contentDispositionFilename]
    */
-  constructor(length, initialData, progressiveDone = false) {
+  constructor(
+    length,
+    initialData,
+    progressiveDone = false,
+    contentDispositionFilename = null
+  ) {
     this.length = length;
     this.initialData = initialData;
     this.progressiveDone = progressiveDone;
+    this.contentDispositionFilename = contentDispositionFilename;
 
     this._rangeListeners = [];
     this._progressListeners = [];
@@ -1234,7 +1254,7 @@ class PDFPageProxy {
         pageIndex: this._pageIndex,
         intent: renderingIntent,
         renderInteractiveForms: renderInteractiveForms === true,
-        annotationStorage: annotationStorage?.getAll() || null,
+        annotationStorage: annotationStorage?.serializable || null,
       });
     }
 
@@ -1644,9 +1664,8 @@ class PDFPageProxy {
 }
 
 class LoopbackPort {
-  constructor(defer = true) {
+  constructor() {
     this._listeners = [];
-    this._defer = defer;
     this._deferred = Promise.resolve(undefined);
   }
 
@@ -1676,8 +1695,24 @@ class LoopbackPort {
         cloned.set(value, result);
         return result;
       }
+      if (value instanceof Map) {
+        result = new Map();
+        cloned.set(value, result); // Adding to cache now for cyclic references.
+        for (const [key, val] of value) {
+          result.set(key, cloneValue(val));
+        }
+        return result;
+      }
+      if (value instanceof Set) {
+        result = new Set();
+        cloned.set(value, result); // Adding to cache now for cyclic references.
+        for (const val of value) {
+          result.add(cloneValue(val));
+        }
+        return result;
+      }
       result = Array.isArray(value) ? [] : {};
-      cloned.set(value, result); // adding to cache now for cyclic references
+      cloned.set(value, result); // Adding to cache now for cyclic references.
       // Cloning all value and object properties, however ignoring properties
       // defined via getter.
       for (const i in value) {
@@ -1690,7 +1725,7 @@ class LoopbackPort {
           continue;
         }
         if (typeof desc.value === "function") {
-          if (value.hasOwnProperty && value.hasOwnProperty(i)) {
+          if (value.hasOwnProperty?.(i)) {
             throw new Error(
               `LoopbackPort.postMessage - cannot clone: ${value[i]}`
             );
@@ -1702,19 +1737,13 @@ class LoopbackPort {
       return result;
     }
 
-    if (!this._defer) {
-      this._listeners.forEach(listener => {
-        listener.call(this, { data: obj });
-      });
-      return;
-    }
-
     const cloned = new WeakMap();
-    const e = { data: cloneValue(obj) };
+    const event = { data: cloneValue(obj) };
+
     this._deferred.then(() => {
-      this._listeners.forEach(listener => {
-        listener.call(this, e);
-      });
+      for (const listener of this._listeners) {
+        listener.call(this, event);
+      }
     });
   }
 
@@ -2668,7 +2697,7 @@ class WorkerTransport {
     return this.messageHandler
       .sendWithPromise("SaveDocument", {
         numPages: this._numPages,
-        annotationStorage: annotationStorage?.getAll() || null,
+        annotationStorage: annotationStorage?.serializable || null,
         filename: this._fullReader?.filename ?? null,
       })
       .finally(() => {
@@ -2958,6 +2987,7 @@ const InternalRenderTask = (function InternalRenderTaskClosure() {
       this.capability = createPromiseCapability();
       this.task = new RenderTask(this);
       // caching this-bound methods
+      this._cancelBound = this.cancel.bind(this);
       this._continueBound = this._continue.bind(this);
       this._scheduleNextBound = this._scheduleNext.bind(this);
       this._nextBound = this._next.bind(this);
@@ -3072,10 +3102,10 @@ const InternalRenderTask = (function InternalRenderTaskClosure() {
     _scheduleNext() {
       if (this._useRequestAnimationFrame) {
         window.requestAnimationFrame(() => {
-          this._nextBound().catch(this.cancel.bind(this));
+          this._nextBound().catch(this._cancelBound);
         });
       } else {
-        Promise.resolve().then(this._nextBound).catch(this.cancel.bind(this));
+        Promise.resolve().then(this._nextBound).catch(this._cancelBound);
       }
     }
 

@@ -14,19 +14,38 @@
  */
 
 import { $buildXFAObject, NamespaceIds } from "./namespaces.js";
-import { $cleanup, $onChild, XFAObject } from "./xfa_object.js";
+import {
+  $cleanup,
+  $finalize,
+  $nsAttributes,
+  $onChild,
+  $resolvePrototypes,
+  XFAObject,
+} from "./xfa_object.js";
 import { NamespaceSetUp } from "./setup.js";
+import { Template } from "./template.js";
 import { UnknownNamespace } from "./unknown.js";
 import { warn } from "../../shared/util.js";
 
+const _ids = Symbol();
+
 class Root extends XFAObject {
-  constructor() {
+  constructor(ids) {
     super(-1, "root", Object.create(null));
     this.element = null;
+    this[_ids] = ids;
   }
 
   [$onChild](child) {
     this.element = child;
+    return true;
+  }
+
+  [$finalize]() {
+    super[$finalize]();
+    if (this.element.template instanceof Template) {
+      this.element.template[$resolvePrototypes](this[_ids]);
+    }
   }
 }
 
@@ -35,7 +54,9 @@ class Empty extends XFAObject {
     super(-1, "", Object.create(null));
   }
 
-  [$onChild](_) {}
+  [$onChild](_) {
+    return false;
+  }
 }
 
 class Builder {
@@ -51,8 +72,8 @@ class Builder {
     this._currentNamespace = new UnknownNamespace(++this._nextNsId);
   }
 
-  buildRoot() {
-    return new Root();
+  buildRoot(ids) {
+    return new Root(ids);
   }
 
   build({ nsPrefix, name, attributes, namespace, prefixes }) {
@@ -66,6 +87,25 @@ class Builder {
     if (prefixes) {
       // The xml node may have namespace prefix definitions
       this._addNamespacePrefix(prefixes);
+    }
+
+    if (attributes.hasOwnProperty($nsAttributes)) {
+      // Only support xfa-data namespace.
+      const dataTemplate = NamespaceSetUp.datasets;
+      const nsAttrs = attributes[$nsAttributes];
+      let xfaAttrs = null;
+      for (const [ns, attrs] of Object.entries(nsAttrs)) {
+        const nsToUse = this._getNamespaceToUse(ns);
+        if (nsToUse === dataTemplate) {
+          xfaAttrs = { xfa: attrs };
+          break;
+        }
+      }
+      if (xfaAttrs) {
+        attributes[$nsAttributes] = xfaAttrs;
+      } else {
+        delete attributes[$nsAttributes];
+      }
     }
 
     const namespaceToUse = this._getNamespaceToUse(nsPrefix);

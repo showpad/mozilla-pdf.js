@@ -14,7 +14,7 @@
  */
 
 import { AnnotationLayer } from "pdfjs-lib";
-import { NullL10n } from "./ui_utils.js";
+import { NullL10n } from "./l10n_utils.js";
 import { SimpleLinkService } from "./pdf_link_service.js";
 
 /**
@@ -125,7 +125,7 @@ class AnnotationLayerBuilder {
     if (!this.div) {
       return;
     }
-    this.div.setAttribute("hidden", "true");
+    this.div.hidden = true;
   }
 }
 

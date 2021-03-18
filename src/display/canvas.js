@@ -1770,20 +1770,10 @@ const CanvasGraphics = (function CanvasGraphicsClosure() {
 
         let restoreNeeded = false;
         const spacing = (glyph.isSpace ? wordSpacing : 0) + charSpacing;
-        let character = glyph.fontChar;
+        const character = glyph.fontChar;
         const accent = glyph.accent;
         let scaledX, scaledY;
         let width = glyph.width;
-
-        // SP-32958 fix character mismatch
-        if (
-          font.name === "SOFUFM+HoneywellSansTT-Book" &&
-          glyph.fontChar === "ǫ" &&
-          glyph.unicode === "fi"
-        ) {
-          glyph.fontChar = "fi";
-          character = "fi";
-        }
 
         if (vertical) {
           const vmetric = glyph.vmetric || defaultVMetrics;

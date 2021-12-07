@@ -838,4 +838,22 @@ PDFJS.compatibilityChecked = true;
   globalScope.URL = JURL;
 })();
 
+// Provides support for String.codePointAt in legacy browsers.
+// Support: IE11.
+(function checkStringCodePointAt() {
+  if (String.codePointAt) {
+    return;
+  }
+  String.codePointAt = require('core-js/fn/string/code-point-at');
+})();
+
+// Provides support for String.fromCodePoint in legacy browsers.
+// Support: IE11.
+(function checkStringFromCodePoint() {
+  if (String.fromCodePoint) {
+    return;
+  }
+  String.fromCodePoint = require('core-js/fn/string/from-code-point');
+})();
+
 }

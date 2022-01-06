@@ -327,6 +327,7 @@ function isValidProtocol(url) {
     case 'ftp:':
     case 'mailto:':
     case 'tel:':
+    case 'showpad:':
       return true;
     default:
       return false;
@@ -353,10 +354,12 @@ function createValidAbsoluteUrl(url, baseUrl) {
 }
 
 function shadow(obj, prop, value) {
-  Object.defineProperty(obj, prop, { value,
-                                     enumerable: true,
-                                     configurable: true,
-                                     writable: false, });
+  Object.defineProperty(obj, prop, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: false,
+  });
   return value;
 }
 
@@ -428,18 +431,18 @@ var MissingPDFException = (function MissingPDFExceptionClosure() {
 })();
 
 var UnexpectedResponseException =
-    (function UnexpectedResponseExceptionClosure() {
-  function UnexpectedResponseException(msg, status) {
-    this.name = 'UnexpectedResponseException';
-    this.message = msg;
-    this.status = status;
-  }
+  (function UnexpectedResponseExceptionClosure() {
+    function UnexpectedResponseException(msg, status) {
+      this.name = 'UnexpectedResponseException';
+      this.message = msg;
+      this.status = status;
+    }
 
-  UnexpectedResponseException.prototype = new Error();
-  UnexpectedResponseException.constructor = UnexpectedResponseException;
+    UnexpectedResponseException.prototype = new Error();
+    UnexpectedResponseException.constructor = UnexpectedResponseException;
 
-  return UnexpectedResponseException;
-})();
+    return UnexpectedResponseException;
+  })();
 
 var NotImplementedException = (function NotImplementedExceptionClosure() {
   function NotImplementedException(msg) {
@@ -521,7 +524,7 @@ function removeNullCharacters(str) {
 
 function bytesToString(bytes) {
   assert(bytes !== null && typeof bytes === 'object' &&
-         bytes.length !== undefined, 'Invalid argument for bytesToString');
+    bytes.length !== undefined, 'Invalid argument for bytesToString');
   var length = bytes.length;
   var MAX_ARGUMENT_COUNT = 8192;
   if (length < MAX_ARGUMENT_COUNT) {
@@ -597,7 +600,7 @@ function arraysToBytes(arr) {
 
 function string32(value) {
   return String.fromCharCode((value >> 24) & 0xff, (value >> 16) & 0xff,
-                             (value >> 8) & 0xff, value & 0xff);
+    (value >> 8) & 0xff, value & 0xff);
 }
 
 // Calculate the base 2 logarithm of the number `x`. This differs from the
@@ -620,7 +623,7 @@ function readUint16(data, offset) {
 
 function readUint32(data, offset) {
   return ((data[offset] << 24) | (data[offset + 1] << 16) |
-         (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+    (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
 }
 
 // Lazy test the endianness of the platform
@@ -645,7 +648,7 @@ function isEvalSupported() {
 var IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
 
 var Util = (function UtilClosure() {
-  function Util() {}
+  function Util() { }
 
   var rgbBuf = ['rgb(', 0, ',', 0, ',', 0, ')'];
 
@@ -689,22 +692,22 @@ var Util = (function UtilClosure() {
   Util.getAxialAlignedBoundingBox =
     function Util_getAxialAlignedBoundingBox(r, m) {
 
-    var p1 = Util.applyTransform(r, m);
-    var p2 = Util.applyTransform(r.slice(2, 4), m);
-    var p3 = Util.applyTransform([r[0], r[3]], m);
-    var p4 = Util.applyTransform([r[2], r[1]], m);
-    return [
-      Math.min(p1[0], p2[0], p3[0], p4[0]),
-      Math.min(p1[1], p2[1], p3[1], p4[1]),
-      Math.max(p1[0], p2[0], p3[0], p4[0]),
-      Math.max(p1[1], p2[1], p3[1], p4[1])
-    ];
-  };
+      var p1 = Util.applyTransform(r, m);
+      var p2 = Util.applyTransform(r.slice(2, 4), m);
+      var p3 = Util.applyTransform([r[0], r[3]], m);
+      var p4 = Util.applyTransform([r[2], r[1]], m);
+      return [
+        Math.min(p1[0], p2[0], p3[0], p4[0]),
+        Math.min(p1[1], p2[1], p3[1], p4[1]),
+        Math.max(p1[0], p2[0], p3[0], p4[0]),
+        Math.max(p1[1], p2[1], p3[1], p4[1])
+      ];
+    };
 
   Util.inverseTransform = function Util_inverseTransform(m) {
     var d = m[0] * m[3] - m[1] * m[2];
     return [m[3] / d, -m[1] / d, -m[2] / d, m[0] / d,
-      (m[2] * m[5] - m[4] * m[3]) / d, (m[4] * m[1] - m[5] * m[0]) / d];
+    (m[2] * m[5] - m[4] * m[3]) / d, (m[4] * m[1] - m[5] * m[0]) / d];
   };
 
   // Apply a generic 3d matrix M on a 3-vector v:
@@ -727,23 +730,23 @@ var Util = (function UtilClosure() {
   Util.singularValueDecompose2dScale =
     function Util_singularValueDecompose2dScale(m) {
 
-    var transpose = [m[0], m[2], m[1], m[3]];
+      var transpose = [m[0], m[2], m[1], m[3]];
 
-    // Multiply matrix m with its transpose.
-    var a = m[0] * transpose[0] + m[1] * transpose[2];
-    var b = m[0] * transpose[1] + m[1] * transpose[3];
-    var c = m[2] * transpose[0] + m[3] * transpose[2];
-    var d = m[2] * transpose[1] + m[3] * transpose[3];
+      // Multiply matrix m with its transpose.
+      var a = m[0] * transpose[0] + m[1] * transpose[2];
+      var b = m[0] * transpose[1] + m[1] * transpose[3];
+      var c = m[2] * transpose[0] + m[3] * transpose[2];
+      var d = m[2] * transpose[1] + m[3] * transpose[3];
 
-    // Solve the second degree polynomial to get roots.
-    var first = (a + d) / 2;
-    var second = Math.sqrt((a + d) * (a + d) - 4 * (a * d - c * b)) / 2;
-    var sx = first + second || 1;
-    var sy = first - second || 1;
+      // Solve the second degree polynomial to get roots.
+      var first = (a + d) / 2;
+      var second = Math.sqrt((a + d) * (a + d) - 4 * (a * d - c * b)) / 2;
+      var sx = first + second || 1;
+      var sy = first - second || 1;
 
-    // Scale values are the square roots of the eigenvalues.
-    return [Math.sqrt(sx), Math.sqrt(sy)];
-  };
+      // Scale values are the square roots of the eigenvalues.
+      return [Math.sqrt(sx), Math.sqrt(sy)];
+    };
 
   // Normalize rectangle rect=[x1, y1, x2, y2] so that (x1,y1) < (x2,y2)
   // For coordinate systems whose origin lies in the bottom-left, this
@@ -772,15 +775,15 @@ var Util = (function UtilClosure() {
 
     // Order points along the axes
     var orderedX = [rect1[0], rect1[2], rect2[0], rect2[2]].sort(compare),
-        orderedY = [rect1[1], rect1[3], rect2[1], rect2[3]].sort(compare),
-        result = [];
+      orderedY = [rect1[1], rect1[3], rect2[1], rect2[3]].sort(compare),
+      result = [];
 
     rect1 = Util.normalizeRect(rect1);
     rect2 = Util.normalizeRect(rect2);
 
     // X: first and second points belong to different rectangles?
     if ((orderedX[0] === rect1[0] && orderedX[1] === rect2[0]) ||
-        (orderedX[0] === rect2[0] && orderedX[1] === rect1[0])) {
+      (orderedX[0] === rect2[0] && orderedX[1] === rect1[0])) {
       // Intersection must be between second and third points
       result[0] = orderedX[1];
       result[2] = orderedX[2];
@@ -790,7 +793,7 @@ var Util = (function UtilClosure() {
 
     // Y: first and second points belong to different rectangles?
     if ((orderedY[0] === rect1[1] && orderedY[1] === rect2[1]) ||
-        (orderedY[0] === rect2[1] && orderedY[1] === rect1[1])) {
+      (orderedY[0] === rect2[1] && orderedY[1] === rect1[1])) {
       // Intersection must be between second and third points
       result[1] = orderedY[1];
       result[3] = orderedY[2];
@@ -815,7 +818,7 @@ var Util = (function UtilClosure() {
    */
   Util.toRoman = function Util_toRoman(number, lowerCase) {
     assert(Number.isInteger(number) && number > 0,
-           'The number should be a positive integer.');
+      'The number should be a positive integer.');
     var pos, romanBuf = [];
     // Thousands
     while (number >= 1000) {
@@ -852,15 +855,15 @@ var Util = (function UtilClosure() {
   };
 
   Util.getInheritableProperty =
-      function Util_getInheritableProperty(dict, name, getArray) {
-    while (dict && !dict.has(name)) {
-      dict = dict.get('Parent');
-    }
-    if (!dict) {
-      return null;
-    }
-    return getArray ? dict.getArray(name) : dict.get(name);
-  };
+    function Util_getInheritableProperty(dict, name, getArray) {
+      while (dict && !dict.has(name)) {
+        dict = dict.get('Parent');
+      }
+      if (!dict) {
+        return null;
+      }
+      return getArray ? dict.getArray(name) : dict.get(name);
+    };
 
   Util.inherit = function Util_inherit(sub, base, prototype) {
     sub.prototype = Object.create(base.prototype);
@@ -875,7 +878,7 @@ var Util = (function UtilClosure() {
     var loaded = false;
     script.setAttribute('src', src);
     if (callback) {
-      script.onload = function() {
+      script.onload = function () {
         if (!loaded) {
           callback();
         }
@@ -980,7 +983,7 @@ var PageViewport = (function PageViewportClosure() {
       var scale = 'scale' in args ? args.scale : this.scale;
       var rotation = 'rotation' in args ? args.rotation : this.rotation;
       return new PageViewport(this.viewBox.slice(), scale, rotation,
-                              this.offsetX, this.offsetY, args.dontFlip);
+        this.offsetX, this.offsetY, args.dontFlip);
     },
     /**
      * Converts PDF point to the viewport coordinates. For examples, useful for
@@ -1004,10 +1007,10 @@ var PageViewport = (function PageViewportClosure() {
      */
     convertToViewportRectangle:
       function PageViewport_convertToViewportRectangle(rect) {
-      var tl = Util.applyTransform([rect[0], rect[1]], this.transform);
-      var br = Util.applyTransform([rect[2], rect[3]], this.transform);
-      return [tl[0], tl[1], br[0], br[1]];
-    },
+        var tl = Util.applyTransform([rect[0], rect[1]], this.transform);
+        var br = Util.applyTransform([rect[2], rect[3]], this.transform);
+        return [tl[0], tl[1], br[0], br[1]];
+      },
     /**
      * Converts viewport coordinates to the PDF location. For examples, useful
      * for converting canvas pixel location into PDF one.
@@ -1178,10 +1181,10 @@ function wrapReason(reason) {
 
 function makeReasonSerializable(reason) {
   if (!(reason instanceof Error) ||
-      reason instanceof AbortException ||
-      reason instanceof MissingPDFException ||
-      reason instanceof UnexpectedResponseException ||
-      reason instanceof UnknownErrorException) {
+    reason instanceof AbortException ||
+    reason instanceof MissingPDFException ||
+    reason instanceof UnexpectedResponseException ||
+    reason instanceof UnknownErrorException) {
     // Angular adds zone/promise related logic to the Error class making it non serializable
     try {
       // strip all functions from object
@@ -1205,7 +1208,7 @@ function resolveOrReject(capability, success, reason) {
 }
 
 function finalize(promise) {
-  return Promise.resolve(promise).catch(() => {});
+  return Promise.resolve(promise).catch(() => { });
 }
 
 function MessageHandler(sourceName, targetName, comObj) {
@@ -1402,10 +1405,12 @@ MessageHandler.prototype = {
     let capability = createPromiseCapability();
 
     let sendStreamRequest = ({ stream, chunk, transfers,
-                               success, reason, }) => {
+      success, reason, }) => {
       const serializableErrorReason = makeReasonSerializable(reason);
-      this.postMessage({ sourceName, targetName, stream, streamId,
-                         chunk, success, reason: serializableErrorReason, }, transfers);
+      this.postMessage({
+        sourceName, targetName, stream, streamId,
+        chunk, success, reason: serializableErrorReason,
+      }, transfers);
     };
 
     let streamSink = {
@@ -1473,8 +1478,10 @@ MessageHandler.prototype = {
     let streamId = data.streamId;
 
     let sendStreamResponse = ({ stream, success, reason, }) => {
-      this.comObj.postMessage({ sourceName, targetName, stream,
-                                success, streamId, reason, });
+      this.comObj.postMessage({
+        sourceName, targetName, stream,
+        success, streamId, reason,
+      });
     };
 
     let deleteStreamController = () => {
@@ -1484,7 +1491,7 @@ MessageHandler.prototype = {
         this.streamControllers[data.streamId].startCall,
         this.streamControllers[data.streamId].pullCall,
         this.streamControllers[data.streamId].cancelCall
-      ].map(function(capability) {
+      ].map(function (capability) {
         return capability && finalize(capability.promise);
       })).then(() => {
         delete this.streamControllers[data.streamId];
@@ -1494,11 +1501,11 @@ MessageHandler.prototype = {
     switch (data.stream) {
       case 'start_complete':
         resolveOrReject(this.streamControllers[data.streamId].startCall,
-                        data.success, wrapReason(data.reason));
+          data.success, wrapReason(data.reason));
         break;
       case 'pull_complete':
         resolveOrReject(this.streamControllers[data.streamId].pullCall,
-                        data.success, wrapReason(data.reason));
+          data.success, wrapReason(data.reason));
         break;
       case 'pull':
         // Ignore any pull after close is called.
@@ -1510,7 +1517,7 @@ MessageHandler.prototype = {
         // so when it changes from negative to positive,
         // set ready property as resolved promise.
         if (this.streamSinks[data.streamId].desiredSize <= 0 &&
-            data.desiredSize > 0) {
+          data.desiredSize > 0) {
           this.streamSinks[data.streamId].sinkCapability.resolve();
         }
         // Reset desiredSize property of sink on every pull.
@@ -1518,20 +1525,22 @@ MessageHandler.prototype = {
         resolveCall(this.streamSinks[data.streamId].onPull).then(() => {
           sendStreamResponse({ stream: 'pull_complete', success: true, });
         }, (reason) => {
-          sendStreamResponse({ stream: 'pull_complete',
-                               success: false, reason, });
+          sendStreamResponse({
+            stream: 'pull_complete',
+            success: false, reason,
+          });
         });
         break;
       case 'enqueue':
         assert(this.streamControllers[data.streamId],
-               'enqueue should have stream controller');
+          'enqueue should have stream controller');
         if (!this.streamControllers[data.streamId].isClosed) {
           this.streamControllers[data.streamId].controller.enqueue(data.chunk);
         }
         break;
       case 'close':
         assert(this.streamControllers[data.streamId],
-               'close should have stream controller');
+          'close should have stream controller');
         if (this.streamControllers[data.streamId].isClosed) {
           break;
         }
@@ -1541,14 +1550,14 @@ MessageHandler.prototype = {
         break;
       case 'error':
         assert(this.streamControllers[data.streamId],
-               'error should have stream controller');
+          'error should have stream controller');
         this.streamControllers[data.streamId].controller.
           error(wrapReason(data.reason));
         deleteStreamController();
         break;
       case 'cancel_complete':
         resolveOrReject(this.streamControllers[data.streamId].cancelCall,
-                        data.success, wrapReason(data.reason));
+          data.success, wrapReason(data.reason));
         deleteStreamController();
         break;
       case 'cancel':
@@ -1556,12 +1565,14 @@ MessageHandler.prototype = {
           break;
         }
         resolveCall(this.streamSinks[data.streamId].onCancel,
-                    [wrapReason(data.reason)]).then(() => {
-          sendStreamResponse({ stream: 'cancel_complete', success: true, });
-        }, (reason) => {
-          sendStreamResponse({ stream: 'cancel_complete',
-                               success: false, reason, });
-        });
+          [wrapReason(data.reason)]).then(() => {
+            sendStreamResponse({ stream: 'cancel_complete', success: true, });
+          }, (reason) => {
+            sendStreamResponse({
+              stream: 'cancel_complete',
+              success: false, reason,
+            });
+          });
         this.streamSinks[data.streamId].sinkCapability.
           reject(wrapReason(data.reason));
         this.streamSinks[data.streamId].isCancelled = true;
@@ -1596,7 +1607,7 @@ function releaseImageResources(img) {
 
   const url = img.src;
   if (typeof url === 'string' && url.startsWith('blob:') &&
-      URL.revokeObjectURL) {
+    URL.revokeObjectURL) {
     URL.revokeObjectURL(url);
   }
   img.removeAttribute('src');

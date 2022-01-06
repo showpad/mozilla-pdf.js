@@ -438,6 +438,7 @@ function _isValidProtocol(url) {
     case "ftp:":
     case "mailto:":
     case "tel:":
+    case "showpad:":
       return true;
     default:
       return false;
@@ -473,7 +474,7 @@ function createValidAbsoluteUrl(url, baseUrl = null, options = null) {
       if (options.tryConvertEncoding) {
         try {
           url = stringToUTF8String(url);
-        } catch (ex) {}
+        } catch (ex) { }
       }
     }
 

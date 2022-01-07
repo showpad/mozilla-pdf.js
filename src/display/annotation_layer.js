@@ -266,8 +266,7 @@ class AnnotationElement {
 
 class LinkAnnotationElement extends AnnotationElement {
   constructor(parameters) {
-    let isShowpadUrl = parameters.data.unsafeUrl && parameters.data.unsafeUrl.indexOf('showpad://') === 0;
-    let isRenderable = !!(isShowpadUrl || parameters.data.url || parameters.data.dest ||
+    let isRenderable = !!(parameters.data.url || parameters.data.dest ||
                           parameters.data.action);
     super(parameters, isRenderable);
   }
@@ -283,20 +282,17 @@ class LinkAnnotationElement extends AnnotationElement {
     this.container.className = 'linkAnnotation';
 
     let link = document.createElement('a');
-    if (this.data.unsafeUrl && this.data.unsafeUrl.indexOf('showpad://') === 0) {
-      this._bindShowpadLink(link, this.data.unsafeUrl);
-    } else {
-      addLinkAttributes(link, {
-        url: this.data.url,
-        target: (this.data.newWindow ? LinkTarget.BLANK : undefined),
-      });
+    addLinkAttributes(link, {
+      url: this.data.url,
+      target: (this.data.newWindow ? LinkTarget.BLANK : undefined),
+    });
 
-      if (!this.data.url) {
-        if (this.data.action) {
-          this._bindNamedAction(link, this.data.action);
-        } else {
-          this._bindLink(link, this.data.dest);
-        }
+    if (!this.data.url) {
+      if (this.data.action) {
+        this._bindNamedAction(link, this.data.action);
+      } else {
+        this._bindLink(link, this.data.dest);
+
       }
     }
 
@@ -323,16 +319,6 @@ class LinkAnnotationElement extends AnnotationElement {
     if (destination) {
       link.className = 'internalLink';
     }
-  }
-
-  _bindShowpadLink(link, url) {
-    link.onclick = () => {
-      if (typeof this.linkService.handleShowpadLink === 'function') {
-        this.linkService.handleShowpadLink(url);
-      }
-      return false;
-    };
-    link.className = 'showpadLink';
   }
 
   /**

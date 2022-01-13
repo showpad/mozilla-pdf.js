@@ -1384,6 +1384,7 @@ class PDFPageProxy {
     background = null,
     optionalContentConfigPromise = null,
     annotationCanvasMap = null,
+    operatorList = null,
   }) {
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
       if (arguments[0]?.renderInteractiveForms !== undefined) {
@@ -1502,7 +1503,7 @@ class PDFPageProxy {
       objs: this.objs,
       commonObjs: this.commonObjs,
       annotationCanvasMap,
-      operatorList: intentState.operatorList,
+      operatorList: operatorList || intentState.operatorList,
       pageIndex: this._pageIndex,
       canvasFactory: canvasFactoryInstance,
       useRequestAnimationFrame: !intentPrint,

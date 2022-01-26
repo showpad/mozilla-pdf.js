@@ -1,9 +1,8 @@
-Showpad uses pdfjs to render pdf documents.
+Showpad uses pdfjs in the asset viewer to render pdfs.
 
 Canvas layer: main visual of the page
 Text Layer: for text selection
 Annotation layer: for links/annotations
-
 
 # Updates to src
 
@@ -31,7 +30,7 @@ For embedded media support we need to be able to pass a custom operator list. To
 - [Update DIST_NAME](./gulpfile.js#2034)
 - [Update DIST_DESCRIPTION](./gulpfile.js#L2035) 
 - [Add publishConfig](./gulpfile.js#L2072)
-- Add .npmrc file to root of project
+- [Add .npmrc file](./.npmrc)
 
 ## Required artifacts
 
@@ -40,13 +39,13 @@ For embedded media support we need to be able to pass a custom operator list. To
 - web/text_layer_builder.css
 - web/annotation_layer_builder.css
 
-By default text_layer_builder.css and annotation_layer_builder.css are bundled as part of the default pdfviewer css however as we only use the layers we need to ensure that these files are also copied to the web folder of the pdf-dist folder. These will then be loaded later to ensure the layers are correctly styled.
+By default [text_layer_builder.css](./web/text_layer_builder.css) and [annotation_layer_builder.css](./web/annotation_layer_builder.css) are bundled as part of the default [pdf_viewer.css](./web/pdf_viewer.css#L15), however as we only use these 2 layers we copy these to build/dist/web. They are then loaded later to ensure the layers are correctly styled.
 
 ## Release 
 
 PDFjs does not have a fixed release cycle it tends to be every couple of months, therefore when a new official release happens we should create a branch in our fork, apply the custom changes and create a new showpad release.
 
-For example PDFjs releases version 5.0.0
+For example PDFjs releases version 5.0.0 then the corresponding showpad release will be 5.0.0-showpad
 
 - Create branch in showpad fork from the upstream tag commit id 
 - update version [here](./version-showpad.json#L2)

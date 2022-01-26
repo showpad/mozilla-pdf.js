@@ -276,7 +276,7 @@ function getDocument(src) {
         }
         throw new Error(
           "Invalid PDF url data: " +
-          "either string or URL-object is expected in the url property."
+            "either string or URL-object is expected in the url property."
         );
       case "range":
         rangeTransport = value;
@@ -309,7 +309,7 @@ function getDocument(src) {
         } else {
           throw new Error(
             "Invalid PDF binary data: either typed array, " +
-            "string, or array-like object is expected in the data property."
+              "string, or array-like object is expected in the data property."
           );
         }
         continue;
@@ -696,7 +696,7 @@ class PDFDocumentProxy {
         get() {
           deprecated(
             "`PDFDocumentProxy.fingerprint`, " +
-            "please use `PDFDocumentProxy.fingerprints` instead."
+              "please use `PDFDocumentProxy.fingerprints` instead."
           );
           return this.fingerprints[0];
         },
@@ -706,7 +706,7 @@ class PDFDocumentProxy {
         value: async () => {
           deprecated(
             "`PDFDocumentProxy.getStats`, " +
-            "please use the `PDFDocumentProxy.stats`-getter instead."
+              "please use the `PDFDocumentProxy.stats`-getter instead."
           );
           return this.stats || { streamTypes: {}, fontTypes: {} };
         },
@@ -1017,7 +1017,7 @@ class PDFDocumentProxy {
     ) {
       deprecated(
         "saveDocument called while `annotationStorage` is empty, " +
-        "please use the getData-method instead."
+          "please use the getData-method instead."
       );
     }
     return this._transport.saveDocument();
@@ -1391,7 +1391,7 @@ class PDFPageProxy {
       if (arguments[0]?.renderInteractiveForms !== undefined) {
         deprecated(
           "render no longer accepts the `renderInteractiveForms`-option, " +
-          "please use the `annotationMode`-option instead."
+            "please use the `annotationMode`-option instead."
         );
         if (
           arguments[0].renderInteractiveForms === true &&
@@ -1403,7 +1403,7 @@ class PDFPageProxy {
       if (arguments[0]?.includeAnnotationStorage !== undefined) {
         deprecated(
           "render no longer accepts the `includeAnnotationStorage`-option, " +
-          "please use the `annotationMode`-option instead."
+            "please use the `annotationMode`-option instead."
         );
         if (
           arguments[0].includeAnnotationStorage === true &&
@@ -3287,8 +3287,8 @@ class InternalRenderTask {
       if (InternalRenderTask.canvasInUse.has(this._canvas)) {
         throw new Error(
           "Cannot use the same canvas during multiple render() operations. " +
-          "Use different canvas or ensure previous operations were " +
-          "cancelled or completed."
+            "Use different canvas or ensure previous operations were " +
+            "cancelled or completed."
         );
       }
       InternalRenderTask.canvasInUse.add(this._canvas);
@@ -3335,10 +3335,10 @@ class InternalRenderTask {
     }
     this.callback(
       error ||
-      new RenderingCancelledException(
-        `Rendering cancelled, page ${this._pageIndex + 1}`,
-        "canvas"
-      )
+        new RenderingCancelledException(
+          `Rendering cancelled, page ${this._pageIndex + 1}`,
+          "canvas"
+        )
     );
   }
 

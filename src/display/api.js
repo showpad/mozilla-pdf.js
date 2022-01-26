@@ -243,7 +243,7 @@ function getDocument(src) {
     if (typeof src !== "object") {
       throw new Error(
         "Invalid parameter in getDocument, " +
-        "need either string, URL, Uint8Array, or parameter object."
+          "need either string, URL, Uint8Array, or parameter object."
       );
     }
     if (!src.url && !src.data && !src.range) {

@@ -26,8 +26,8 @@ For embedded media support we need to be able to pass a custom operator list. To
 
 # Updates to build process
 
-- [Use hardcoded config to define version](./gulpfile.js#282)
-- [Update DIST_NAME](./gulpfile.js#2034)
+- [Use hardcoded config to define version](./gulpfile.js#L282)
+- [Update DIST_NAME](./gulpfile.js#L2034)
 - [Update DIST_DESCRIPTION](./gulpfile.js#L2035) 
 - [Add publishConfig](./gulpfile.js#L2072)
 - [Add .npmrc file](./.npmrc)

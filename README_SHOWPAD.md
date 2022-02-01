@@ -45,13 +45,13 @@ By default [text_layer_builder.css](./web/text_layer_builder.css) and [annotatio
 
 PDFjs does not have a fixed release cycle it tends to be every couple of months, therefore when a new official release happens we should create a branch in our fork, apply the custom changes and create a new showpad release.
 
-For example PDFjs releases version 5.0.0 then the corresponding showpad release will be 5.0.0-showpad
+For example PDFjs releases version 2.12.313 then the corresponding showpad release will be 2.12.313-showpad-1, 2.12.313-showpad-2, 2.12.313-showpad-3 etc.
 
 - Create branch in showpad fork from the upstream tag commit id 
 - update version [here](./version-showpad.json#L2)
 - gulp dist-pre
-- cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder. css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
-- cd dist-build
+- cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
+- cd build/dist
 - npm publish
 
 

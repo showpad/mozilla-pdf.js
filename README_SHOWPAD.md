@@ -16,6 +16,7 @@ To allow showpad links to be rendered we need to add showpad: to the valid proto
 
 The handler for when these links is clicked is handled by the asset viewer, this abstraction decouples the complication of making changes to the annotation builder as all that we require is that the links are rendered in html.
 
+Call goToDestination on linkService rather than navigateTo [here](./src/display/annotation_layer.js#L327)
 ## Custom operator list param when rendering a page
 
 For embedded media support we need to be able to pass a custom operator list. To achieve this we must add an 'operatorList' param to the render method of the PDFPageProxy exposed in the public api:
@@ -26,7 +27,7 @@ For embedded media support we need to be able to pass a custom operator list. To
 
 # Updates to build process
 
-- [Use hardcoded config to define version](./gulpfile.js#F282)
+- [Use hardcoded config to define version](./gulpfile.js#L226)
 - [Update DIST_NAME](./gulpfile.js#L1312)
 - [Update DIST_DESCRIPTION](./gulpfile.js#L1313) 
 - [Add publishConfig](./gulpfile.js#L1346)
@@ -53,9 +54,3 @@ Node version 10.0 is required.
 - cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
 - cd build/dist
 - npm publish
-
-
-
-
-
-

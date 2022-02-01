@@ -30,6 +30,7 @@ For embedded media support we need to be able to pass a custom operator list. To
 - [Use hardcoded config to define version](./gulpfile.js#L226)
 - [Update DIST_NAME](./gulpfile.js#L1312)
 - [Update DIST_DESCRIPTION](./gulpfile.js#L1313) 
+- [Remove peerDependencies ](./gulpfile.js#L1331) 
 - [Add publishConfig](./gulpfile.js#L1346)
 - [Add .npmrc file](./.npmrc)
 

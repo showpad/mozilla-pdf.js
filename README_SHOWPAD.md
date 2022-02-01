@@ -1,0 +1,61 @@
+Showpad uses pdfjs in the asset viewer to render pdfs.
+
+Canvas layer: main visual of the page
+Text Layer: for text selection
+Annotation layer: for links/annotations
+
+# Updates to src
+
+## Showpad asset link support in annotation layer:
+
+It is possible to add links to a range of showpad entities using urls with the 'showpad:' protocol.
+
+By default pdfjs only allows certain protocols for example https: therefore out of the box showpad: links are not rendered.
+
+To allow showpad links to be rendered we need to add showpad: to the valid protocols [here](./src/shared/util.js#L370)
+
+The handler for when these links is clicked is handled by the asset viewer, this abstraction decouples the complication of making changes to the annotation builder as all that we require is that the links are rendered in html.
+
+## Custom operator list param when rendering a page
+
+For embedded media support we need to be able to pass a custom operator list. To achieve this we must add an 'operatorList' param to the render method of the PDFPageProxy exposed in the public api:
+
+- [Added operatorList param to RenderParameters jsdoc so correct type definitions will be exported](./src/display/api.js#L892) 
+- [Added operatorList param to RenderParameters passed to render call](./src/display/api.js#L1004) 
+- [Prioritized operatorList param over the intentState.operatorList](./src/display/api.js#L1085)
+
+# Updates to build process
+
+- [Use hardcoded config to define version](./gulpfile.js#F282)
+- [Update DIST_NAME](./gulpfile.js#L1312)
+- [Update DIST_DESCRIPTION](./gulpfile.js#L1313) 
+- [Add publishConfig](./gulpfile.js#L1346)
+- [Add .npmrc file](./.npmrc)
+
+## Required artifacts
+
+- pdf.js
+- pdf.worker.js
+- web/text_layer_builder.css
+- web/annotation_layer_builder.css
+
+By default [text_layer_builder.css](./web/text_layer_builder.css) and [annotation_layer_builder.css](./web/annotation_layer_builder.css) are bundled as part of the default [pdf_viewer.css](./web/pdf_viewer.css#L15), however as we only use these 2 layers we copy these to build/dist/web. They are then loaded later to ensure the layers are correctly styled.
+
+## Release 
+
+Node version 10.0 is required.
+
+2.3.200 was the last version that supports IE11/Legacy Edge so no new release should be used just patches.
+
+- Create branch in showpad fork from the upstream tag commit id 
+- update version [here](./version-showpad.json#L2)
+- gulp dist-pre
+- cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
+- cd build/dist
+- npm publish
+
+
+
+
+
+

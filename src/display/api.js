@@ -889,6 +889,7 @@ class PDFDocumentProxy {
  *                    CSS <color> value, a CanvasGradient object (a linear or
  *                    radial gradient) or a CanvasPattern object (a repetitive
  *                    image). The default value is 'rgb(255,255,255)'.
+ * @property {PDFOperatorList} [operatorList] - Custom operator list.
  */
 
 /**
@@ -1000,7 +1001,7 @@ class PDFPageProxy {
    */
   render({ canvasContext, viewport, intent = 'display', enableWebGL = false,
            renderInteractiveForms = false, transform = null, imageLayer = null,
-           canvasFactory = null, background = null, }) {
+           canvasFactory = null, background = null, operatorList = null,}) {
     const stats = this._stats;
     stats.time('Overall');
 
@@ -1081,7 +1082,7 @@ class PDFPageProxy {
       },
       objs: this.objs,
       commonObjs: this.commonObjs,
-      operatorList: intentState.operatorList,
+      operatorList: operatorList || intentState.operatorList,
       pageNumber: this.pageNumber,
       canvasFactory: canvasFactoryInstance,
       webGLContext,

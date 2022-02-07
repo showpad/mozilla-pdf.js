@@ -1,10 +1,12 @@
-Showpad uses pdfjs in the asset viewer to render pdfs.
+# Intro
 
-Canvas layer: main visual of the page
-Text Layer: for text selection
-Annotation layer: for links/annotations
+Showpad uses pdfjs in the asset viewer to render the following layers of a pdf.
 
-# Updates to src
+- Canvas layer: main visual of the page
+- Text Layer: for text selection
+- Annotation layer: for links/annotations
+
+# Updates required to src
 
 ## Showpad asset link support in annotation layer:
 
@@ -24,6 +26,15 @@ For embedded media support we need to be able to pass a custom operator list. To
 - [Added operatorList param to RenderParameters jsdoc so correct type definitions will be exported](./src/display/api.js#L892) 
 - [Added operatorList param to RenderParameters passed to render call](./src/display/api.js#L1004) 
 - [Prioritized operatorList param over the intentState.operatorList](./src/display/api.js#L1085)
+
+## Font loading fix
+
+https://github.com/mozilla/pdf.js/issues/11224
+
+IE11/EDGE <= 18 does not support the Font Loading API, therefore there is a hack renders text to canvas and checks if for data to know if a font is loaded
+but this is not reliable so we wait for the test to timeout to give the best chance of the font being ready.
+
+- [Commented out callback when data found in canvas so we always wait for timeout](./src/display/font_loader.js#L279)
 
 # Updates to build process
 

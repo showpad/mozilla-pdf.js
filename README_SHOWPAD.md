@@ -24,6 +24,13 @@ For embedded media support we need to be able to pass a custom operator list. To
 - [Added operatorList param to RenderParameters passed to render call](./src/display/api.js#L1388) 
 - [Prioritized operatorList param over the intentState.operatorList](./src/display/api.js#L1507)
 
+## Prevent throwing of errors in svg renderer for unsupported operations
+
+For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
+The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
+
+- [_makeShadingPattern](./src/display/svg.js#L1163) 
+
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L282)

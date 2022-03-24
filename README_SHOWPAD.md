@@ -37,6 +37,13 @@ but this is not reliable so we wait for the test to timeout to give the best cha
 
 - [Commented out callback when data found in canvas so we always wait for timeout](./src/display/font_loader.js#L279)
 
+## Prevent throwing of errors in svg renderer for unsupported operations
+
+For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
+The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
+
+- [_makeShadingPattern](./src/display/svg.js#L1048)
+  
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L226)
@@ -54,13 +61,6 @@ but this is not reliable so we wait for the test to timeout to give the best cha
 - web/annotation_layer_builder.css
 
 By default [text_layer_builder.css](./web/text_layer_builder.css) and [annotation_layer_builder.css](./web/annotation_layer_builder.css) are bundled as part of the default [pdf_viewer.css](./web/pdf_viewer.css#L15), however as we only use these 2 layers we copy these to build/dist/web. They are then loaded later to ensure the layers are correctly styled.
-
-## Prevent throwing of errors in svg renderer for unsupported operations
-
-For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
-The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
-
-- [_makeShadingPattern](./src/display/svg.js#L1048) 
 
 ## Release 
 

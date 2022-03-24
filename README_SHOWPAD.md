@@ -5,6 +5,7 @@ Showpad uses pdfjs in the asset viewer to render the following layers of a pdf.
 - Canvas layer: main visual of the page
 - Text Layer: for text selection
 - Annotation layer: for links/annotations
+- Svg renderer to derive metadata for embedded media
 
 # Updates to src
 
@@ -25,6 +26,13 @@ For embedded media support we need to be able to pass a custom operator list. To
 - [Added operatorList param to RenderParameters jsdoc so correct type definitions will be exported](./src/display/api.js#L1171) 
 - [Added operatorList param to RenderParameters passed to render call](./src/display/api.js#L1387) 
 - [Prioritized operatorList param over the intentState.operatorList](./src/display/api.js#L1506)
+
+## Prevent throwing of errors in svg renderer for unsupported operations
+
+For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
+The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
+
+- [_makeShadingPattern](./src/display/svg.js#L1191)
 
 # Updates to build process
 
@@ -52,8 +60,7 @@ For example PDFjs releases version 2.13.216 then the corresponding showpad relea
 - Create branch in showpad fork from the upstream tag commit id git checkout -b v2.13.216 399a0ec
 - Create branch in showpad fork from the upstream tag commit id with -showpad suffix git checkout -b v2.13.216-showpad 399a0ec 
 - update version [here](./version-showpad.json#L2)
-- gulp dist-pre
-- cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
+- gulp dist-pre && cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
 - cd build/dist
 - npm publish
 

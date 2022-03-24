@@ -60,7 +60,7 @@ By default [text_layer_builder.css](./web/text_layer_builder.css) and [annotatio
 For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
 The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
 
-- [_makeShadingPattern](./src/display/svg.js#L1118) 
+- [_makeShadingPattern](./src/display/svg.js#L1048) 
 
 ## Release 
 

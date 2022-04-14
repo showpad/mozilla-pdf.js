@@ -29,7 +29,13 @@ For embedded media support we need to be able to pass a custom operator list. To
 For embedded media support we use the svg renderer to create an svg element from which we extract the images to calculate some required metadata. 
 The svg renderer is not officially supported so it does not support all operations, for example when an unsupported operation is encountered in the *_makeShadingPattern* function an error is thrown which results in the svg not being rendered. As the result of *_makeShadingPattern* are not requirements for our use case so we simply return null in this function to ensure that the svg is still created.
 
-- [_makeShadingPattern](./src/display/svg.js#L1163) 
+- [_makeShadingPattern](./src/display/svg.js#L1163)
+
+## Force image smoothing 
+
+Currently there is a check to determine if smoothing should be enabled for an image, however we have found that this can in some cases (SP-57645) that the check returns false when visually it looks better as true therefore we simply return true in this function.
+
+- [getImageSmoothingEnabled](./src/display/canvas.js#L1039)
 
 # Updates to build process
 

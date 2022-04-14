@@ -62,8 +62,7 @@ For example PDFjs releases version 2.12.313 then the corresponding showpad relea
 
 - Create branch in showpad fork from the upstream tag commit id 
 - update version [here](./version-showpad.json#L2)
-- gulp dist-pre
-- cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
+- gulp dist-pre && cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
 - cd build/dist
 - npm publish
 

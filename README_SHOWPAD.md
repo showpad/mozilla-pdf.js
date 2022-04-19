@@ -34,6 +34,12 @@ The svg renderer is not officially supported so it does not support all operatio
 
 - [_makeShadingPattern](./src/display/svg.js#L1191)
 
+## Force image smoothing 
+
+Currently there is a check to determine if smoothing should be enabled for an image, however we have found that this can in some cases (SP-57645) that the check returns false when visually it looks better as true therefore we simply return true in this function.
+
+- [getImageSmoothingEnabled](./src/display/canvas.js#L1046)
+
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L282)

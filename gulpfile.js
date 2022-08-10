@@ -286,7 +286,7 @@ function webpack2Stream(webpackConfig) {
 }
 
 function getVersionJSON() {
-  return JSON.parse(fs.readFileSync(BUILD_DIR + "version.json").toString());
+  return JSON.parse(fs.readFileSync("./version-showpad.json").toString());
 }
 
 function checkChromePreferencesFile(chromePrefsPath, webPrefs) {
@@ -2171,8 +2171,9 @@ gulp.task(
 function packageBowerJson() {
   const VERSION = getVersionJSON().version;
 
-  const DIST_NAME = "pdfjs-dist";
-  const DIST_DESCRIPTION = "Generic build of Mozilla's PDF.js library.";
+  const DIST_NAME = "@showpad/pdfjs-dist";
+  const DIST_DESCRIPTION =
+    "Generic build of Mozilla's PDF.js library with extra showpad features.";
   const DIST_KEYWORDS = ["Mozilla", "pdf", "pdf.js"];
   const DIST_HOMEPAGE = "http://mozilla.github.io/pdf.js/";
   const DIST_BUGS_URL = "https://github.com/mozilla/pdf.js/issues";
@@ -2212,6 +2213,10 @@ function packageBowerJson() {
     repository: {
       type: "git",
       url: DIST_REPO_URL,
+    },
+    publishConfig: {
+      "@showpad:registry":
+        "https://gitlab.showpad.io/api/v4/projects/227/packages/npm/",
     },
   };
 

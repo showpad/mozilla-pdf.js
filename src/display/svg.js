@@ -1191,61 +1191,7 @@ if (
      * @private
      */
     _makeShadingPattern(args) {
-      if (typeof args === "string") {
-        args = this.objs.get(args);
-      }
-      switch (args[0]) {
-        case "RadialAxial":
-          const shadingId = `shading${shadingCount++}`;
-          const colorStops = args[3];
-          let gradient;
-
-          switch (args[1]) {
-            case "axial":
-              const point0 = args[4];
-              const point1 = args[5];
-              gradient = this.svgFactory.createElement("svg:linearGradient");
-              gradient.setAttributeNS(null, "id", shadingId);
-              gradient.setAttributeNS(null, "gradientUnits", "userSpaceOnUse");
-              gradient.setAttributeNS(null, "x1", point0[0]);
-              gradient.setAttributeNS(null, "y1", point0[1]);
-              gradient.setAttributeNS(null, "x2", point1[0]);
-              gradient.setAttributeNS(null, "y2", point1[1]);
-              break;
-            case "radial":
-              const focalPoint = args[4];
-              const circlePoint = args[5];
-              const focalRadius = args[6];
-              const circleRadius = args[7];
-              gradient = this.svgFactory.createElement("svg:radialGradient");
-              gradient.setAttributeNS(null, "id", shadingId);
-              gradient.setAttributeNS(null, "gradientUnits", "userSpaceOnUse");
-              gradient.setAttributeNS(null, "cx", circlePoint[0]);
-              gradient.setAttributeNS(null, "cy", circlePoint[1]);
-              gradient.setAttributeNS(null, "r", circleRadius);
-              gradient.setAttributeNS(null, "fx", focalPoint[0]);
-              gradient.setAttributeNS(null, "fy", focalPoint[1]);
-              gradient.setAttributeNS(null, "fr", focalRadius);
-              break;
-            default:
-              throw new Error(`Unknown RadialAxial type: ${args[1]}`);
-          }
-          for (const colorStop of colorStops) {
-            const stop = this.svgFactory.createElement("svg:stop");
-            stop.setAttributeNS(null, "offset", colorStop[0]);
-            stop.setAttributeNS(null, "stop-color", colorStop[1]);
-            gradient.append(stop);
-          }
-          this.defs.append(gradient);
-          return `url(#${shadingId})`;
-        case "Mesh":
-          warn("Unimplemented pattern Mesh");
-          return null;
-        case "Dummy":
-          return "hotpink";
-        default:
-          throw new Error(`Unknown IR type: ${args[0]}`);
-      }
+      return null;
     }
 
     setDash(dashArray, dashPhase) {

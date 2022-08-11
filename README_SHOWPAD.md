@@ -37,6 +37,15 @@ Currently there is a check to determine if smoothing should be enabled for an im
 
 - [getImageSmoothingEnabled](./src/display/canvas.js#L1039)
 
+## Skip checkFirstPage and checkLastPage
+
+To assist in opening possibly corrupt pdfs a check is made when loading a document that fetches its last page, in some cases this results in a large number
+of redundent byte range requests occuring which has a significant impact on the time to render a page. As we process pdfs we can assure that the correct
+metadata fo numPages is defined so we simply skip these checks.
+
+- [checkFirstPage](./src/core/worker.js#L175)
+- [checkLastPage](./src/core/worker.js#L178)
+
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L282)

@@ -994,23 +994,7 @@ function composeSMask(ctx, smask, layerCtx, layerBox) {
 }
 
 function getImageSmoothingEnabled(transform, interpolate) {
-  const scale = Util.singularValueDecompose2dScale(transform);
-  // Round to a 32bit float so that `<=` check below will pass for numbers that
-  // are very close, but not exactly the same 64bit floats.
-  scale[0] = Math.fround(scale[0]);
-  scale[1] = Math.fround(scale[1]);
-  const actualScale = Math.fround(
-    (globalThis.devicePixelRatio || 1) * PixelsPerInch.PDF_TO_CSS_UNITS
-  );
-  if (interpolate !== undefined) {
-    // If the value is explicitly set use it.
-    return interpolate;
-  } else if (scale[0] <= actualScale || scale[1] <= actualScale) {
-    // Smooth when downscaling.
-    return true;
-  }
-  // Don't smooth when upscaling.
-  return false;
+  return true;
 }
 
 const LINE_CAP_STYLES = ["butt", "round", "square"];

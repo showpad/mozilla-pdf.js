@@ -1170,6 +1170,7 @@ class PDFDocumentProxy {
  *   states set.
  * @property {Map<string, HTMLCanvasElement>} [annotationCanvasMap] - Map some
  *   annotation ids with canvases used to render them.
+ * @property {PDFOperatorList} [operatorList] - Custom operator list.
  */
 
 /**
@@ -1384,6 +1385,7 @@ class PDFPageProxy {
     background = null,
     optionalContentConfigPromise = null,
     annotationCanvasMap = null,
+    operatorList = null,
   }) {
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
       if (arguments[0]?.renderInteractiveForms !== undefined) {
@@ -1502,7 +1504,7 @@ class PDFPageProxy {
       objs: this.objs,
       commonObjs: this.commonObjs,
       annotationCanvasMap,
-      operatorList: intentState.operatorList,
+      operatorList: operatorList || intentState.operatorList,
       pageIndex: this._pageIndex,
       canvasFactory: canvasFactoryInstance,
       useRequestAnimationFrame: !intentPrint,

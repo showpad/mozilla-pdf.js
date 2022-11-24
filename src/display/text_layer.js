@@ -735,7 +735,10 @@ class TextLayerRenderTask {
     ) {
       canvas.mozOpaque = true;
     }
-    this._layoutTextCtx = canvas.getContext("2d", { alpha: false });
+    this._layoutTextCtx = canvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: true,
+    });
 
     if (this._textContent) {
       const textItems = this._textContent.items;

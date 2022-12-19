@@ -85,7 +85,7 @@ For example PDFjs releases version 2.16.105 then the corresponding showpad relea
 - Create branch in showpad fork from the upstream tag commit id git checkout -b v2.16.105 tag && git push --set-upstream origin v2.16.105
 - Create branch in showpad fork from the upstream tag commit id git checkout -b v2.16.105-showpad tag && git push --set-upstream origin v2.16.105-showpad
 - update version [here](./version-showpad.json#L2)
-- install node-v15.14.0
+- install node-v14.16.0
 - gulp dist-pre && cp web/annotation_layer_builder.css build/dist/web/annotation_layer_builder.css && cp web/text_layer_builder.css build/dist/web/text_layer_builder.css && cp .npmrc build/dist/
 - cd build/dist
 - npm pack | tail -n 1 ( to make local install for testing )

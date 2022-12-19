@@ -742,7 +742,10 @@ class TextLayerRenderTask {
     const canvas = this._document.createElement("canvas");
     canvas.height = canvas.width = DEFAULT_FONT_SIZE;
 
-    this._layoutTextCtx = canvas.getContext("2d", { alpha: false });
+    this._layoutTextCtx = canvas.getContext("2d", { 
+      alpha: false,
+      willReadFrequently: true, 
+    });
 
     if (this._textContent) {
       const textItems = this._textContent.items;

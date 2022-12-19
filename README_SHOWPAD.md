@@ -48,6 +48,17 @@ metadata fo numPages is defined so we simply skip these checks.
 - [checkFirstPage](./src/core/worker.js#L174)
 - [checkLastPage](./src/core/worker.js#L177)
 
+## Bypass accelerated 2d canvas
+
+There is an issue with Accelerated 2d canvas https://github.com/mozilla/pdf.js/issues/14641 that causes text to have issues https://jira.showpad.io/browse/SBE-8253
+
+To fix this we need to add { willReadFrequently: true } to all getContext calls on the canvas to force the use of a software (instead of hardware accelerated) 2D canvas.
+
+- [base_factory.js](./src/display/base_factory.js#L32)
+- [font_loader.js](./src/display/font_loader.js#L279)
+- [text_layer.js](./src/display/text_layer.js#L745)
+  
+
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L285)

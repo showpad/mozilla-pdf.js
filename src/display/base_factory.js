@@ -29,7 +29,7 @@ class BaseCanvasFactory {
     const canvas = this._createCanvas(width, height);
     return {
       canvas,
-      context: canvas.getContext("2d"),
+      context: canvas.getContext("2d", { willReadFrequently: true }),
     };
   }
 

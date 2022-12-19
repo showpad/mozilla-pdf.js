@@ -592,7 +592,7 @@ class InkEditor extends AnnotationEditor {
       .get("editor_ink_canvas_aria_label")
       .then(msg => this.canvas?.setAttribute("aria-label", msg));
     this.div.append(this.canvas);
-    this.ctx = this.canvas.getContext("2d");
+    this.ctx = canvas.getContext("2d", { willReadFrequently: true });
   }
 
   /**

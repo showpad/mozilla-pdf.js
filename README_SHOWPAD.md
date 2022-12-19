@@ -57,6 +57,8 @@ To fix this we need to add { willReadFrequently: true } to all getContext calls 
 - [base_factory.js](./src/display/base_factory.js#L32)
 - [font_loader.js](./src/display/font_loader.js#L279)
 - [text_layer.js](./src/display/text_layer.js#L745)
+- [image.js](./src/display/image.js#L371)
+- [ink.js](./src/display/editor/ink.js#L595)
   
 
 # Updates to build process

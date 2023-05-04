@@ -515,7 +515,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
         while (destPos < dest32DataLength) {
           dest32[destPos++] = 0;
         }
-
+        ctx.getImageData(0, 0, 1, 1);
         ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else if (imgData.kind === ImageKind.RGBA_32BPP) {
@@ -526,13 +526,14 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       for (i = 0; i < fullChunks; i++) {
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
         srcPos += elemsInThisChunk;
-
+        ctx.getImageData(0, 0, 1, 1);
         ctx.putImageData(chunkImgData, 0, j);
         j += FULL_CHUNK_HEIGHT;
       }
       if (i < totalChunks) {
         elemsInThisChunk = width * partialChunkHeight * 4;
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
+        ctx.getImageData(0, 0, 1, 1);
         ctx.putImageData(chunkImgData, 0, j);
       }
 
@@ -553,6 +554,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           dest[destPos++] = src[srcPos++];
           dest[destPos++] = 255;
         }
+        ctx.getImageData(0, 0, 1, 1);
         ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else {

@@ -44,6 +44,15 @@ The svg renderer is not officially supported so it does not support all operatio
 
 - [_makeShadingPattern](./src/display/svg.js#L1048)
   
+## Fix issue of multiple putImageData calls causing rendering to freeze on IOS16 when GPU Process: DOM Rendering is enabled
+
+Images are rendered to the canvas in chunks [putBinaryImageData](./src/display/canvas.js#L444), therefore pages with alot of images will result in many putImageData operations. In IOS 16 GPU Process: DOM Rendering was enabled by default which in combination with large number of consecutive putImageData operations causes the operation to freeze. This issue was raised after investigation of SP-74888. To fix this we need to add a getImageData operation before each putImageData call.
+
+- [GRAYSCALE_1BPP chunks](./src/display/canvas.js#L518)
+- [RGBA_32BPP chunks #1](./src/display/canvas.js#L529)
+- [RGBA_32BPP chunks #2](./src/display/canvas.js#L536)
+- [RGB_24BPP chunks](./src/display/canvas.js#L557)
+
 # Updates to build process
 
 - [Use hardcoded config to define version](./gulpfile.js#L226)

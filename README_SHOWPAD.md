@@ -44,7 +44,7 @@ The svg renderer is not officially supported so it does not support all operatio
 
 - [_makeShadingPattern](./src/display/svg.js#L1048)
   
-## Fix issue of multiple putImageData calls causing rendering to freeze on IOS16 when GPU Process: DOM Rendering is enabled
+## Fix issue of multiple putImageData calls causing rendering to freeze on IOS16 when GPU Process: DOM Rendering is enabled [SP-75056](https://showpad.atlassian.net/browse/SP-75056)
 
 Images are rendered to the canvas in chunks, therefore pages with alot of images will result in many putImageData operations. In IOS 16 GPU Process: DOM Rendering was enabled by default which in combination with large number of consecutive putImageData operations causes the operation to freeze. This issue was raised after investigation of SP-74888. To fix this we added a [putImageData function](./src/display/canvas.js#L447) that will ensure that on IOS a sync process is triggered every 100 operations to prevent overloading the system.
 

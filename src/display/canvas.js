@@ -408,6 +408,9 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
   // Defines the number of steps before checking the execution time
   var EXECUTION_STEPS = 10;
 
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.platform);
+  var putImageDataOperationCount = 0;
+
   function CanvasGraphics(canvasCtx, commonObjs, objs, canvasFactory,
                           webGLContext, imageLayer) {
     this.ctx = canvasCtx;
@@ -441,9 +444,16 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     this._cachedGetSinglePixelWidth = null;
   }
 
+  function putImageData(ctx, imageData, dx, dy) {
+    ctx.putImageData(imageData, dx, dy);
+    if (isIOS && ++putImageDataOperationCount % 100 === 0) {
+      ctx.getImageData(0, 0, 1, 1);
+    }
+  }
+
   function putBinaryImageData(ctx, imgData) {
     if (typeof ImageData !== 'undefined' && imgData instanceof ImageData) {
-      ctx.putImageData(imgData, 0, 0);
+      putImageData(ctx, imgData, 0, 0);
       return;
     }
 
@@ -515,8 +525,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
         while (destPos < dest32DataLength) {
           dest32[destPos++] = 0;
         }
-        ctx.getImageData(0, 0, 1, 1);
-        ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
+        putImageData(ctx, chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else if (imgData.kind === ImageKind.RGBA_32BPP) {
       // RGBA, 32-bits per pixel.
@@ -526,15 +535,13 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       for (i = 0; i < fullChunks; i++) {
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
         srcPos += elemsInThisChunk;
-        ctx.getImageData(0, 0, 1, 1);
-        ctx.putImageData(chunkImgData, 0, j);
+        putImageData(ctx, chunkImgData, 0, j);
         j += FULL_CHUNK_HEIGHT;
       }
       if (i < totalChunks) {
         elemsInThisChunk = width * partialChunkHeight * 4;
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
-        ctx.getImageData(0, 0, 1, 1);
-        ctx.putImageData(chunkImgData, 0, j);
+        putImageData(ctx, chunkImgData, 0, j);
       }
 
     } else if (imgData.kind === ImageKind.RGB_24BPP) {
@@ -554,8 +561,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           dest[destPos++] = src[srcPos++];
           dest[destPos++] = 255;
         }
-        ctx.getImageData(0, 0, 1, 1);
-        ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
+        putImageData(ctx, chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else {
       throw new Error(`bad image kind: ${imgData.kind}`);

@@ -408,7 +408,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
   // Defines the number of steps before checking the execution time
   var EXECUTION_STEPS = 10;
 
-  var isIOS = /iPad|iPhone|iPod/.test((typeof navigator !== 'undefined' && navigator.platform) || '');
+  var isIOS = typeof navigator !== 'undefined' ? /iPad|iPhone|iPod/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) : false;
   var putImageDataOperationCount = 0;
 
   function CanvasGraphics(canvasCtx, commonObjs, objs, canvasFactory,

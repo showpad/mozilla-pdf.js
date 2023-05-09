@@ -276,8 +276,8 @@ FontLoader = class GenericFontLoader extends BaseFontLoader {
       ctx.fillText('.', 0, 20);
       let imageData = ctx.getImageData(0, 0, 1, 1);
       if (imageData.data[3] > 0) {
-        callback();
-        return;
+        //callback();
+        //return;
       }
       setTimeout(isFontReady.bind(null, name, callback));
     }

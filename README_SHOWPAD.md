@@ -60,6 +60,11 @@ To fix this we need to add { willReadFrequently: true } to all getContext calls 
 - [image.js](./src/display/image.js#L371)
 - [ink.js](./src/display/editor/ink.js#L595)
   
+## Prevent Arbitrary Code Injection via font loader
+
+https://showpad.atlassian.net/browse/VUL-5352
+
+- [font_loader.js](./src/display/font_loader.js#L456)
 
 # Updates to build process
 

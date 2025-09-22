@@ -2196,7 +2196,7 @@ function packageBowerJson() {
     },
     publishConfig: {
       "@showpad:registry":
-        "https://gitlab.showpad.io/api/v4/projects/227/packages/npm/",
+        "https://gitlab.com/api/v4/projects/56688220/packages/npm/",
     },
   };
 

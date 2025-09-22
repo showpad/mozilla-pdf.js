@@ -16,7 +16,6 @@
 import {
   assert,
   bytesToString,
-  FeatureTest,
   shadow,
   string32,
   unreachable,
@@ -276,7 +275,7 @@ if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
       const canvas = this._document.createElement("canvas");
       canvas.width = 1;
       canvas.height = 1;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
       let called = 0;
       function isFontReady(name, callback) {
@@ -454,6 +453,8 @@ class FontFaceObject {
       });
     }
 
+    // VUL-5352 new Function is basically eval so we skip this and fallback to Function.prototype.apply()
+    /*
     // If we can, compile cmds into JS for MAXIMUM SPEED...
     if (this.isEvalSupported && FeatureTest.isEvalSupported) {
       const jsBuf = [];
@@ -468,6 +469,7 @@ class FontFaceObject {
         jsBuf.join("")
       ));
     }
+    */
     // ... but fall back on using Function.prototype.apply() if we're
     // blocked from using eval() for whatever reason (like CSP policies).
     return (this.compiledGlyphs[character] = function (c, size) {

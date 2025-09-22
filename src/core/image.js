@@ -368,7 +368,7 @@ class PDFImage {
 
     if (FeatureTest.isOffscreenCanvasSupported) {
       const canvas = new OffscreenCanvas(width, height);
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
       const imgData = ctx.createImageData(width, height);
       applyMaskImageData({
         src: imgArray,

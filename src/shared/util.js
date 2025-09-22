@@ -447,6 +447,7 @@ function _isValidProtocol(url) {
     case "ftp:":
     case "mailto:":
     case "tel:":
+    case "showpad:":
       return true;
     default:
       return false;

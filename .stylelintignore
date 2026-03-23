@@ -4,8 +4,10 @@ docs/
 node_modules/
 external/bcmaps/
 external/builder/fixtures/
-external/builder/fixtures_esprima/
+external/builder/fixtures_babel/
 external/quickjs/
+test/stats/results/
 test/tmp/
 test/pdfs/
+web/locale/
 *~/

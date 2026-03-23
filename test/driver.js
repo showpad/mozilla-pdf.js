@@ -12,24 +12,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals pdfjsLib, pdfjsViewer */
+/* globals pdfjsLib, _pdfjsTestingUtils, pdfjsViewer */
 
 const {
   AnnotationLayer,
   AnnotationMode,
+  DrawLayer,
   getDocument,
   GlobalWorkerOptions,
+  OutputScale,
   PixelsPerInch,
-  PromiseCapability,
-  renderTextLayer,
   shadow,
+  TextLayer,
   XfaLayer,
 } = pdfjsLib;
+const { HighlightOutliner } = _pdfjsTestingUtils;
 const { GenericL10n, parseQueryString, SimpleLinkService } = pdfjsViewer;
 
 const WAITING_TIME = 100; // ms
 const CMAP_URL = "/build/generic/web/cmaps/";
+const ICC_URL = "/build/generic/web/iccs/";
 const STANDARD_FONT_DATA_URL = "/build/generic/web/standard_fonts/";
+const WASM_URL = "/build/generic/web/wasm/";
 const IMAGE_RESOURCES_PATH = "/web/images/";
 const VIEWER_CSS = "../build/components/pdf_viewer.css";
 const VIEWER_LOCALE = "en-US";
@@ -104,31 +108,33 @@ async function inlineImages(node, silentErrors = false) {
           }
           return response.blob();
         })
-        .then(blob => {
-          return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              resolve(reader.result);
-            };
-            reader.onerror = reject;
+        .then(
+          blob =>
+            new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                resolve(reader.result);
+              };
+              reader.onerror = reject;
 
-            reader.readAsDataURL(blob);
-          });
-        })
-        .then(dataUrl => {
-          return new Promise((resolve, reject) => {
-            image.onload = resolve;
-            image.onerror = evt => {
-              if (silentErrors) {
-                resolve();
-                return;
-              }
-              reject(evt);
-            };
+              reader.readAsDataURL(blob);
+            })
+        )
+        .then(
+          dataUrl =>
+            new Promise((resolve, reject) => {
+              image.onload = resolve;
+              image.onerror = evt => {
+                if (silentErrors) {
+                  resolve();
+                  return;
+                }
+                reject(evt);
+              };
 
-            image.src = dataUrl;
-          });
-        })
+              image.src = dataUrl;
+            })
+        )
         .catch(reason => {
           throw new Error(`Error inlining image (${url}): ${reason}`);
         })
@@ -181,6 +187,11 @@ class Rasterize {
     return shadow(this, "textStylePromise", loadStyles(styles));
   }
 
+  static get drawLayerStylePromise() {
+    const styles = [VIEWER_CSS, "./draw_layer_test.css"];
+    return shadow(this, "drawLayerStylePromise", loadStyles(styles));
+  }
+
   static get xfaStylePromise() {
     const styles = [VIEWER_CSS, "./xfa_layer_builder_overrides.css"];
     return shadow(this, "xfaStylePromise", loadStyles(styles));
@@ -206,12 +217,26 @@ class Rasterize {
     return { svg, foreignObject, style, div };
   }
 
+  static createRootCSS(viewport) {
+    const { scale, userUnit } = viewport;
+    return [
+      ":root {",
+      "  --scale-round-x: 1px; --scale-round-y: 1px;",
+      `  --scale-factor: ${scale};`,
+      `  --user-unit: ${userUnit};`,
+      `  --total-scale-factor: ${scale * userUnit};`,
+      "}",
+    ].join("\n");
+  }
+
   static async annotationLayer(
     ctx,
     viewport,
     outputScale,
     annotations,
     annotationCanvasMap,
+    annotationStorage,
+    fieldObjects,
     page,
     imageResourcesPath,
     renderForms = false
@@ -221,9 +246,7 @@ class Rasterize {
       div.className = "annotationLayer";
 
       const [common, overrides] = await this.annotationStylePromise;
-      style.textContent =
-        `${common}\n${overrides}\n` +
-        `:root { --scale-factor: ${viewport.scale} }`;
+      style.textContent = `${common}\n${overrides}\n${this.createRootCSS(viewport)}`;
 
       const annotationViewport = viewport.clone({ dontFlip: true });
       const annotationImageMap = await convertCanvasesToImages(
@@ -234,9 +257,9 @@ class Rasterize {
       // Rendering annotation layer as HTML.
       const parameters = {
         annotations,
-        linkService: new SimpleLinkService(),
         imageResourcesPath,
         renderForms,
+        fieldObjects,
       };
 
       // Ensure that the annotationLayer gets translated.
@@ -247,6 +270,8 @@ class Rasterize {
         annotationCanvasMap: annotationImageMap,
         page,
         viewport: annotationViewport,
+        linkService: new SimpleLinkService(),
+        annotationStorage,
       });
       await annotationLayer.render(parameters);
       await annotationLayer.showPopups();
@@ -280,23 +305,133 @@ class Rasterize {
       svg.setAttribute("font-size", 1);
 
       const [common, overrides] = await this.textStylePromise;
-      style.textContent =
-        `${common}\n${overrides}\n` +
-        `:root { --scale-factor: ${viewport.scale} }`;
+      style.textContent = `${common}\n${overrides}\n${this.createRootCSS(viewport)}`;
 
       // Rendering text layer as HTML.
-      const task = renderTextLayer({
+      const textLayer = new TextLayer({
         textContentSource: textContent,
         container: div,
         viewport,
       });
+      await textLayer.render();
 
-      await task.promise;
       svg.append(foreignObject);
 
       await writeSVG(svg, ctx);
     } catch (reason) {
       throw new Error(`Rasterize.textLayer: "${reason?.message}".`);
+    }
+  }
+
+  static async highlightLayer(ctx, viewport, textContent) {
+    try {
+      const { svg, foreignObject, style, div } = this.createContainer(viewport);
+      const dummyParent = document.createElement("div");
+
+      // Items are transformed to have 1px font size.
+      svg.setAttribute("font-size", 1);
+
+      const [common, overrides] = await this.drawLayerStylePromise;
+      style.textContent = `${common}\n${overrides}\n${this.createRootCSS(viewport)}`;
+
+      // Rendering text layer as HTML.
+      const textLayer = new TextLayer({
+        textContentSource: textContent,
+        container: dummyParent,
+        viewport,
+      });
+      await textLayer.render();
+
+      const { pageWidth, pageHeight, textDivs } = textLayer;
+      const boxes = [];
+      let j = 0,
+        posRegex;
+      for (const { width, height, type } of textContent.items) {
+        if (type) {
+          continue;
+        }
+        const { top, left } = textDivs[j++].style;
+        let x = parseFloat(left) / 100;
+        let y = parseFloat(top) / 100;
+        if (isNaN(x)) {
+          posRegex ||= /^calc\(var\(--total-scale-factor\)\s*\*(.*)px\)$/;
+          // The element is tagged so we've to extract the position from the
+          // string, e.g. `calc(var(--total-scale-factor)*66.32px)`.
+          let match = left.match(posRegex);
+          if (match) {
+            x = parseFloat(match[1]) / pageWidth;
+          }
+
+          match = top.match(posRegex);
+          if (match) {
+            y = parseFloat(match[1]) / pageHeight;
+          }
+        }
+        if (width === 0 || height === 0) {
+          continue;
+        }
+        boxes.push({
+          x,
+          y,
+          width: width / pageWidth,
+          height: height / pageHeight,
+        });
+      }
+      // We set the borderWidth to 0.001 to slightly increase the size of the
+      // boxes so that they can be merged together.
+      const outliner = new HighlightOutliner(boxes, /* borderWidth = */ 0.001);
+      // We set the borderWidth to 0.0025 in order to have an outline which is
+      // slightly bigger than the highlight itself.
+      // We must add an inner margin to avoid to have a partial outline.
+      const outlinerForOutline = new HighlightOutliner(
+        boxes,
+        /* borderWidth = */ 0.0025,
+        /* innerMargin = */ 0.001
+      );
+      const drawLayer = new DrawLayer({ pageIndex: 0 });
+      drawLayer.setParent(div);
+      const outlines = outliner.getOutlines();
+      drawLayer.draw(
+        {
+          bbox: outlines.box,
+          root: {
+            viewBox: "0 0 1 1",
+            fill: "orange",
+            "fill-opacity": 0.4,
+          },
+          rootClass: {
+            highlight: true,
+            free: false,
+          },
+          path: {
+            d: outlines.toSVGPath(),
+          },
+        },
+        /* isPathUpdatable = */ false,
+        /* hasClip = */ true
+      );
+      const focusLine = outlinerForOutline.getOutlines();
+      drawLayer.drawOutline(
+        {
+          rootClass: {
+            highlightOutline: true,
+            free: false,
+          },
+          bbox: focusLine.box,
+          path: {
+            d: focusLine.toSVGPath(),
+          },
+        },
+        /* mustRemoveSelfIntersections = */ false
+      );
+
+      svg.append(foreignObject);
+
+      await writeSVG(svg, ctx);
+
+      drawLayer.destroy();
+    } catch (reason) {
+      throw new Error(`Rasterize.highlightLayer: "${reason?.message}".`);
     }
   }
 
@@ -370,7 +505,7 @@ class Driver {
     this.delay = params.get("delay") | 0;
     this.inFlightRequests = 0;
     this.testFilter = JSON.parse(params.get("testfilter") || "[]");
-    this.xfaOnly = params.get("xfaonly") === "true";
+    this.masterMode = params.get("mastermode") === "true";
 
     // Create a working canvas
     this.canvas = document.createElement("canvas");
@@ -408,12 +543,9 @@ class Driver {
       this._log("done\n");
       this.manifest = await response.json();
 
-      if (this.testFilter?.length || this.xfaOnly) {
+      if (this.testFilter?.length) {
         this.manifest = this.manifest.filter(item => {
           if (this.testFilter.includes(item.id)) {
-            return true;
-          }
-          if (this.xfaOnly && item.enableXfa) {
             return true;
           }
           return false;
@@ -456,6 +588,25 @@ class Driver {
       task.stats = { times: [] };
       task.enableXfa = task.enableXfa === true;
 
+      if (task.includePages && task.type === "extract") {
+        if (this.masterMode) {
+          const includePages = [];
+          for (const page of task.includePages) {
+            if (Array.isArray(page)) {
+              for (let i = page[0]; i <= page[1]; i++) {
+                includePages.push(i);
+              }
+            } else {
+              includePages.push(page);
+            }
+          }
+          task.numberOfTasks = includePages.length;
+          task.includePages = includePages;
+        } else {
+          delete task.pageMapping;
+        }
+      }
+
       const prevFile = md5FileMap.get(task.md5);
       if (prevFile) {
         if (task.file !== prevFile) {
@@ -469,10 +620,21 @@ class Driver {
         md5FileMap.set(task.md5, task.file);
       }
 
+      this._log(
+        `[${this.currentTask + 1}/${this.manifest.length}] ${task.id}:\n`
+      );
+
+      if (task.type === "skip-because-failing") {
+        this._log(`  Skipping file "${task.file} because it's failing"\n`);
+        this.currentTask++;
+        this._nextTask();
+        return;
+      }
+
       // Support *linked* test-cases for the other suites, e.g. unit- and
       // integration-tests, without needing to run them as reference-tests.
       if (task.type === "other") {
-        this._log(`Skipping file "${task.file}"\n`);
+        this._log(`  Skipping file "${task.file}"\n`);
 
         if (!task.link) {
           this._nextPage(task, 'Expected "other" test-case to be linked.');
@@ -483,7 +645,7 @@ class Driver {
         return;
       }
 
-      this._log('Loading file "' + task.file + '"\n');
+      this._log(`  Loading file "${task.file}"\n`);
 
       try {
         let xfaStyleElement = null;
@@ -498,25 +660,47 @@ class Driver {
         }
         const isOffscreenCanvasSupported =
           task.isOffscreenCanvasSupported === false ? false : undefined;
+        const disableFontFace = task.disableFontFace === true;
 
-        const loadingTask = getDocument({
+        const documentOptions = {
           url: new URL(task.file, window.location),
           password: task.password,
           cMapUrl: CMAP_URL,
+          iccUrl: ICC_URL,
           standardFontDataUrl: STANDARD_FONT_DATA_URL,
+          wasmUrl: WASM_URL,
           disableAutoFetch: !task.enableAutoFetch,
           pdfBug: true,
           useSystemFonts: task.useSystemFonts,
+          useWasm: task.useWasm,
           useWorkerFetch: task.useWorkerFetch,
           enableXfa: task.enableXfa,
           isOffscreenCanvasSupported,
           styleElement: xfaStyleElement,
-        });
+          disableFontFace,
+        };
+        const loadingTask = getDocument(documentOptions);
         let promise = loadingTask.promise;
+
+        if (!this.masterMode && task.type === "extract") {
+          promise = promise.then(async doc => {
+            const extractedDocumentOptions = { ...documentOptions };
+            delete extractedDocumentOptions.url;
+            extractedDocumentOptions.data = await doc.extractPages([
+              {
+                document: null,
+                includePages: task.includePages,
+              },
+            ]);
+            await loadingTask.destroy();
+            delete task.includePages;
+            return getDocument(extractedDocumentOptions).promise;
+          });
+        }
 
         if (task.annotationStorage) {
           for (const annotation of Object.values(task.annotationStorage)) {
-            const { bitmapName } = annotation;
+            const { bitmapName, quadPoints, paths, outlines } = annotation;
             if (bitmapName) {
               promise = promise.then(async doc => {
                 const response = await fetch(
@@ -549,6 +733,41 @@ class Driver {
                 return doc;
               });
             }
+            if (quadPoints) {
+              // Just to ensure that the quadPoints are always a Float32Array
+              // like IRL (in order to avoid bugs like bug 1907958).
+              annotation.quadPoints = new Float32Array(quadPoints);
+            }
+            if (paths) {
+              for (let i = 0, ii = paths.lines.length; i < ii; i++) {
+                paths.lines[i] = Float32Array.from(
+                  paths.lines[i],
+                  x => x ?? NaN
+                );
+              }
+              for (let i = 0, ii = paths.points.length; i < ii; i++) {
+                paths.points[i] = Float32Array.from(
+                  paths.points[i],
+                  x => x ?? NaN
+                );
+              }
+            }
+            if (outlines) {
+              if (Array.isArray(outlines)) {
+                for (let i = 0, ii = outlines.length; i < ii; i++) {
+                  outlines[i] = Float32Array.from(outlines[i], x => x ?? NaN);
+                }
+              } else {
+                outlines.outline = Float32Array.from(
+                  outlines.outline,
+                  x => x ?? NaN
+                );
+                outlines.points = Float32Array.from(
+                  outlines.points,
+                  x => x ?? NaN
+                );
+              }
+            }
           }
         }
 
@@ -557,7 +776,13 @@ class Driver {
             if (!task.annotationStorage) {
               throw new Error("Missing `annotationStorage` entry.");
             }
-            doc.annotationStorage.setAll(task.annotationStorage);
+            if (task.loadAnnotations) {
+              for (let num = 1; num <= doc.numPages; num++) {
+                const page = await doc.getPage(num);
+                await page.getAnnotations({ intent: "display" });
+              }
+            }
+            doc.annotationStorage._setValues(task.annotationStorage);
 
             const data = await doc.saveDocument();
             await loadingTask.destroy();
@@ -577,7 +802,13 @@ class Driver {
             }
 
             task.pdfDoc = doc;
-            task.optionalContentConfigPromise = doc.getOptionalContentConfig();
+            if (!task.save && task.print && task.annotationStorage) {
+              doc.annotationStorage._setValues(task.annotationStorage);
+              task.printAnnotationStorage = doc.annotationStorage.print;
+            }
+            task.optionalContentConfigPromise = doc.getOptionalContentConfig({
+              intent: task.print ? "print" : "display",
+            });
 
             if (task.optionalContent) {
               const entries = Object.entries(task.optionalContent),
@@ -585,6 +816,10 @@ class Driver {
               for (const [id, visible] of entries) {
                 optionalContentConfig.setVisibility(id, visible);
               }
+            }
+
+            if (task.forms) {
+              task.fieldObjects = await doc.getFieldObjects();
             }
 
             this._nextPage(task, failure);
@@ -634,7 +869,7 @@ class Driver {
     if (!("message" in e)) {
       return JSON.stringify(e);
     }
-    return e.message + ("stack" in e ? " at " + e.stack.split("\n")[0] : "");
+    return e.message + ("stack" in e ? " at " + e.stack.split("\n", 1)[0] : "");
   }
 
   _getLastPageNumber(task) {
@@ -662,7 +897,7 @@ class Driver {
 
     if (task.pageNum > this._getLastPageNumber(task)) {
       if (++task.round < task.rounds) {
-        this._log(" Round " + (1 + task.round) + "\n");
+        this._log(`  Round ${1 + task.round}\n`);
         task.pageNum = task.firstPage || 1;
       } else {
         this.currentTask++;
@@ -671,9 +906,14 @@ class Driver {
       }
     }
 
-    if (task.skipPages && task.skipPages.includes(task.pageNum)) {
+    if (
+      task.skipPages?.includes(task.pageNum) ||
+      (this.masterMode &&
+        task.includePages &&
+        !task.includePages.includes(task.pageNum - 1))
+    ) {
       this._log(
-        " Skipping page " + task.pageNum + "/" + task.pdfDoc.numPages + "...\n"
+        `    Skipping page ${task.pageNum}/${task.pdfDoc.numPages}...\n`
       );
       task.pageNum++;
       this._nextPage(task);
@@ -683,14 +923,14 @@ class Driver {
     if (!failure) {
       try {
         this._log(
-          " Loading page " + task.pageNum + "/" + task.pdfDoc.numPages + "... "
+          `    Loading page ${task.pageNum}/${task.pdfDoc.numPages}... `
         );
         ctx = this.canvas.getContext("2d", { alpha: false });
         task.pdfDoc.getPage(task.pageNum).then(
           page => {
             // Default to creating the test images at the devices pixel ratio,
             // unless the test explicitly specifies an output scale.
-            const outputScale = task.outputScale || window.devicePixelRatio;
+            const outputScale = task.outputScale || OutputScale.pixelRatio;
             let viewport = page.getViewport({
               scale: PixelsPerInch.PDF_TO_CSS_UNITS,
             });
@@ -729,15 +969,16 @@ class Driver {
               renderPrint = false,
               renderXfa = false,
               annotationCanvasMap = null,
-              pageColors = null;
+              pageColors = null,
+              partialCrop = null;
 
-            if (task.annotationStorage) {
-              task.pdfDoc.annotationStorage.setAll(task.annotationStorage);
+            if (!task.print && task.annotationStorage) {
+              task.pdfDoc.annotationStorage._setValues(task.annotationStorage);
             }
 
             let textLayerCanvas, annotationLayerCanvas, annotationLayerContext;
             let initPromise;
-            if (task.type === "text") {
+            if (task.type === "text" || task.type === "highlight") {
               // Using a dummy canvas for PDF context drawing operations
               textLayerCanvas = this.textLayerCanvas;
               if (!textLayerCanvas) {
@@ -761,20 +1002,30 @@ class Driver {
                   disableNormalization: true,
                 })
                 .then(function (textContent) {
-                  return Rasterize.textLayer(
-                    textLayerContext,
-                    viewport,
-                    textContent
-                  );
+                  return task.type === "text"
+                    ? Rasterize.textLayer(
+                        textLayerContext,
+                        viewport,
+                        textContent
+                      )
+                    : Rasterize.highlightLayer(
+                        textLayerContext,
+                        viewport,
+                        textContent
+                      );
                 });
             } else {
               textLayerCanvas = null;
               // We fetch the `eq` specific test subtypes here, to avoid
               // accidentally changing the behaviour for other types of tests.
-              renderAnnotations = !!task.annotations;
-              renderForms = !!task.forms;
-              renderPrint = !!task.print;
-              renderXfa = !!task.enableXfa;
+
+              partialCrop = task.partial;
+              if (!partialCrop) {
+                renderAnnotations = !!task.annotations;
+                renderForms = !!task.forms;
+                renderPrint = !!task.print;
+                renderXfa = !!task.enableXfa;
+              }
               pageColors = task.pageColors || null;
 
               // Render the annotation layer if necessary.
@@ -819,7 +1070,7 @@ class Driver {
               }
             }
             const renderContext = {
-              canvasContext: ctx,
+              canvas: this.canvas,
               viewport,
               optionalContentConfigPromise: task.optionalContentConfigPromise,
               annotationCanvasMap,
@@ -827,25 +1078,35 @@ class Driver {
               transform,
             };
             if (renderForms) {
-              renderContext.annotationMode = task.annotationStorage
-                ? AnnotationMode.ENABLE_STORAGE
-                : AnnotationMode.ENABLE_FORMS;
+              renderContext.annotationMode = AnnotationMode.ENABLE_FORMS;
             } else if (renderPrint) {
               if (task.annotationStorage) {
                 renderContext.annotationMode = AnnotationMode.ENABLE_STORAGE;
+                renderContext.printAnnotationStorage =
+                  task.printAnnotationStorage;
               }
               renderContext.intent = "print";
+            }
+            if (partialCrop) {
+              renderContext.recordOperations = true;
             }
 
             const completeRender = error => {
               // if text layer is present, compose it on top of the page
               if (textLayerCanvas) {
-                ctx.save();
-                ctx.globalCompositeOperation = "screen";
-                ctx.fillStyle = "rgb(128, 255, 128)"; // making it green
-                ctx.fillRect(0, 0, pixelWidth, pixelHeight);
-                ctx.restore();
-                ctx.drawImage(textLayerCanvas, 0, 0);
+                if (task.type === "text") {
+                  ctx.save();
+                  ctx.globalCompositeOperation = "screen";
+                  ctx.fillStyle = "rgb(128, 255, 128)"; // making it green
+                  ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+                  ctx.restore();
+                  ctx.drawImage(textLayerCanvas, 0, 0);
+                } else if (task.type === "highlight") {
+                  ctx.save();
+                  ctx.globalCompositeOperation = "multiply";
+                  ctx.drawImage(textLayerCanvas, 0, 0);
+                  ctx.restore();
+                }
               }
               // If we have annotation layer, compose it on top of the page.
               if (annotationLayerCanvas) {
@@ -859,7 +1120,7 @@ class Driver {
               this._snapshot(task, error);
             };
             initPromise
-              .then(data => {
+              .then(async data => {
                 const renderTask = page.render(renderContext);
 
                 if (task.renderTaskOnContinue) {
@@ -868,24 +1129,111 @@ class Driver {
                     setTimeout(cont, RENDER_TASK_ON_CONTINUE_DELAY);
                   };
                 }
-                return renderTask.promise.then(() => {
-                  if (annotationCanvasMap) {
-                    Rasterize.annotationLayer(
-                      annotationLayerContext,
-                      viewport,
-                      outputScale,
-                      data,
-                      annotationCanvasMap,
-                      page,
-                      IMAGE_RESOURCES_PATH,
-                      renderForms
-                    ).then(() => {
-                      completeRender(false);
-                    });
-                  } else {
-                    completeRender(false);
+                await renderTask.promise;
+
+                if (partialCrop) {
+                  const clearOutsidePartial = () => {
+                    const { width, height } = ctx.canvas;
+                    // Everything above the partial area
+                    ctx.clearRect(
+                      0,
+                      0,
+                      width,
+                      Math.ceil(partialCrop.minY * height)
+                    );
+                    // Everything below the partial area
+                    ctx.clearRect(
+                      0,
+                      Math.floor(partialCrop.maxY * height),
+                      width,
+                      height
+                    );
+                    // Everything to the left of the partial area
+                    ctx.clearRect(
+                      0,
+                      0,
+                      Math.ceil(partialCrop.minX * width),
+                      height
+                    );
+                    // Everything to the right of the partial area
+                    ctx.clearRect(
+                      Math.floor(partialCrop.maxX * width),
+                      0,
+                      width,
+                      height
+                    );
+                  };
+
+                  clearOutsidePartial();
+                  const baseline = ctx.canvas.toDataURL("image/png");
+                  this._clearCanvas();
+
+                  const recordedBBoxes = page.recordedBBoxes;
+
+                  const partialRenderContext = {
+                    canvasContext: ctx,
+                    viewport,
+                    optionalContentConfigPromise:
+                      task.optionalContentConfigPromise,
+                    annotationCanvasMap,
+                    pageColors,
+                    transform,
+                    recordOperations: false,
+                    operationsFilter(index) {
+                      if (recordedBBoxes.isEmpty(index)) {
+                        return false;
+                      }
+                      return (
+                        recordedBBoxes.minX(index) <= partialCrop.maxX &&
+                        recordedBBoxes.maxX(index) >= partialCrop.minX &&
+                        recordedBBoxes.minY(index) <= partialCrop.maxY &&
+                        recordedBBoxes.maxY(index) >= partialCrop.minY
+                      );
+                    },
+                  };
+
+                  const partialRenderTask = page.render(partialRenderContext);
+                  await partialRenderTask.promise;
+
+                  clearOutsidePartial();
+
+                  if (page.stats) {
+                    // Get the page stats *before* running cleanup.
+                    task.stats = page.stats;
                   }
-                });
+                  page.cleanup(/* resetStats = */ true);
+                  this._snapshot(
+                    task,
+                    false,
+                    // Sometimes the optimized version does not match the
+                    // baseline. Tests marked as "knownPartialMismatch" have
+                    // been manually verified to be good enough (e.g. there is
+                    // one pixel of a very slightly different shade), so we
+                    // avoid compating them to the non-optimized version and
+                    // instead use the optimized version also for makeref.
+                    task.knownPartialMismatch ? null : baseline
+                  );
+                  return;
+                }
+
+                if (annotationCanvasMap) {
+                  Rasterize.annotationLayer(
+                    annotationLayerContext,
+                    viewport,
+                    outputScale,
+                    data,
+                    annotationCanvasMap,
+                    task.pdfDoc.annotationStorage,
+                    task.fieldObjects,
+                    page,
+                    IMAGE_RESOURCES_PATH,
+                    renderForms
+                  ).then(() => {
+                    completeRender(false);
+                  });
+                } else {
+                  completeRender(false);
+                }
               })
               .catch(function (error) {
                 completeRender("render : " + error);
@@ -908,11 +1256,16 @@ class Driver {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  _snapshot(task, failure) {
+  _snapshot(task, failure, baselineDataUrl = null) {
     this._log("Snapshotting... ");
 
     const dataUrl = this.canvas.toDataURL("image/png");
-    this._sendResult(dataUrl, task, failure).then(() => {
+
+    if (baselineDataUrl && baselineDataUrl !== dataUrl) {
+      failure ||= "Optimized rendering differs from full rendering.";
+    }
+
+    this._sendResult(dataUrl, task, failure, baselineDataUrl).then(() => {
       this._log(
         "done" + (failure ? " (failed !: " + failure + ")" : "") + "\n"
       );
@@ -951,7 +1304,7 @@ class Driver {
       this.output.textContent += message;
     }
 
-    if (message.lastIndexOf("\n") >= 0 && !this.disableScrolling.checked) {
+    if (message.includes("\n") && !this.disableScrolling.checked) {
       // Scroll to the bottom of the page
       this.output.scrollTop = this.output.scrollHeight;
     }
@@ -966,17 +1319,19 @@ class Driver {
     }
   }
 
-  _sendResult(snapshot, task, failure) {
+  _sendResult(snapshot, task, failure, baselineSnapshot = null) {
     const result = JSON.stringify({
       browser: this.browser,
       id: task.id,
       numPages: task.pdfDoc ? task.lastPage || task.pdfDoc.numPages : 0,
       lastPageNum: this._getLastPageNumber(task),
+      numberOfTasks: task.numberOfTasks ?? -1,
       failure,
       file: task.file,
       round: task.round,
-      page: task.pageNum,
+      page: task.pageMapping?.[task.pageNum] ?? task.pageNum,
       snapshot,
+      baselineSnapshot,
       stats: task.stats.times,
       viewportWidth: task.viewportWidth,
       viewportHeight: task.viewportHeight,
@@ -986,7 +1341,7 @@ class Driver {
   }
 
   _send(url, message) {
-    const capability = new PromiseCapability();
+    const { promise, resolve } = Promise.withResolvers();
     this.inflight.textContent = this.inFlightRequests++;
 
     fetch(url, {
@@ -1003,18 +1358,18 @@ class Driver {
         }
 
         this.inFlightRequests--;
-        capability.resolve();
+        resolve();
       })
       .catch(reason => {
-        console.warn(`Driver._send failed (${url}): ${reason}`);
+        console.warn(`Driver._send failed (${url}):`, reason);
 
         this.inFlightRequests--;
-        capability.resolve();
+        resolve();
 
         this._send(url, message);
       });
 
-    return capability.promise;
+    return promise;
   }
 }
 

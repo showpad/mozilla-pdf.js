@@ -17,20 +17,22 @@ import {
   AES128Cipher,
   AES256Cipher,
   ARCFourCipher,
-  calculateMD5,
-  calculateSHA256,
-  calculateSHA384,
-  calculateSHA512,
   CipherTransformFactory,
   PDF17,
   PDF20,
 } from "../../src/core/crypto.js";
+import {
+  calculateSHA384,
+  calculateSHA512,
+} from "../../src/core/calculate_sha_other.js";
 import { Dict, Name } from "../../src/core/primitives.js";
 import {
   PasswordException,
   PasswordResponses,
   stringToBytes,
 } from "../../src/shared/util.js";
+import { calculateMD5 } from "../../src/core/calculate_md5.js";
+import { calculateSHA256 } from "../../src/core/calculate_sha256.js";
 
 describe("crypto", function () {
   function hex2binary(s) {
@@ -563,7 +565,7 @@ describe("CipherTransformFactory", function () {
       // Shouldn't get here.
       expect(false).toEqual(true);
     } catch (ex) {
-      expect(ex instanceof PasswordException).toEqual(true);
+      expect(ex).toBeInstanceOf(PasswordException);
       expect(ex.code).toEqual(PasswordResponses.NEED_PASSWORD);
     }
   }
@@ -576,7 +578,7 @@ describe("CipherTransformFactory", function () {
       // Shouldn't get here.
       expect(false).toEqual(true);
     } catch (ex) {
-      expect(ex instanceof PasswordException).toEqual(true);
+      expect(ex).toBeInstanceOf(PasswordException);
       expect(ex.code).toEqual(PasswordResponses.INCORRECT_PASSWORD);
     }
   }

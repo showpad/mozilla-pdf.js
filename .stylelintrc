@@ -13,13 +13,10 @@
     "color-no-invalid-hex": true,
     "declaration-block-no-duplicate-properties": true,
     "declaration-block-no-redundant-longhand-properties": true,
-    "declaration-property-value-disallowed-list": {
-      "float": ["inline-start", "inline-end"]
-    },
     "length-zero-no-unit": [true, {
-      ignore: ["custom-properties"]
+      "ignore": ["custom-properties"]
     }],
     "selector-pseudo-element-colon-notation": "double",
-    "shorthand-property-no-redundant-values": true,
-  },
+    "shorthand-property-no-redundant-values": true
+  }
 }

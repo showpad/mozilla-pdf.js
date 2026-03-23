@@ -28,6 +28,7 @@ import {
   ISOAdobeCharset,
 } from "./charsets.js";
 import { ExpertEncoding, StandardEncoding } from "./encodings.js";
+import { readInt16 } from "./core_utils.js";
 
 // Maximum subroutine call depth of type 2 charstrings. Matches OTS.
 const MAX_SUBR_NESTING = 10;
@@ -118,8 +119,8 @@ const CharstringValidationData = [
   /*  7 */ { id: "vlineto", min: 1, resetStack: true },
   /*  8 */ { id: "rrcurveto", min: 6, resetStack: true },
   /*  9 */ null,
-  /* 10 */ { id: "callsubr", min: 1, undefStack: true },
-  /* 11 */ { id: "return", min: 0, undefStack: true },
+  /* 10 */ { id: "callsubr", min: 1 },
+  /* 11 */ { id: "return", min: 0 },
   /* 12 */ null,
   /* 13 */ null,
   /* 14 */ { id: "endchar", min: 0, stackClearing: true },
@@ -137,7 +138,7 @@ const CharstringValidationData = [
   /* 26 */ { id: "vvcurveto", min: 4, resetStack: true },
   /* 27 */ { id: "hhcurveto", min: 4, resetStack: true },
   /* 28 */ null, // shortint
-  /* 29 */ { id: "callgsubr", min: 1, undefStack: true },
+  /* 29 */ { id: "callgsubr", min: 1 },
   /* 30 */ { id: "vhcurveto", min: 4, resetStack: true },
   /* 31 */ { id: "hvcurveto", min: 4, resetStack: true },
 ];
@@ -254,6 +255,8 @@ class CFFParser {
     const charStringOffset = topDict.getByName("CharStrings");
     const charStringIndex = this.parseIndex(charStringOffset).obj;
 
+    cff.charStringCount = charStringIndex.count;
+
     const fontMatrix = topDict.getByName("FontMatrix");
     if (fontMatrix) {
       properties.fontMatrix = fontMatrix;
@@ -359,8 +362,8 @@ class CFFParser {
       if (value === 30) {
         return parseFloatOperand();
       } else if (value === 28) {
-        value = dict[pos++];
-        value = ((value << 24) | (dict[pos++] << 16)) >> 16;
+        value = readInt16(dict, pos);
+        pos += 2;
         return value;
       } else if (value === 29) {
         value = dict[pos++];
@@ -510,7 +513,7 @@ class CFFParser {
         }
       } else if (value === 28) {
         // number (16 bit)
-        stack[stackSize] = ((data[j] << 24) | (data[j + 1] << 16)) >> 16;
+        stack[stackSize] = readInt16(data, j);
         j += 2;
         stackSize++;
       } else if (value === 14) {
@@ -626,26 +629,24 @@ class CFFParser {
             data[j - 1] = value === 1 ? 3 : 23;
           }
         }
-        if ("min" in validationCommand) {
-          if (!state.undefStack && stackSize < validationCommand.min) {
-            warn(
-              "Not enough parameters for " +
-                validationCommand.id +
-                "; actual: " +
-                stackSize +
-                ", expected: " +
-                validationCommand.min
-            );
+        if (stackSize < validationCommand.min) {
+          warn(
+            "Not enough parameters for " +
+              validationCommand.id +
+              "; actual: " +
+              stackSize +
+              ", expected: " +
+              validationCommand.min
+          );
 
-            if (stackSize === 0) {
-              // Just "fix" the outline in replacing command by a endchar:
-              // it could lead to wrong rendering of some glyphs or not.
-              // For example, the pdf in #6132 is well-rendered.
-              data[j - 1] = 14;
-              return true;
-            }
-            return false;
+          if (stackSize === 0) {
+            // Just "fix" the outline in replacing command by a endchar:
+            // it could lead to wrong rendering of some glyphs or not.
+            // For example, the pdf in #6132 is well-rendered.
+            data[j - 1] = 14;
+            return true;
           }
+          return false;
         }
         if (state.firstStackClearing && validationCommand.stackClearing) {
           state.firstStackClearing = false;
@@ -669,15 +670,11 @@ class CFFParser {
             validationCommand.stackFn(stack, stackSize);
           }
           stackSize += validationCommand.stackDelta;
-        } else if (validationCommand.stackClearing) {
+        } else if (
+          validationCommand.stackClearing ||
+          validationCommand.resetStack
+        ) {
           stackSize = 0;
-        } else if (validationCommand.resetStack) {
-          stackSize = 0;
-          state.undefStack = false;
-        } else if (validationCommand.undefStack) {
-          stackSize = 0;
-          state.undefStack = true;
-          state.firstStackClearing = false;
         }
       }
     }
@@ -705,7 +702,6 @@ class CFFParser {
         callDepth: 0,
         stackSize: 0,
         stack: [],
-        undefStack: true,
         hints: 0,
         firstStackClearing: true,
         seac: null,
@@ -995,23 +991,31 @@ class CFFParser {
 
 // Compact Font Format
 class CFF {
-  constructor() {
-    this.header = null;
-    this.names = [];
-    this.topDict = null;
-    this.strings = new CFFStrings();
-    this.globalSubrIndex = null;
+  header = null;
 
-    // The following could really be per font, but since we only have one font
-    // store them here.
-    this.encoding = null;
-    this.charset = null;
-    this.charStrings = null;
-    this.fdArray = [];
-    this.fdSelect = null;
+  names = [];
 
-    this.isCIDFont = false;
-  }
+  topDict = null;
+
+  strings = new CFFStrings();
+
+  globalSubrIndex = null;
+
+  // The following could really be per font, but since we only have one font
+  // store them here.
+  encoding = null;
+
+  charset = null;
+
+  charStrings = null;
+
+  fdArray = [];
+
+  fdSelect = null;
+
+  isCIDFont = false;
+
+  charStringCount = 0;
 
   duplicateFirstGlyph() {
     // Browsers will not display a glyph at position 0. Typically glyph 0 is
@@ -1047,9 +1051,7 @@ class CFFHeader {
 }
 
 class CFFStrings {
-  constructor() {
-    this.strings = [];
-  }
+  strings = [];
 
   get(index) {
     if (index >= 0 && index <= NUM_STANDARD_CFF_STRINGS - 1) {
@@ -1083,10 +1085,9 @@ class CFFStrings {
 }
 
 class CFFIndex {
-  constructor() {
-    this.objects = [];
-    this.length = 0;
-  }
+  objects = [];
+
+  length = 0;
 
   add(data) {
     this.length += data.length;
@@ -1319,9 +1320,7 @@ class CFFFDSelect {
 // Helper class to keep track of where an offset is within the data and helps
 // filling in that offset once it's known.
 class CFFOffsetTracker {
-  constructor() {
-    this.offsets = Object.create(null);
-  }
+  offsets = Object.create(null);
 
   isTracking(key) {
     return key in this.offsets;
@@ -1768,12 +1767,16 @@ class CFFCompiler {
     if (isCIDFont) {
       // In a CID font, the charset is a mapping of CIDs not SIDs so just
       // create an identity mapping.
+      // nLeft: Glyphs left in range (excluding first) (see the CFF specs).
+      // The first CID must be 1 in order to avoid a print issue on mac (see
+      // https://bugzilla.mozilla.org/1961423).
+      const nLeft = numGlyphsLessNotDef - 1;
       out = new Uint8Array([
         2, // format
         0, // first CID upper byte
-        0, // first CID lower byte
-        (numGlyphsLessNotDef >> 8) & 0xff,
-        numGlyphsLessNotDef & 0xff,
+        1, // first CID lower byte
+        (nLeft >> 8) & 0xff,
+        nLeft & 0xff,
       ]);
     } else {
       const length = 1 + numGlyphsLessNotDef * 2;

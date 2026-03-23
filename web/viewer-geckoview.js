@@ -13,19 +13,11 @@
  * limitations under the License.
  */
 
-import "web-com";
-import "web-print_service";
-import { RenderingStates, ScrollMode, SpreadMode } from "./ui_utils.js";
+import { ScrollMode, SpreadMode } from "./ui_utils.js";
 import { AppOptions } from "./app_options.js";
 import { LinkTarget } from "./pdf_link_service.js";
 import { PDFViewerApplication } from "./app.js";
-
-/* eslint-disable-next-line no-unused-vars */
-const pdfjsVersion =
-  typeof PDFJSDev !== "undefined" ? PDFJSDev.eval("BUNDLE_VERSION") : void 0;
-/* eslint-disable-next-line no-unused-vars */
-const pdfjsBuild =
-  typeof PDFJSDev !== "undefined" ? PDFJSDev.eval("BUNDLE_BUILD") : void 0;
+import { RenderingStates } from "./renderable_view.js";
 
 const AppConstants =
   typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")
@@ -46,7 +38,6 @@ function getViewerConfiguration() {
       mainContainer,
       container: document.getElementById("floatingToolbar"),
       download: document.getElementById("download"),
-      openInApp: document.getElementById("openInApp"),
     },
 
     passwordOverlay: {
@@ -57,19 +48,12 @@ function getViewerConfiguration() {
       cancelButton: document.getElementById("passwordCancel"),
     },
     printContainer: document.getElementById("printContainer"),
-    openFileInput:
-      typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")
-        ? document.getElementById("fileInput")
-        : null,
   };
 }
 
 function webViewerLoad() {
   const config = getViewerConfiguration();
 
-  if (typeof PDFJSDev === "undefined") {
-    window.isGECKOVIEW = true;
-  }
   PDFViewerApplication.run(config);
 }
 

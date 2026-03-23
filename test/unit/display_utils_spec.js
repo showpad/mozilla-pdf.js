@@ -13,162 +13,18 @@
  * limitations under the License.
  */
 
-import { bytesToString, isNodeJS } from "../../src/shared/util.js";
 import {
-  DOMCanvasFactory,
-  DOMSVGFactory,
+  applyOpacity,
+  findContrastColor,
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
   isValidFetchUrl,
   PDFDateString,
+  renderRichText,
 } from "../../src/display/display_utils.js";
+import { isNodeJS } from "../../src/shared/util.js";
 
 describe("display_utils", function () {
-  describe("DOMCanvasFactory", function () {
-    let canvasFactory;
-
-    beforeAll(function () {
-      canvasFactory = new DOMCanvasFactory();
-    });
-
-    afterAll(function () {
-      canvasFactory = null;
-    });
-
-    it("`create` should throw an error if the dimensions are invalid", function () {
-      // Invalid width.
-      expect(function () {
-        return canvasFactory.create(-1, 1);
-      }).toThrow(new Error("Invalid canvas size"));
-
-      // Invalid height.
-      expect(function () {
-        return canvasFactory.create(1, -1);
-      }).toThrow(new Error("Invalid canvas size"));
-    });
-
-    it("`create` should return a canvas if the dimensions are valid", function () {
-      if (isNodeJS) {
-        pending("Document is not supported in Node.js.");
-      }
-
-      const { canvas, context } = canvasFactory.create(20, 40);
-      expect(canvas instanceof HTMLCanvasElement).toBe(true);
-      expect(context instanceof CanvasRenderingContext2D).toBe(true);
-      expect(canvas.width).toBe(20);
-      expect(canvas.height).toBe(40);
-    });
-
-    it("`reset` should throw an error if no canvas is provided", function () {
-      const canvasAndContext = { canvas: null, context: null };
-
-      expect(function () {
-        return canvasFactory.reset(canvasAndContext, 20, 40);
-      }).toThrow(new Error("Canvas is not specified"));
-    });
-
-    it("`reset` should throw an error if the dimensions are invalid", function () {
-      const canvasAndContext = { canvas: "foo", context: "bar" };
-
-      // Invalid width.
-      expect(function () {
-        return canvasFactory.reset(canvasAndContext, -1, 1);
-      }).toThrow(new Error("Invalid canvas size"));
-
-      // Invalid height.
-      expect(function () {
-        return canvasFactory.reset(canvasAndContext, 1, -1);
-      }).toThrow(new Error("Invalid canvas size"));
-    });
-
-    it("`reset` should alter the canvas/context if the dimensions are valid", function () {
-      if (isNodeJS) {
-        pending("Document is not supported in Node.js.");
-      }
-
-      const canvasAndContext = canvasFactory.create(20, 40);
-      canvasFactory.reset(canvasAndContext, 60, 80);
-
-      const { canvas, context } = canvasAndContext;
-      expect(canvas instanceof HTMLCanvasElement).toBe(true);
-      expect(context instanceof CanvasRenderingContext2D).toBe(true);
-      expect(canvas.width).toBe(60);
-      expect(canvas.height).toBe(80);
-    });
-
-    it("`destroy` should throw an error if no canvas is provided", function () {
-      expect(function () {
-        return canvasFactory.destroy({});
-      }).toThrow(new Error("Canvas is not specified"));
-    });
-
-    it("`destroy` should clear the canvas/context", function () {
-      if (isNodeJS) {
-        pending("Document is not supported in Node.js.");
-      }
-
-      const canvasAndContext = canvasFactory.create(20, 40);
-      canvasFactory.destroy(canvasAndContext);
-
-      const { canvas, context } = canvasAndContext;
-      expect(canvas).toBe(null);
-      expect(context).toBe(null);
-    });
-  });
-
-  describe("DOMSVGFactory", function () {
-    let svgFactory;
-
-    beforeAll(function () {
-      svgFactory = new DOMSVGFactory();
-    });
-
-    afterAll(function () {
-      svgFactory = null;
-    });
-
-    it("`create` should throw an error if the dimensions are invalid", function () {
-      // Invalid width.
-      expect(function () {
-        return svgFactory.create(-1, 0);
-      }).toThrow(new Error("Invalid SVG dimensions"));
-
-      // Invalid height.
-      expect(function () {
-        return svgFactory.create(0, -1);
-      }).toThrow(new Error("Invalid SVG dimensions"));
-    });
-
-    it("`create` should return an SVG element if the dimensions are valid", function () {
-      if (isNodeJS) {
-        pending("Document is not supported in Node.js.");
-      }
-
-      const svg = svgFactory.create(20, 40);
-      expect(svg instanceof SVGSVGElement).toBe(true);
-      expect(svg.getAttribute("version")).toBe("1.1");
-      expect(svg.getAttribute("width")).toBe("20px");
-      expect(svg.getAttribute("height")).toBe("40px");
-      expect(svg.getAttribute("preserveAspectRatio")).toBe("none");
-      expect(svg.getAttribute("viewBox")).toBe("0 0 20 40");
-    });
-
-    it("`createElement` should throw an error if the type is not a string", function () {
-      expect(function () {
-        return svgFactory.createElement(true);
-      }).toThrow(new Error("Invalid SVG element type"));
-    });
-
-    it("`createElement` should return an SVG element if the type is valid", function () {
-      if (isNodeJS) {
-        pending("Document is not supported in Node.js.");
-      }
-
-      const svg = svgFactory.createElement("svg:rect");
-      expect(svg instanceof SVGRectElement).toBe(true);
-    });
-  });
-
   describe("getFilenameFromUrl", function () {
     it("should get the filename from an absolute URL", function () {
       const url = "https://server.org/filename.pdf";
@@ -188,13 +44,6 @@ describe("display_utils", function () {
     it("should get the filename from a URL with query parameters", function () {
       const url = "https://server.org/filename.pdf?foo=bar";
       expect(getFilenameFromUrl(url)).toEqual("filename.pdf");
-    });
-
-    it("should get the filename from a relative URL, keeping the anchor", function () {
-      const url = "../../part1#part2.pdf";
-      expect(getFilenameFromUrl(url, /* onlyStripPath = */ true)).toEqual(
-        "part1#part2.pdf"
-      );
     });
   });
 
@@ -322,9 +171,6 @@ describe("display_utils", function () {
     });
 
     it('gets PDF filename from query string appended to "blob:" URL', function () {
-      if (isNodeJS) {
-        pending("Blob in not supported in Node.js.");
-      }
       const typedArray = new Uint8Array([1, 2, 3, 4, 5]);
       const blobUrl = URL.createObjectURL(
         new Blob([typedArray], { type: "application/pdf" })
@@ -336,11 +182,8 @@ describe("display_utils", function () {
     });
 
     it('gets fallback filename from query string appended to "data:" URL', function () {
-      const typedArray = new Uint8Array([1, 2, 3, 4, 5]),
-        str = bytesToString(typedArray);
-      const dataUrl = `data:application/pdf;base64,${btoa(str)}`;
-      // Sanity check to ensure that a "data:" URL was returned.
-      expect(dataUrl.startsWith("data:")).toEqual(true);
+      const typedArray = new Uint8Array([1, 2, 3, 4, 5]);
+      const dataUrl = `data:application/pdf;base64,${typedArray.toBase64()}`;
 
       expect(getPdfFilenameFromUrl(dataUrl + "?file1.pdf")).toEqual(
         "document.pdf"
@@ -350,6 +193,20 @@ describe("display_utils", function () {
       expect(getPdfFilenameFromUrl("     " + dataUrl + "?file2.pdf")).toEqual(
         "document.pdf"
       );
+    });
+
+    it("gets PDF filename with a hash sign", function () {
+      expect(getPdfFilenameFromUrl("/foo.html?file=foo%23.pdf")).toEqual(
+        "foo#.pdf"
+      );
+
+      expect(getPdfFilenameFromUrl("/foo.html?file=%23.pdf")).toEqual("#.pdf");
+
+      expect(getPdfFilenameFromUrl("/foo.html?foo%23.pdf")).toEqual("foo#.pdf");
+
+      expect(getPdfFilenameFromUrl("/foo%23.pdf?a=b#c")).toEqual("foo#.pdf");
+
+      expect(getPdfFilenameFromUrl("foo.html#%23.pdf")).toEqual("#.pdf");
     });
   });
 
@@ -439,7 +296,97 @@ describe("display_utils", function () {
             expect(result).toEqual(expectation);
           }
         }
+        const now = new Date();
+        expect(PDFDateString.toDateObject(now)).toEqual(now);
       });
+    });
+  });
+
+  describe("findContrastColor", function () {
+    it("Check that the lightness is changed correctly", function () {
+      expect(findContrastColor([210, 98, 76], [197, 113, 89])).toEqual(
+        "#260e09"
+      );
+    });
+  });
+
+  describe("applyOpacity", function () {
+    it("Check that the opacity is applied correctly", function () {
+      if (isNodeJS) {
+        pending("OffscreenCanvas is not supported in Node.js.");
+      }
+      const canvas = new OffscreenCanvas(1, 1);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, 1, 1);
+      ctx.fillStyle = "rgb(123, 45, 67)";
+      ctx.globalAlpha = 0.8;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      expect(applyOpacity(123, 45, 67, ctx.globalAlpha)).toEqual([r, g, b]);
+    });
+  });
+
+  describe("renderRichText", function () {
+    // Unlike other tests we cannot simply compare the HTML-strings since
+    // Chrome and Firefox produce different results. Instead we compare sets
+    // containing the individual parts of the HTML-strings.
+    const splitParts = s => new Set(s.split(/[<>/ ]+/).filter(x => x));
+
+    it("should render plain text", function () {
+      if (isNodeJS) {
+        pending("DOM is not supported in Node.js.");
+      }
+      const container = document.createElement("div");
+      renderRichText(
+        {
+          html: "Hello world!\nThis is a test.",
+          dir: "ltr",
+          className: "foo",
+        },
+        container
+      );
+      expect(splitParts(container.innerHTML)).toEqual(
+        splitParts(
+          '<p dir="ltr" class="richText foo">Hello world!<br>This is a test.</p>'
+        )
+      );
+    });
+
+    it("should render XFA rich text", function () {
+      if (isNodeJS) {
+        pending("DOM is not supported in Node.js.");
+      }
+      const container = document.createElement("div");
+      const xfaHtml = {
+        name: "div",
+        attributes: { style: { color: "red" } },
+        children: [
+          {
+            name: "p",
+            attributes: { style: { fontSize: "20px" } },
+            children: [
+              {
+                name: "span",
+                attributes: { style: { fontWeight: "bold" } },
+                value: "Hello",
+              },
+              { name: "#text", value: " world!" },
+            ],
+          },
+        ],
+      };
+      renderRichText(
+        { html: xfaHtml, dir: "ltr", className: "foo" },
+        container
+      );
+      expect(splitParts(container.innerHTML)).toEqual(
+        splitParts(
+          '<div style="color: red;" class="richText foo">' +
+            '<p style="font-size: 20px;">' +
+            '<span style="font-weight: bold;">Hello</span> world!</p></div>'
+        )
+      );
     });
   });
 });

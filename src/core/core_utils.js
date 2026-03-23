@@ -17,14 +17,38 @@ import {
   AnnotationEditorPrefix,
   assert,
   BaseException,
+  hexNumbers,
+  makeArr,
   objectSize,
   stringToPDFString,
+  Util,
   warn,
 } from "../shared/util.js";
 import { Dict, isName, Ref, RefSet } from "./primitives.js";
 import { BaseStream } from "./base_stream.js";
 
 const PDF_VERSION_REGEXP = /^[1-9]\.\d$/;
+const MAX_INT_32 = 2 ** 31 - 1;
+const MIN_INT_32 = -(2 ** 31);
+
+const IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
+
+const RESOURCES_KEYS_OPERATOR_LIST = [
+  "ColorSpace",
+  "ExtGState",
+  "Font",
+  "Pattern",
+  "Properties",
+  "Shading",
+  "XObject",
+];
+
+const RESOURCES_KEYS_TEXT_CONTENT = [
+  "ExtGState",
+  "Font",
+  "Properties",
+  "XObject",
+];
 
 function getLookupTableFactory(initializer) {
   let lookup;
@@ -99,6 +123,16 @@ function arrayBuffersToBytes(arr) {
   return data;
 }
 
+async function fetchBinaryData(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch file "${url}" with "${response.statusText}".`
+    );
+  }
+  return response.bytes();
+}
+
 /**
  * Get the value of an inheritable property.
  *
@@ -144,6 +178,68 @@ function getInheritableProperty({
   return values;
 }
 
+/**
+ * Get the parent dictionary to update when a property is set.
+ *
+ * @param {Dict} dict - Dictionary from where to start the traversal.
+ * @param {Ref} ref - The reference to the dictionary.
+ * @param {XRef} xref - The `XRef` instance.
+ */
+function getParentToUpdate(dict, ref, xref) {
+  const visited = new RefSet();
+  const firstDict = dict;
+  const result = { dict: null, ref: null };
+
+  while (dict instanceof Dict && !visited.has(ref)) {
+    visited.put(ref);
+    if (dict.has("T")) {
+      break;
+    }
+    ref = dict.getRaw("Parent");
+    if (!(ref instanceof Ref)) {
+      return result;
+    }
+    dict = xref.fetch(ref);
+  }
+  if (dict instanceof Dict && dict !== firstDict) {
+    result.dict = dict;
+    result.ref = ref;
+  }
+  return result;
+}
+
+function deepCompare(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (a instanceof Dict && b instanceof Dict) {
+    if (a.size !== b.size) {
+      return false;
+    }
+    for (const [key, value1] of a.getRawEntries()) {
+      const value2 = b.getRaw(key);
+      if (value2 === undefined || !deepCompare(value1, value2)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0, ii = a.length; i < ii; i++) {
+      if (!deepCompare(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
 // prettier-ignore
 const ROMAN_NUMBER_MAP = [
   "", "C", "CC", "CCC", "CD", "D", "DC", "DCC", "DCCC", "CM",
@@ -163,40 +259,28 @@ function toRomanNumerals(number, lowerCase = false) {
     Number.isInteger(number) && number > 0,
     "The number should be a positive integer."
   );
-  const romanBuf = [];
-  let pos;
-  // Thousands
-  while (number >= 1000) {
-    number -= 1000;
-    romanBuf.push("M");
-  }
-  // Hundreds
-  pos = (number / 100) | 0;
-  number %= 100;
-  romanBuf.push(ROMAN_NUMBER_MAP[pos]);
-  // Tens
-  pos = (number / 10) | 0;
-  number %= 10;
-  romanBuf.push(ROMAN_NUMBER_MAP[10 + pos]);
-  // Ones
-  romanBuf.push(ROMAN_NUMBER_MAP[20 + number]); // eslint-disable-line unicorn/no-array-push-push
 
-  const romanStr = romanBuf.join("");
-  return lowerCase ? romanStr.toLowerCase() : romanStr;
+  const roman =
+    "M".repeat((number / 1000) | 0) +
+    ROMAN_NUMBER_MAP[((number % 1000) / 100) | 0] +
+    ROMAN_NUMBER_MAP[10 + (((number % 100) / 10) | 0)] +
+    ROMAN_NUMBER_MAP[20 + (number % 10)];
+  return lowerCase ? roman.toLowerCase() : roman;
 }
 
 // Calculate the base 2 logarithm of the number `x`. This differs from the
 // native function in the sense that it returns the ceiling value and that it
 // returns 0 instead of `Infinity`/`NaN` for `x` values smaller than/equal to 0.
 function log2(x) {
-  if (x <= 0) {
-    return 0;
-  }
-  return Math.ceil(Math.log2(x));
+  return x > 0 ? Math.ceil(Math.log2(x)) : 0;
 }
 
 function readInt8(data, offset) {
   return (data[offset] << 24) >> 24;
+}
+
+function readInt16(data, offset) {
+  return ((data[offset] << 24) | (data[offset + 1] << 16)) >> 16;
 }
 
 function readUint16(data, offset) {
@@ -216,6 +300,60 @@ function readUint32(data, offset) {
 // Checks if ch is one of the following characters: SPACE, TAB, CR or LF.
 function isWhiteSpace(ch) {
   return ch === 0x20 || ch === 0x09 || ch === 0x0d || ch === 0x0a;
+}
+
+/**
+ * Checks if something is an Array containing only boolean values,
+ * and (optionally) checks its length.
+ * @param {any} arr
+ * @param {number | null} len
+ * @returns {boolean}
+ */
+function isBooleanArray(arr, len) {
+  return (
+    Array.isArray(arr) &&
+    (len === null || arr.length === len) &&
+    arr.every(x => typeof x === "boolean")
+  );
+}
+
+/**
+ * Checks if something is an Array containing only numbers,
+ * and (optionally) checks its length.
+ * @param {any} arr
+ * @param {number | null} len
+ * @returns {boolean}
+ */
+function isNumberArray(arr, len) {
+  if (Array.isArray(arr)) {
+    return (
+      (len === null || arr.length === len) &&
+      arr.every(x => typeof x === "number")
+    );
+  }
+
+  // This check allows us to have typed arrays but not the
+  // BigInt64Array/BigUint64Array types (their elements aren't "number").
+  return (
+    ArrayBuffer.isView(arr) &&
+    !(arr instanceof BigInt64Array || arr instanceof BigUint64Array) &&
+    (len === null || arr.length === len)
+  );
+}
+
+// Returns the matrix, or the fallback value if it's invalid.
+function lookupMatrix(arr, fallback) {
+  return isNumberArray(arr, 6) ? arr : fallback;
+}
+
+// Returns the rectangle, or the fallback value if it's invalid.
+function lookupRect(arr, fallback) {
+  return isNumberArray(arr, 4) ? arr : fallback;
+}
+
+// Returns the normalized rectangle, or the fallback value if it's invalid.
+function lookupNormalRect(arr, fallback) {
+  return isNumberArray(arr, 4) ? Util.normalizeRect(arr) : fallback;
 }
 
 /**
@@ -319,9 +457,12 @@ function _collectJS(entry, xref, list, parents) {
       } else if (typeof js === "string") {
         code = js;
       }
-      code &&= stringToPDFString(code).replaceAll("\x00", "");
+      code &&= stringToPDFString(
+        code,
+        /* keepEscapeSequence = */ true
+      ).replaceAll("\x00", "");
       if (code) {
-        list.push(code);
+        list.push(code.trim());
       }
     }
     _collectJS(entry.getRaw("Next"), xref, list, parents);
@@ -350,15 +491,14 @@ function collectActions(xref, dict, eventType) {
       if (!(additionalActions instanceof Dict)) {
         continue;
       }
-      for (const key of additionalActions.getKeys()) {
+      for (const [key, rawActionDict] of additionalActions.getRawEntries()) {
         const action = eventType[key];
         if (!action) {
           continue;
         }
-        const actionDict = additionalActions.getRaw(key);
         const parents = new RefSet();
         const list = [];
-        _collectJS(actionDict, xref, list, parents);
+        _collectJS(rawActionDict, xref, list, parents);
         if (list.length > 0) {
           actions[action] = list;
         }
@@ -385,6 +525,17 @@ const XMLEntities = {
   /* " */ 0x22: "&quot;",
   /* ' */ 0x27: "&apos;",
 };
+
+function* codePointIter(str) {
+  for (let i = 0, ii = str.length; i < ii; i++) {
+    const char = str.codePointAt(i);
+    if (char > 0xd7ff && (char < 0xe000 || char > 0xfffd)) {
+      // char is represented by two u16
+      i++;
+    }
+    yield char;
+  }
+}
 
 function encodeToXmlString(str) {
   const buffer = [];
@@ -506,19 +657,23 @@ function recoverJsURL(str) {
 
   const jsUrl = regex.exec(str);
   if (jsUrl?.[2]) {
-    const url = jsUrl[2];
-    let newWindow = false;
-
-    if (jsUrl[3] === "true" && jsUrl[1] === "app.launchURL") {
-      newWindow = true;
-    }
-    return { url, newWindow };
+    return {
+      url: jsUrl[2],
+      newWindow: jsUrl[1] === "app.launchURL" && jsUrl[3] === "true",
+    };
   }
 
   return null;
 }
 
 function numberToString(value) {
+  if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+    assert(
+      typeof value === "number",
+      `numberToString - the value (${value}) should be a number.`
+    );
+  }
+
   if (Number.isInteger(value)) {
     return value.toString();
   }
@@ -546,28 +701,33 @@ function getNewAnnotationsMap(annotationStorage) {
     if (!key.startsWith(AnnotationEditorPrefix)) {
       continue;
     }
-    let annotations = newAnnotationsByPage.get(value.pageIndex);
-    if (!annotations) {
-      annotations = [];
-      newAnnotationsByPage.set(value.pageIndex, annotations);
-    }
-    annotations.push(value);
+    newAnnotationsByPage
+      .getOrInsertComputed(value.pageIndex, makeArr)
+      .push(value);
   }
   return newAnnotationsByPage.size > 0 ? newAnnotationsByPage : null;
 }
 
+// If the string is null or undefined then it is returned as is.
+function stringToAsciiOrUTF16BE(str) {
+  if (str === null || str === undefined) {
+    return str;
+  }
+  return isAscii(str) ? str : stringToUTF16String(str, /* bigEndian = */ true);
+}
+
 function isAscii(str) {
-  return /^[\x00-\x7F]*$/.test(str);
+  if (typeof str !== "string") {
+    return false;
+  }
+  return !str || /^[\x00-\x7F]*$/.test(str);
 }
 
 function stringToUTF16HexString(str) {
   const buf = [];
   for (let i = 0, ii = str.length; i < ii; i++) {
     const char = str.charCodeAt(i);
-    buf.push(
-      ((char >> 8) & 0xff).toString(16).padStart(2, "0"),
-      (char & 0xff).toString(16).padStart(2, "0")
-    );
+    buf.push(hexNumbers[(char >> 8) & 0xff], hexNumbers[char & 0xff]);
   }
   return buf.join("");
 }
@@ -600,28 +760,58 @@ function getRotationMatrix(rotation, width, height) {
   }
 }
 
+/**
+ * Get the number of bytes to use to represent the given positive integer.
+ * If n is zero, the function returns 0 which means that we don't need to waste
+ * a byte to represent it.
+ * @param {number} x - a positive integer.
+ * @returns {number}
+ */
+function getSizeInBytes(x) {
+  // n bits are required for numbers up to 2^n - 1.
+  // So for a number x, we need ceil(log2(1 + x)) bits.
+  return Math.ceil(Math.ceil(Math.log2(1 + x)) / 8);
+}
+
 export {
   arrayBuffersToBytes,
+  codePointIter,
   collectActions,
+  deepCompare,
   encodeToXmlString,
   escapePDFName,
   escapeString,
+  fetchBinaryData,
   getInheritableProperty,
   getLookupTableFactory,
   getNewAnnotationsMap,
+  getParentToUpdate,
   getRotationMatrix,
+  getSizeInBytes,
+  IDENTITY_MATRIX,
   isAscii,
+  isBooleanArray,
+  isNumberArray,
   isWhiteSpace,
   log2,
+  lookupMatrix,
+  lookupNormalRect,
+  lookupRect,
+  MAX_INT_32,
+  MIN_INT_32,
   MissingDataException,
   numberToString,
   ParserEOFException,
   parseXFAPath,
   PDF_VERSION_REGEXP,
+  readInt16,
   readInt8,
   readUint16,
   readUint32,
   recoverJsURL,
+  RESOURCES_KEYS_OPERATOR_LIST,
+  RESOURCES_KEYS_TEXT_CONTENT,
+  stringToAsciiOrUTF16BE,
   stringToUTF16HexString,
   stringToUTF16String,
   toRomanNumerals,

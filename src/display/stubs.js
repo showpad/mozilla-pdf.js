@@ -13,19 +13,19 @@
  * limitations under the License.
  */
 
+const DOMBinaryDataFactory = null;
+const NodeBinaryDataFactory = null;
 const NodeCanvasFactory = null;
-const NodeCMapReaderFactory = null;
 const NodeFilterFactory = null;
-const NodeStandardFontDataFactory = null;
 const PDFFetchStream = null;
 const PDFNetworkStream = null;
 const PDFNodeStream = null;
 
 export {
+  DOMBinaryDataFactory,
+  NodeBinaryDataFactory,
   NodeCanvasFactory,
-  NodeCMapReaderFactory,
   NodeFilterFactory,
-  NodeStandardFontDataFactory,
   PDFFetchStream,
   PDFNetworkStream,
   PDFNodeStream,

@@ -15,10 +15,12 @@
 
 import {
   arrayBuffersToBytes,
+  deepCompare,
   encodeToXmlString,
   escapePDFName,
   escapeString,
   getInheritableProperty,
+  getSizeInBytes,
   isAscii,
   isWhiteSpace,
   log2,
@@ -430,6 +432,10 @@ describe("core_utils", function () {
       expect(isAscii("hello world in Japanese is こんにちは世界の")).toEqual(
         false
       );
+      expect(isAscii("")).toEqual(true);
+      expect(isAscii(123)).toEqual(false);
+      expect(isAscii(null)).toEqual(false);
+      expect(isAscii(undefined)).toEqual(false);
     });
   });
 
@@ -466,6 +472,120 @@ describe("core_utils", function () {
       ).toEqual(
         "\xfe\xff\x30\x53\x30\x93\x30\x6b\x30\x61\x30\x6f\x4e\x16\x75\x4c\x30\x6e"
       );
+    });
+  });
+
+  describe("deepCompare", function () {
+    it("should return true for the same reference", function () {
+      const dict = new Dict();
+      expect(deepCompare(dict, dict)).toBeTrue();
+      const arr = [1, 2, 3];
+      expect(deepCompare(arr, arr)).toBeTrue();
+    });
+
+    it("should return true for identical primitive values", function () {
+      expect(deepCompare(1, 1)).toBeTrue();
+      expect(deepCompare("hello", "hello")).toBeTrue();
+      expect(deepCompare(null, null)).toBeTrue();
+    });
+
+    it("should return false for different primitive values", function () {
+      expect(deepCompare(1, 2)).toBeFalse();
+      expect(deepCompare("hello", "world")).toBeFalse();
+    });
+
+    it("should return true for two equal empty Dicts", function () {
+      expect(deepCompare(new Dict(), new Dict())).toBeTrue();
+    });
+
+    it("should return false for Dicts with different sizes", function () {
+      const a = new Dict();
+      a.set("key", 1);
+      expect(deepCompare(a, new Dict())).toBeFalse();
+    });
+
+    it("should return true for Dicts with same Ref values", function () {
+      const ref = Ref.get(10, 0);
+      const a = new Dict();
+      a.set("Foo", ref);
+      const b = new Dict();
+      b.set("Foo", ref);
+      expect(deepCompare(a, b)).toBeTrue();
+    });
+
+    it("should return false for Dicts with different Ref values", function () {
+      const a = new Dict();
+      a.set("Foo", Ref.get(10, 0));
+      const b = new Dict();
+      b.set("Foo", Ref.get(20, 0));
+      expect(deepCompare(a, b)).toBeFalse();
+    });
+
+    it("should return false for Dicts with different numeric values", function () {
+      const a = new Dict();
+      a.set("Foo", 1);
+      const b = new Dict();
+      b.set("Foo", 2);
+      expect(deepCompare(a, b)).toBeFalse();
+    });
+
+    it("should return true for equal nested Dicts", function () {
+      const inner1 = new Dict();
+      inner1.set("Bar", Ref.get(5, 0));
+      const outer1 = new Dict();
+      outer1.set("Foo", inner1);
+
+      const inner2 = new Dict();
+      inner2.set("Bar", Ref.get(5, 0));
+      const outer2 = new Dict();
+      outer2.set("Foo", inner2);
+
+      expect(deepCompare(outer1, outer2)).toBeTrue();
+    });
+
+    it("should return false for Dicts with the same key but different nested Dicts", function () {
+      const inner1 = new Dict();
+      inner1.set("Bar", Ref.get(5, 0));
+      const outer1 = new Dict();
+      outer1.set("Foo", inner1);
+
+      const inner2 = new Dict();
+      inner2.set("Bar", Ref.get(99, 0));
+      const outer2 = new Dict();
+      outer2.set("Foo", inner2);
+
+      expect(deepCompare(outer1, outer2)).toBeFalse();
+    });
+
+    it("should return true for equal arrays", function () {
+      const ref = Ref.get(1, 0);
+      expect(deepCompare([ref, ref], [ref, ref])).toBeTrue();
+    });
+
+    it("should return false for arrays with different lengths", function () {
+      const ref = Ref.get(1, 0);
+      expect(deepCompare([ref, ref], [ref])).toBeFalse();
+    });
+
+    it("should return false for arrays with different values", function () {
+      expect(deepCompare([Ref.get(1, 0)], [Ref.get(2, 0)])).toBeFalse();
+    });
+  });
+
+  describe("getSizeInBytes", function () {
+    it("should get the size in bytes to use to represent a positive integer", function () {
+      expect(getSizeInBytes(0)).toEqual(0);
+      for (let i = 1; i <= 0xff; i++) {
+        expect(getSizeInBytes(i)).toEqual(1);
+      }
+
+      for (let i = 0x100; i <= 0xffff; i += 0x100) {
+        expect(getSizeInBytes(i)).toEqual(2);
+      }
+
+      for (let i = 0x10000; i <= 0xffffff; i += 0x10000) {
+        expect(getSizeInBytes(i)).toEqual(3);
+      }
     });
   });
 });

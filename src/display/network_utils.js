@@ -13,16 +13,32 @@
  * limitations under the License.
  */
 
-import {
-  assert,
-  MissingPDFException,
-  UnexpectedResponseException,
-} from "../shared/util.js";
+import { assert, ResponseException } from "../shared/util.js";
 import { getFilenameFromContentDispositionHeader } from "./content_disposition.js";
 import { isPdfFile } from "./display_utils.js";
 
+function createHeaders(isHttp, httpHeaders) {
+  const headers = new Headers();
+
+  if (!isHttp || !httpHeaders || typeof httpHeaders !== "object") {
+    return headers;
+  }
+  for (const key in httpHeaders) {
+    const val = httpHeaders[key];
+    if (val !== undefined) {
+      headers.append(key, val);
+    }
+  }
+  return headers;
+}
+
+function getResponseOrigin(url) {
+  // Notably, null is distinct from "null" string (e.g. from file:-URLs).
+  return URL.parse(url)?.origin ?? null;
+}
+
 function validateRangeRequestCapabilities({
-  getResponseHeader,
+  responseHeaders,
   isHttp,
   rangeChunkSize,
   disableRange,
@@ -33,42 +49,38 @@ function validateRangeRequestCapabilities({
       "rangeChunkSize must be an integer larger than zero."
     );
   }
-  const returnValues = {
-    allowRangeRequests: false,
-    suggestedLength: undefined,
+  const rv = {
+    contentLength: 0,
+    isRangeSupported: false,
   };
 
-  const length = parseInt(getResponseHeader("Content-Length"), 10);
+  const length = parseInt(responseHeaders.get("Content-Length"), 10);
   if (!Number.isInteger(length)) {
-    return returnValues;
+    return rv;
   }
-
-  returnValues.suggestedLength = length;
+  rv.contentLength = length;
 
   if (length <= 2 * rangeChunkSize) {
     // The file size is smaller than the size of two chunks, so it does not
     // make any sense to abort the request and retry with a range request.
-    return returnValues;
+    return rv;
   }
-
   if (disableRange || !isHttp) {
-    return returnValues;
+    return rv;
   }
-  if (getResponseHeader("Accept-Ranges") !== "bytes") {
-    return returnValues;
-  }
-
-  const contentEncoding = getResponseHeader("Content-Encoding") || "identity";
-  if (contentEncoding !== "identity") {
-    return returnValues;
+  if (responseHeaders.get("Accept-Ranges") !== "bytes") {
+    return rv;
   }
 
-  returnValues.allowRangeRequests = true;
-  return returnValues;
+  const contentEncoding = responseHeaders.get("Content-Encoding") || "identity";
+  if (contentEncoding === "identity") {
+    rv.isRangeSupported = true;
+  }
+  return rv;
 }
 
-function extractFilenameFromHeader(getResponseHeader) {
-  const contentDisposition = getResponseHeader("Content-Disposition");
+function extractFilenameFromHeader(responseHeaders) {
+  const contentDisposition = responseHeaders.get("Content-Disposition");
   if (contentDisposition) {
     let filename = getFilenameFromContentDispositionHeader(contentDisposition);
     if (filename.includes("%")) {
@@ -83,23 +95,27 @@ function extractFilenameFromHeader(getResponseHeader) {
   return null;
 }
 
-function createResponseStatusError(status, url) {
-  if (status === 404 || (status === 0 && url.startsWith("file:"))) {
-    return new MissingPDFException('Missing PDF "' + url + '".');
-  }
-  return new UnexpectedResponseException(
-    `Unexpected server response (${status}) while retrieving PDF "${url}".`,
-    status
+function createResponseError(status, url) {
+  return new ResponseException(
+    `Unexpected server response (${status}) while retrieving PDF "${url.href}".`,
+    status,
+    /* missing = */ status === 404 || (status === 0 && url.protocol === "file:")
   );
 }
 
-function validateResponseStatus(status) {
-  return status === 200 || status === 206;
+function ensureResponseOrigin(rangeOrigin, origin) {
+  if (rangeOrigin !== origin) {
+    throw new Error(
+      `Expected range response-origin "${rangeOrigin}" to match "${origin}".`
+    );
+  }
 }
 
 export {
-  createResponseStatusError,
+  createHeaders,
+  createResponseError,
+  ensureResponseOrigin,
   extractFilenameFromHeader,
+  getResponseOrigin,
   validateRangeRequestCapabilities,
-  validateResponseStatus,
 };

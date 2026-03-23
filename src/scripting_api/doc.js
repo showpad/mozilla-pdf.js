@@ -13,10 +13,10 @@
  * limitations under the License.
  */
 
+import { makeArr, makeMap, serializeError } from "./app_utils.js";
 import { createActionsMap } from "./common.js";
 import { PDFObject } from "./pdf_object.js";
 import { PrintParams } from "./print_params.js";
-import { serializeError } from "./app_utils.js";
 import { ZoomType } from "./constants.js";
 
 const DOC_EXTERNAL = false;
@@ -32,6 +32,10 @@ class InfoProxyHandler {
 }
 
 class Doc extends PDFObject {
+  #pageActions = null;
+
+  #otherPageActions = null;
+
   constructor(data) {
     super(data);
 
@@ -96,13 +100,26 @@ class Doc extends PDFObject {
     this._zoom = data.zoom || 100;
     this._actions = createActionsMap(data.actions);
     this._globalEval = data.globalEval;
-    this._pageActions = new Map();
     this._userActivation = false;
     this._disablePrinting = false;
     this._disableSaving = false;
   }
 
   _initActions() {
+    for (const { obj } of this._fields.values()) {
+      // Some fields may have compute their values so we need to send them
+      // to the view.
+      const initialValue = obj._initialValue;
+      if (initialValue) {
+        this._send({
+          id: obj._id,
+          siblings: obj._siblings,
+          value: initialValue,
+          formattedValue: obj.value.toString(),
+        });
+      }
+    }
+
     const dontRun = new Set([
       "WillClose",
       "WillSave",
@@ -155,25 +172,35 @@ class Doc extends PDFObject {
 
   _dispatchPageEvent(name, actions, pageNumber) {
     if (name === "PageOpen") {
-      if (!this._pageActions.has(pageNumber)) {
-        this._pageActions.set(pageNumber, createActionsMap(actions));
+      this.#pageActions ??= new Map();
+      if (!this.#pageActions.has(pageNumber)) {
+        this.#pageActions.set(pageNumber, createActionsMap(actions));
       }
       this._pageNum = pageNumber - 1;
     }
 
-    actions = this._pageActions.get(pageNumber)?.get(name);
-    if (actions) {
-      for (const action of actions) {
-        this._globalEval(action);
+    for (const acts of [this.#pageActions, this.#otherPageActions]) {
+      actions = acts?.get(pageNumber)?.get(name);
+      if (actions) {
+        for (const action of actions) {
+          this._globalEval(action);
+        }
       }
     }
   }
 
   _runActions(name) {
     const actions = this._actions.get(name);
-    if (actions) {
-      for (const action of actions) {
+    if (!actions) {
+      return;
+    }
+    for (const action of actions) {
+      try {
         this._globalEval(action);
+      } catch (error) {
+        const serializedError = serializeError(error);
+        serializedError.value = `Error when executing "${name}" for document\n${serializedError.value}`;
+        this._send(serializedError);
       }
     }
   }
@@ -182,6 +209,23 @@ class Doc extends PDFObject {
     this._fields.set(name, field);
     this._fieldNames.push(name);
     this._numFields++;
+
+    // Fields on a page can have PageOpen/PageClose actions.
+    const po = field.obj._actions.get("PageOpen");
+    const pc = field.obj._actions.get("PageClose");
+    if (po || pc) {
+      this.#otherPageActions ??= new Map();
+      const actions = this.#otherPageActions.getOrInsertComputed(
+        field.obj._page + 1,
+        makeMap
+      );
+      if (po) {
+        actions.getOrInsertComputed("PageOpen", makeArr).push(...po);
+      }
+      if (pc) {
+        actions.getOrInsertComputed("PageClose", makeArr).push(...pc);
+      }
+    }
   }
 
   _getDate(date) {
@@ -898,7 +942,7 @@ class Doc extends PDFObject {
       cName = parts[0];
     }
 
-    for (const [name, field] of this._fields.entries()) {
+    for (const [name, field] of this._fields) {
       if (name.endsWith(cName)) {
         if (!isNaN(childIndex)) {
           const children = this._getChildren(name);
@@ -932,7 +976,7 @@ class Doc extends PDFObject {
     const len = fieldName.length;
     const children = [];
     const pattern = /^\.[^.]+$/;
-    for (const [name, field] of this._fields.entries()) {
+    for (const [name, field] of this._fields) {
       if (name.startsWith(fieldName)) {
         const finalPart = name.slice(len);
         if (pattern.test(finalPart)) {
@@ -947,7 +991,7 @@ class Doc extends PDFObject {
     // Get all the descendants which have a value.
     const children = [];
     const len = fieldName.length;
-    for (const [name, field] of this._fields.entries()) {
+    for (const [name, field] of this._fields) {
       if (name.startsWith(fieldName)) {
         const finalPart = name.slice(len);
         if (

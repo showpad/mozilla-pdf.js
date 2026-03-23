@@ -1,5 +1,4 @@
-/*
- * Copyright 2014 Mozilla Foundation
+/* Copyright 2014 Mozilla Foundation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,188 +14,101 @@
  */
 /* eslint-disable no-var */
 
-import { copySubtreeSync, ensureDirSync, removeDirSync } from "./testutils.mjs";
+import { copySubtreeSync, ensureDirSync } from "./testutils.mjs";
 import {
   downloadManifestFiles,
   verifyManifestFiles,
 } from "./downloadutils.mjs";
-import dns from "dns";
 import fs from "fs";
+import istanbulCoverage from "istanbul-lib-coverage";
+import istanbulReportGenerator from "istanbul-reports";
+import libReport from "istanbul-lib-report";
 import os from "os";
+import { parseArgs } from "node:util";
 import path from "path";
 import puppeteer from "puppeteer";
 import readline from "readline";
-import rimraf from "rimraf";
 import { translateFont } from "./font/ttxdriver.mjs";
-import url from "url";
 import { WebServer } from "./webserver.mjs";
-import yargs from "yargs";
 
-const rimrafSync = rimraf.sync;
-
-// Chrome uses host `127.0.0.1` in the browser's websocket endpoint URL while
-// Firefox uses `localhost`, which before Node.js 17 also resolved to the IPv4
-// address `127.0.0.1` by Node.js' DNS resolver. However, this behavior changed
-// in Node.js 17 where the default is to prefer an IPv6 address if one is
-// offered (which varies based on the OS and/or how the `localhost` hostname
-// resolution is configured), so it can now also resolve to `::1`. This causes
-// Firefox to not start anymore since it doesn't bind on the `::1` interface.
-// To avoid this, we switch Node.js' DNS resolver back to preferring IPv4
-// since we connect to a local browser anyway. Only do this for Node.js versions
-// that actually have this API since it got introduced in Node.js 14.18.0 and
-// it's not relevant for older versions anyway.
-if (dns.setDefaultResultOrder !== undefined) {
-  dns.setDefaultResultOrder("ipv4first");
-}
+const __dirname = import.meta.dirname;
 
 function parseOptions() {
-  const parsedArgs = yargs(process.argv)
-    .usage("Usage: $0")
-    .option("downloadOnly", {
-      default: false,
-      describe: "Download test PDFs without running the tests.",
-      type: "boolean",
-    })
-    .option("fontTest", {
-      default: false,
-      describe: "Run the font tests.",
-      type: "boolean",
-    })
-    .option("help", {
-      alias: "h",
-      default: false,
-      describe: "Show this help message.",
-      type: "boolean",
-    })
-    .option("integration", {
-      default: false,
-      describe: "Run the integration tests.",
-      type: "boolean",
-    })
-    .option("manifestFile", {
-      default: "test_manifest.json",
-      describe: "A path to JSON file in the form of `test_manifest.json`.",
-      type: "string",
-    })
-    .option("masterMode", {
-      alias: "m",
-      default: false,
-      describe: "Run the script in master mode.",
-      type: "boolean",
-    })
-    .option("noChrome", {
-      default: false,
-      describe: "Skip Chrome when running tests.",
-      type: "boolean",
-    })
-    .option("noDownload", {
-      default: false,
-      describe: "Skip downloading of test PDFs.",
-      type: "boolean",
-    })
-    .option("noPrompts", {
-      default: false,
-      describe: "Uses default answers (intended for CLOUD TESTS only!).",
-      type: "boolean",
-    })
-    .option("port", {
-      default: 0,
-      describe: "The port the HTTP server should listen on.",
-      type: "number",
-    })
-    .option("reftest", {
-      default: false,
-      describe:
-        "Automatically start reftest showing comparison test failures, if there are any.",
-      type: "boolean",
-    })
-    .option("statsDelay", {
-      default: 0,
-      describe:
-        "The amount of time in milliseconds the browser should wait before starting stats.",
-      type: "number",
-    })
-    .option("statsFile", {
-      default: "",
-      describe: "The file where to store stats.",
-      type: "string",
-    })
-    .option("strictVerify", {
-      default: false,
-      describe: "Error if verifying the manifest files fails.",
-      type: "boolean",
-    })
-    .option("testfilter", {
-      alias: "t",
-      default: [],
-      describe: "Run specific reftest(s).",
-      type: "array",
-    })
-    .example(
-      "testfilter",
-      "$0 -t=issue5567 -t=issue5909\n" +
-        "Run the reftest identified by issue5567 and issue5909."
-    )
-    .option("unitTest", {
-      default: false,
-      describe: "Run the unit tests.",
-      type: "boolean",
-    })
-    .option("xfaOnly", {
-      default: false,
-      describe: "Only run the XFA reftest(s).",
-      type: "boolean",
-    })
-    .check(argv => {
-      if (
-        +argv.reftest + argv.unitTest + argv.fontTest + argv.masterMode <=
-        1
-      ) {
-        return true;
-      }
-      throw new Error(
-        "--reftest, --unitTest, --fontTest, and --masterMode must not be specified together."
-      );
-    })
-    .check(argv => {
-      if (
-        +argv.unitTest + argv.fontTest + argv.integration + argv.xfaOnly <=
-        1
-      ) {
-        return true;
-      }
-      throw new Error(
-        "--unitTest, --fontTest, --integration, and --xfaOnly must not be specified together."
-      );
-    })
-    .check(argv => {
-      if (argv.testfilter && argv.testfilter.length > 0 && argv.xfaOnly) {
-        throw new Error("--testfilter and --xfaOnly cannot be used together.");
-      }
-      return true;
-    })
-    .check(argv => {
-      if (!argv.noDownload || !argv.downloadOnly) {
-        return true;
-      }
-      throw new Error(
-        "--noDownload and --downloadOnly cannot be used together."
-      );
-    })
-    .check(argv => {
-      if (!argv.masterMode || argv.manifestFile === "test_manifest.json") {
-        return true;
-      }
-      throw new Error(
-        "when --masterMode is specified --manifestFile shall be equal to `test_manifest.json`."
-      );
-    });
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      coverage: { type: "boolean", default: false },
+      coverageOutput: { type: "string", default: "build/coverage" },
+      downloadOnly: { type: "boolean", default: false },
+      fontTest: { type: "boolean", default: false },
+      headless: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+      integration: { type: "boolean", default: false },
+      manifestFile: { type: "string", default: "test_manifest.json" },
+      masterMode: { type: "boolean", short: "m", default: false },
+      noChrome: { type: "boolean", default: false },
+      noDownload: { type: "boolean", default: false },
+      noFirefox: { type: "boolean", default: false },
+      noPrompts: { type: "boolean", default: false },
+      port: { type: "string", default: "0" },
+      reftest: { type: "boolean", default: false },
+      statsDelay: { type: "string", default: "0" },
+      statsFile: { type: "string", default: "" },
+      strictVerify: { type: "boolean", default: false },
+      testfilter: { type: "string", short: "t", multiple: true, default: [] },
+      unitTest: { type: "boolean", default: false },
+    },
+  });
 
-  const result = parsedArgs.argv;
-  result.testfilter = Array.isArray(result.testfilter)
-    ? result.testfilter
-    : [result.testfilter];
-  return result;
+  if (values.help) {
+    console.log(
+      "Usage: test.mjs\n\n" +
+        "  --coverage          Enable code coverage collection.\n" +
+        "  --coverageOutput    Directory for code coverage data. [build/coverage]\n" +
+        "  --downloadOnly      Download test PDFs without running the tests.\n" +
+        "  --fontTest          Run the font tests.\n" +
+        "  --headless          Run tests without visible browser windows.\n" +
+        "  --help, -h          Show this help message.\n" +
+        "  --integration       Run the integration tests.\n" +
+        "  --manifestFile      Path to manifest JSON file. [test_manifest.json]\n" +
+        "  --masterMode, -m    Run the script in master mode.\n" +
+        "  --noChrome          Skip Chrome when running tests.\n" +
+        "  --noDownload        Skip downloading of test PDFs.\n" +
+        "  --noFirefox         Skip Firefox when running tests.\n" +
+        "  --noPrompts         Use default answers (for CLOUD TESTS only!).\n" +
+        "  --port              Port for the HTTP server. [0]\n" +
+        "  --reftest           Start reftest viewer on comparison failures.\n" +
+        "  --statsDelay        Milliseconds to wait before starting stats. [0]\n" +
+        "  --statsFile         File where to store stats.\n" +
+        "  --strictVerify      Error if manifest file verification fails.\n" +
+        "  --testfilter, -t    Run specific reftest(s), e.g. -t=issue5567.\n" +
+        "  --unitTest          Run the unit tests.\n"
+    );
+    process.exit(0);
+  }
+
+  if (
+    +values.reftest + values.unitTest + values.fontTest + values.masterMode >
+    1
+  ) {
+    throw new Error(
+      "--reftest, --unitTest, --fontTest, and --masterMode must not be specified together."
+    );
+  }
+  if (values.noDownload && values.downloadOnly) {
+    throw new Error("--noDownload and --downloadOnly cannot be used together.");
+  }
+  if (values.masterMode && values.manifestFile !== "test_manifest.json") {
+    throw new Error(
+      "when --masterMode is specified --manifestFile shall be equal to `test_manifest.json`."
+    );
+  }
+
+  return {
+    ...values,
+    port: parseInt(values.port, 10) || 0,
+    statsDelay: parseInt(values.statsDelay, 10) || 0,
+  };
 }
 
 var refsTmpDir = "tmp";
@@ -223,7 +135,7 @@ function updateRefImages() {
     console.log("  Updating ref/ ... ");
     copySubtreeSync(refsTmpDir, refsDir);
     if (removeTmp) {
-      removeDirSync(refsTmpDir);
+      fs.rmSync(refsTmpDir, { recursive: true, force: true });
     }
     console.log("done");
   }
@@ -250,8 +162,11 @@ function updateRefImages() {
 function examineRefImages() {
   startServer();
 
-  const startUrl = `http://${host}:${server.port}/test/resources/reftest-analyzer.html#web=/test/eq.log`;
-  startBrowser("firefox", startUrl).then(function (browser) {
+  startBrowser({
+    browserName: "firefox",
+    headless: false,
+    startUrl: `http://${host}:${server.port}/test/resources/reftest-analyzer.html#web=/test/eq.log`,
+  }).then(function (browser) {
     browser.on("disconnected", function () {
       stopServer();
       process.exit(0);
@@ -259,7 +174,7 @@ function examineRefImages() {
   });
 }
 
-function startRefTest(masterMode, showRefImages) {
+async function startRefTest(masterMode, showRefImages) {
   function finalize() {
     stopServer();
     let numRuns = 0;
@@ -331,7 +246,7 @@ function startRefTest(masterMode, showRefImages) {
       fs.unlinkSync(eqLog);
     }
     if (fs.existsSync(testResultDir)) {
-      removeDirSync(testResultDir);
+      fs.rmSync(testResultDir, { recursive: true, force: true });
     }
 
     startTime = Date.now();
@@ -339,31 +254,33 @@ function startRefTest(masterMode, showRefImages) {
     server.hooks.POST.push(refTestPostHandler);
     onAllSessionsClosed = finalize;
 
-    const startUrl = `http://${host}:${server.port}/test/test_slave.html`;
-    await startBrowsers(function (session) {
-      session.masterMode = masterMode;
-      session.taskResults = {};
-      session.tasks = {};
-      session.remaining = manifest.length;
-      manifest.forEach(function (item) {
-        var rounds = item.rounds || 1;
-        var roundsResults = [];
-        roundsResults.length = rounds;
-        session.taskResults[item.id] = roundsResults;
-        session.tasks[item.id] = item;
-      });
-      session.numRuns = 0;
-      session.numErrors = 0;
-      session.numFBFFailures = 0;
-      session.numEqNoSnapshot = 0;
-      session.numEqFailures = 0;
-      monitorBrowserTimeout(session, handleSessionTimeout);
-    }, makeTestUrl(startUrl));
+    await startBrowsers({
+      baseUrl: `http://${host}:${server.port}/test/test_slave.html`,
+      initializeSession: session => {
+        session.masterMode = masterMode;
+        session.taskResults = {};
+        session.tasks = {};
+        session.remaining = manifest.length;
+        manifest.forEach(function (item) {
+          var rounds = item.rounds || 1;
+          var roundsResults = [];
+          roundsResults.length = rounds;
+          session.taskResults[item.id] = roundsResults;
+          session.tasks[item.id] = item;
+        });
+        session.numRuns = 0;
+        session.numErrors = 0;
+        session.numFBFFailures = 0;
+        session.numEqNoSnapshot = 0;
+        session.numEqFailures = 0;
+        monitorBrowserTimeout(session, handleSessionTimeout);
+      },
+    });
   }
   function checkRefsTmp() {
     if (masterMode && fs.existsSync(refsTmpDir)) {
       if (options.noPrompts) {
-        removeDirSync(refsTmpDir);
+        fs.rmSync(refsTmpDir, { recursive: true, force: true });
         setup();
         return;
       }
@@ -375,7 +292,7 @@ function startRefTest(masterMode, showRefImages) {
         "SHOULD THIS SCRIPT REMOVE tmp/? THINK CAREFULLY [yn] ",
         function (answer) {
           if (answer.toLowerCase() === "y") {
-            removeDirSync(refsTmpDir);
+            fs.rmSync(refsTmpDir, { recursive: true, force: true });
           }
           setup();
           reader.close();
@@ -391,11 +308,10 @@ function startRefTest(masterMode, showRefImages) {
   if (!manifest) {
     return;
   }
-  if (options.noDownload) {
-    checkRefsTmp();
-  } else {
-    ensurePDFsDownloaded(checkRefsTmp);
+  if (!options.noDownload) {
+    await ensurePDFsDownloaded();
   }
+  checkRefsTmp();
 }
 
 function handleSessionTimeout(session) {
@@ -418,16 +334,12 @@ function handleSessionTimeout(session) {
 function getTestManifest() {
   var manifest = JSON.parse(fs.readFileSync(options.manifestFile));
 
-  const testFilter = options.testfilter.slice(0),
-    xfaOnly = options.xfaOnly;
-  if (testFilter.length || xfaOnly) {
+  const testFilter = options.testfilter.slice(0);
+  if (testFilter.length) {
     manifest = manifest.filter(function (item) {
       var i = testFilter.indexOf(item.id);
       if (i !== -1) {
         testFilter.splice(i, 1);
-        return true;
-      }
-      if (xfaOnly && item.enableXfa) {
         return true;
       }
       return false;
@@ -460,10 +372,17 @@ function checkEq(task, results, browser, masterMode) {
     }
     const pageResult = pageResults[page];
     let testSnapshot = pageResult.snapshot;
-    if (testSnapshot && testSnapshot.startsWith("data:image/png;base64,")) {
+    if (testSnapshot?.startsWith("data:image/png;base64,")) {
       testSnapshot = Buffer.from(testSnapshot.substring(22), "base64");
     } else {
       console.error("Valid snapshot was not found.");
+    }
+    let unoptimizedSnapshot = pageResult.baselineSnapshot;
+    if (unoptimizedSnapshot?.startsWith("data:image/png;base64,")) {
+      unoptimizedSnapshot = Buffer.from(
+        unoptimizedSnapshot.substring(22),
+        "base64"
+      );
     }
 
     var refSnapshot = null;
@@ -531,7 +450,7 @@ function checkEq(task, results, browser, masterMode) {
       ensureDirSync(tmpSnapshotDir);
       fs.writeFileSync(
         path.join(tmpSnapshotDir, page + 1 + ".png"),
-        testSnapshot
+        unoptimizedSnapshot ?? testSnapshot
       );
     }
   }
@@ -621,7 +540,14 @@ function checkRefTestResults(browser, id, results) {
         return; // no results
       }
       if (pageResult.failure) {
-        failed = true;
+        // If the test failes due to a difference between the optimized and
+        // unoptimized rendering, we don't set `failed` to true so that we will
+        // still compute the differences between them. In master mode, this
+        // means that we will save the reference image from the unoptimized
+        // rendering even if the optimized rendering is wrong.
+        if (!pageResult.failure.includes("Optimized rendering differs")) {
+          failed = true;
+        }
         if (fs.existsSync(task.file + ".error")) {
           console.log(
             "TEST-SKIPPED | PDF was not downloaded " +
@@ -636,7 +562,9 @@ function checkRefTestResults(browser, id, results) {
               pageResult.failure
           );
         } else {
-          session.numErrors++;
+          if (failed) {
+            session.numErrors++;
+          }
           console.log(
             "TEST-UNEXPECTED-FAIL | test failed " +
               id +
@@ -658,7 +586,10 @@ function checkRefTestResults(browser, id, results) {
   }
   switch (task.type) {
     case "eq":
+    case "partial":
     case "text":
+    case "highlight":
+    case "extract":
       checkEq(task, results, browser, session.masterMode);
       break;
     case "fbf":
@@ -678,8 +609,7 @@ function checkRefTestResults(browser, id, results) {
   });
 }
 
-function refTestPostHandler(req, res) {
-  var parsedUrl = url.parse(req.url, true);
+function refTestPostHandler(parsedUrl, req, res) {
   var pathname = parsedUrl.pathname;
   if (
     pathname !== "/tellMeToQuit" &&
@@ -699,7 +629,7 @@ function refTestPostHandler(req, res) {
 
     var session;
     if (pathname === "/tellMeToQuit") {
-      session = getSession(parsedUrl.query.browser);
+      session = getSession(parsedUrl.searchParams.get("browser"));
       monitorBrowserTimeout(session, null);
       closeSession(session.name);
       return;
@@ -717,7 +647,9 @@ function refTestPostHandler(req, res) {
     var page = data.page - 1;
     var failure = data.failure;
     var snapshot = data.snapshot;
+    var baselineSnapshot = data.baselineSnapshot;
     var lastPageNum = data.lastPageNum;
+    var numberOfTasks = data.numberOfTasks;
 
     session = getSession(browser);
     monitorBrowserTimeout(session, handleSessionTimeout);
@@ -745,6 +677,7 @@ function refTestPostHandler(req, res) {
     taskResults[round][page] = {
       failure,
       snapshot,
+      baselineSnapshot,
       viewportWidth: data.viewportWidth,
       viewportHeight: data.viewportHeight,
       outputScale: data.outputScale,
@@ -759,7 +692,10 @@ function refTestPostHandler(req, res) {
       });
     }
 
-    var isDone = taskResults.at(-1) && taskResults.at(-1)[lastPageNum - 1];
+    const lastTaskResults = taskResults.at(-1);
+    const isDone =
+      lastTaskResults?.[lastPageNum - 1] ||
+      lastTaskResults?.filter(result => !!result).length === numberOfTasks;
     if (isDone) {
       checkRefTestResults(browser, id, taskResults);
       session.remaining--;
@@ -790,19 +726,7 @@ function onAllSessionsClosedAfterTests(name) {
     }
     var runtime = (Date.now() - startTime) / 1000;
     console.log(name + " tests runtime was " + runtime.toFixed(1) + " seconds");
-  };
-}
-
-function makeTestUrl(startUrl) {
-  return function (browserName) {
-    const queryParameters =
-      `?browser=${encodeURIComponent(browserName)}` +
-      `&manifestFile=${encodeURIComponent("/test/" + options.manifestFile)}` +
-      `&testFilter=${JSON.stringify(options.testfilter)}` +
-      `&xfaOnly=${options.xfaOnly}` +
-      `&delay=${options.statsDelay}` +
-      `&masterMode=${options.masterMode}`;
-    return startUrl + queryParameters;
+    process.exit(numErrors > 0 ? 1 : 0);
   };
 }
 
@@ -811,21 +735,26 @@ async function startUnitTest(testUrl, name) {
   startServer();
   server.hooks.POST.push(unitTestPostHandler);
 
-  const startUrl = `http://${host}:${server.port}${testUrl}`;
-  await startBrowsers(function (session) {
-    session.numRuns = 0;
-    session.numErrors = 0;
-  }, makeTestUrl(startUrl));
+  await startBrowsers({
+    baseUrl: `http://${host}:${server.port}${testUrl}`,
+    initializeSession: session => {
+      session.numRuns = 0;
+      session.numErrors = 0;
+    },
+  });
 }
 
 async function startIntegrationTest() {
   onAllSessionsClosed = onAllSessionsClosedAfterTests("integration");
   startServer();
 
-  const { runTests } = await import("./integration-boot.mjs");
-  await startBrowsers(function (session) {
-    session.numRuns = 0;
-    session.numErrors = 0;
+  const { runTests } = await import("./integration/jasmine-boot.js");
+  await startBrowsers({
+    baseUrl: null,
+    initializeSession: session => {
+      session.numRuns = 0;
+      session.numErrors = 0;
+    },
   });
   global.integrationBaseUrl = `http://${host}:${server.port}/build/generic/web/viewer.html`;
   global.integrationSessions = sessions;
@@ -837,8 +766,7 @@ async function startIntegrationTest() {
   await Promise.all(sessions.map(session => closeSession(session.name)));
 }
 
-function unitTestPostHandler(req, res) {
-  var parsedUrl = url.parse(req.url);
+function unitTestPostHandler(parsedUrl, req, res) {
   var pathname = parsedUrl.pathname;
   if (
     pathname !== "/tellMeToQuit" &&
@@ -853,24 +781,14 @@ function unitTestPostHandler(req, res) {
   req.on("data", function (data) {
     body += data;
   });
-  req.on("end", function () {
+  req.on("end", async function () {
     if (pathname === "/ttx") {
-      var onCancel = null,
-        ttxTimeout = 10000;
-      var timeoutId = setTimeout(function () {
-        onCancel?.("TTX timeout");
-      }, ttxTimeout);
-      translateFont(
-        body,
-        function (fn) {
-          onCancel = fn;
-        },
-        function (err, xml) {
-          clearTimeout(timeoutId);
-          res.writeHead(200, { "Content-Type": "text/xml" });
-          res.end(err ? "<error>" + err + "</error>" : xml);
-        }
-      );
+      res.writeHead(200, { "Content-Type": "text/xml" });
+      try {
+        res.end(await translateFont(body));
+      } catch (error) {
+        res.end(`<error>${error}</error>`);
+      }
       return;
     }
 
@@ -901,13 +819,20 @@ function unitTestPostHandler(req, res) {
   return true;
 }
 
-async function startBrowser(browserName, startUrl = "") {
+async function startBrowser({
+  browserName,
+  headless = options.headless,
+  startUrl,
+  extraPrefsFirefox = {},
+}) {
   const options = {
-    product: browserName,
-    headless: false,
+    browser: browserName,
+    protocol: "webDriverBiDi",
+    headless,
+    dumpio: true,
     defaultViewport: null,
     ignoreDefaultArgs: ["--disable-extensions"],
-    // The timeout for individual protocol (CDP) calls should always be lower
+    // The timeout for individual protocol (BiDi) calls should always be lower
     // than the Jasmine timeout. This way protocol errors are always raised in
     // the context of the tests that actually triggered them and don't leak
     // through to other tests (causing unrelated failures or tracebacks). The
@@ -923,6 +848,14 @@ async function startBrowser(browserName, startUrl = "") {
   const printFile = path.join(tempDir, "print.pdf");
 
   if (browserName === "chrome") {
+    // Slow down protocol calls by the given number of milliseconds. In Chrome
+    // protocol calls are faster than in Firefox and thus trigger in quicker
+    // succession. This can cause intermittent failures because new protocol
+    // calls can run before events triggered by the previous protocol calls had
+    // a chance to be processed (essentially causing events to get lost). This
+    // value gives Chrome a more similar execution speed as Firefox.
+    options.slowMo = 5;
+
     // avoid crash
     options.args = ["--no-sandbox", "--disable-setuid-sandbox"];
     // silent printing in a pdf
@@ -931,6 +864,8 @@ async function startBrowser(browserName, startUrl = "") {
 
   if (browserName === "firefox") {
     options.extraPrefsFirefox = {
+      // Disable system addon updates.
+      "extensions.systemAddon.update.enabled": false,
       // avoid to have a prompt when leaving a page with a form
       "dom.disable_beforeunload": true,
       // Disable dialog when saving a pdf
@@ -945,18 +880,26 @@ async function startBrowser(browserName, startUrl = "") {
       "browser.download.dir": tempDir,
       // Print silently in a pdf
       "print.always_print_silent": true,
-      "print.show_print_progress": false,
       print_printer: "PDF",
       "print.printer_PDF.print_to_file": true,
       "print.printer_PDF.print_to_filename": printFile,
-      // Enable OffscreenCanvas
-      "gfx.offscreencanvas.enabled": true,
       // Disable gpu acceleration
       "gfx.canvas.accelerated": false,
-      // Enable the `round` CSS function.
-      "layout.css.round.enabled": true,
-      // This allow to copy some data in the clipboard.
-      "dom.events.asyncClipboard.clipboardItem": true,
+      // It's helpful to see where the caret is.
+      "accessibility.browsewithcaret": true,
+      // Disable the newtabpage stuff.
+      "browser.newtabpage.enabled": false,
+      // Disable network connections to Contile.
+      "browser.topsites.contile.enabled": false,
+      // Disable logging for remote settings.
+      "services.settings.loglevel": "off",
+      // Disable AI/ML functionality.
+      "browser.ml.enable": false,
+      "browser.ml.chat.enabled": false,
+      "browser.ml.linkPreview.enabled": false,
+      "browser.tabs.groups.smart.enabled": false,
+      "browser.tabs.groups.smart.userEnabled": false,
+      ...extraPrefsFirefox,
     };
   }
 
@@ -971,15 +914,19 @@ async function startBrowser(browserName, startUrl = "") {
   return browser;
 }
 
-async function startBrowsers(initSessionCallback, makeStartUrl = null) {
+async function startBrowsers({ baseUrl, initializeSession }) {
   // Remove old browser revisions from Puppeteer's cache. Updating Puppeteer can
   // cause new browser revisions to be downloaded, so trimming the cache will
   // prevent the disk from filling up over time.
   await puppeteer.trimCache();
 
-  const browserNames = options.noChrome ? ["firefox"] : ["firefox", "chrome"];
-
-  sessions = [];
+  const browserNames = ["firefox", "chrome"];
+  if (options.noChrome) {
+    browserNames.splice(1, 1);
+  }
+  if (options.noFirefox) {
+    browserNames.splice(0, 1);
+  }
   for (const browserName of browserNames) {
     // The session must be pushed first and augmented with the browser once
     // it's initialized. The reason for this is that browser initialization
@@ -995,12 +942,24 @@ async function startBrowsers(initSessionCallback, makeStartUrl = null) {
       closed: false,
     };
     sessions.push(session);
-    const startUrl = makeStartUrl ? makeStartUrl(browserName) : "";
 
-    await startBrowser(browserName, startUrl)
+    // Construct the start URL from the base URL by appending query parameters
+    // for the runner if necessary.
+    let startUrl = "";
+    if (baseUrl) {
+      const queryParameters =
+        `?browser=${encodeURIComponent(browserName)}` +
+        `&manifestFile=${encodeURIComponent("/test/" + options.manifestFile)}` +
+        `&testFilter=${JSON.stringify(options.testfilter)}` +
+        `&delay=${options.statsDelay}` +
+        `&masterMode=${options.masterMode}`;
+      startUrl = baseUrl + queryParameters;
+    }
+
+    await startBrowser({ browserName, startUrl })
       .then(function (browser) {
         session.browser = browser;
-        initSessionCallback?.(session);
+        initializeSession(session);
       })
       .catch(function (ex) {
         console.log(`Error while starting ${browserName}: ${ex.message}`);
@@ -1010,11 +969,13 @@ async function startBrowsers(initSessionCallback, makeStartUrl = null) {
 }
 
 function startServer() {
-  server = new WebServer();
-  server.host = host;
-  server.port = options.port;
-  server.root = "..";
-  server.cacheExpirationTime = 3600;
+  server = new WebServer({
+    root: "..",
+    host,
+    port: options.port,
+    cacheExpirationTime: 3600,
+    coverageEnabled: global.coverageEnabled || false,
+  });
   server.start();
 }
 
@@ -1026,78 +987,148 @@ function getSession(browser) {
   return sessions.find(session => session.name === browser);
 }
 
+async function writeCoverageData(outputDirectory) {
+  try {
+    console.log("\n### Writing code coverage data");
+
+    // Merge coverage from all sessions
+    const mergedCoverage = istanbulCoverage.createCoverageMap();
+    for (const session of sessions) {
+      if (session.coverage) {
+        mergedCoverage.merge(
+          istanbulCoverage.createCoverageMap(session.coverage)
+        );
+      }
+    }
+
+    // create a context for report generation
+    const context = libReport.createContext({
+      dir: path.join(__dirname, "..", outputDirectory),
+      coverageMap: mergedCoverage,
+    });
+
+    const report = istanbulReportGenerator.create("lcovonly", {
+      projectRoot: path.join(__dirname, ".."),
+    });
+    report.execute(context);
+
+    console.log(`Total files covered: ${Object.keys(mergedCoverage).length}`);
+  } catch (err) {
+    console.error("Failed to write coverage data:", err);
+  }
+}
+
 async function closeSession(browser) {
   for (const session of sessions) {
     if (session.name !== browser) {
       continue;
     }
     if (session.browser !== undefined) {
-      for (const page of await session.browser.pages()) {
-        await page.close();
+      // Collect coverage before closing (works with both Chrome and Firefox)
+      if (global.coverageEnabled) {
+        try {
+          const pages = await session.browser.pages();
+          if (pages.length > 0) {
+            const page = pages[0];
+
+            // Extract window.__coverage__ which is populated by
+            // babel-plugin-istanbul
+            const coverage = await page.evaluate(() => window.__coverage__);
+
+            if (coverage && Object.keys(coverage).length > 0) {
+              session.coverage = coverage;
+              console.log(
+                `Collected coverage from ${browser}: ${Object.keys(coverage).length} files`
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `Failed to collect coverage for ${browser}:`,
+            err.message
+          );
+        }
       }
+
       await session.browser.close();
     }
     session.closed = true;
-    const allClosed = sessions.every(function (s) {
-      return s.closed;
-    });
+    const allClosed = sessions.every(s => s.closed);
     if (allClosed) {
+      // Write coverage data if enabled
+      if (global.coverageEnabled) {
+        await writeCoverageData(global.coverageOutput);
+      }
+
       if (tempDir) {
-        rimrafSync(tempDir);
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
       onAllSessionsClosed?.();
     }
   }
 }
 
-function ensurePDFsDownloaded(callback) {
-  var manifest = getTestManifest();
-  downloadManifestFiles(manifest, function () {
-    verifyManifestFiles(manifest, function (hasErrors) {
-      if (hasErrors) {
-        console.log(
-          "Unable to verify the checksum for the files that are " +
-            "used for testing."
-        );
-        console.log(
-          "Please re-download the files, or adjust the MD5 " +
-            "checksum in the manifest for the files listed above.\n"
-        );
-        if (options.strictVerify) {
-          process.exit(1);
-        }
-      }
-      callback();
-    });
-  });
+async function ensurePDFsDownloaded() {
+  const manifest = getTestManifest();
+  await downloadManifestFiles(manifest);
+  try {
+    await verifyManifestFiles(manifest);
+  } catch {
+    console.log(
+      "Unable to verify the checksum for the files that are " +
+        "used for testing."
+    );
+    console.log(
+      "Please re-download the files, or adjust the MD5 " +
+        "checksum in the manifest for the files listed above.\n"
+    );
+    if (options.strictVerify) {
+      process.exit(1);
+    }
+  }
 }
 
-function main() {
+async function main() {
   if (options.statsFile) {
     stats = [];
   }
 
-  if (options.downloadOnly) {
-    ensurePDFsDownloaded(function () {});
-  } else if (options.unitTest) {
-    // Allows linked PDF files in unit-tests as well.
-    ensurePDFsDownloaded(function () {
-      startUnitTest("/test/unit/unit_test.html", "unit");
-    });
-  } else if (options.fontTest) {
-    startUnitTest("/test/font/font_test.html", "font");
-  } else if (options.integration) {
-    // Allows linked PDF files in integration-tests as well.
-    ensurePDFsDownloaded(function () {
-      startIntegrationTest();
-    });
-  } else {
-    startRefTest(options.masterMode, options.reftest);
+  if (options.coverage) {
+    global.coverageEnabled = true;
+    console.log("\n### Code coverage enabled for browser tests");
+    if (options.coverageOutput) {
+      global.coverageOutput = options.coverageOutput;
+      console.log(`### Code coverage output file: ${options.coverageOutput}`);
+    }
+  }
+
+  try {
+    if (options.downloadOnly) {
+      await ensurePDFsDownloaded();
+    } else if (options.unitTest) {
+      // Allows linked PDF files in unit-tests as well.
+      await ensurePDFsDownloaded();
+      await startUnitTest("/test/unit/unit_test.html", "unit");
+    } else if (options.fontTest) {
+      await startUnitTest("/test/font/font_test.html", "font");
+    } else if (options.integration) {
+      // Allows linked PDF files in integration-tests as well.
+      await ensurePDFsDownloaded();
+      await startIntegrationTest();
+    } else {
+      await startRefTest(options.masterMode, options.reftest);
+    }
+  } catch (e) {
+    // Close the browsers if uncaught exceptions occur, otherwise the spawned
+    // processes can become orphaned and keep running after `test.mjs` exits
+    // because the teardown logic of the tests did not get a chance to run.
+    console.error(e);
+    await Promise.all(sessions.map(session => closeSession(session.name)));
   }
 }
 
 var server;
-var sessions;
+var sessions = [];
 var onAllSessionsClosed;
 var host = "127.0.0.1";
 var options = parseOptions();
@@ -1105,3 +1136,5 @@ var stats;
 var tempDir = null;
 
 main();
+
+export { startBrowser };

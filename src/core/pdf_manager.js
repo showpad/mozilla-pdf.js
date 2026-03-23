@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 
+import { CmykICCBasedCS, IccColorSpace } from "./icc_colorspace.js";
 import {
   createValidAbsoluteUrl,
   FeatureTest,
@@ -20,7 +21,12 @@ import {
   warn,
 } from "../shared/util.js";
 import { ChunkedStreamManager } from "./chunked_stream.js";
+import { ImageResizer } from "./image_resizer.js";
+import { JBig2CCITTFaxWasmImage } from "./jbig2_ccittFax_wasm.js";
+import { JpegStream } from "./jpeg_stream.js";
+import { JpxImage } from "./jpx.js";
 import { MissingDataException } from "./core_utils.js";
+import { OperatorList } from "./operator_list.js";
 import { PDFDocument } from "./document.js";
 import { Stream } from "./stream.js";
 
@@ -36,20 +42,61 @@ function parseDocBaseUrl(url) {
 }
 
 class BasePdfManager {
-  constructor(args) {
-    if (this.constructor === BasePdfManager) {
+  constructor({
+    // source,
+    // disableAutoFetch,
+    docBaseUrl,
+    docId,
+    enableXfa,
+    evaluatorOptions,
+    handler,
+    // length,
+    password,
+    // rangeChunkSize,
+  }) {
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
+      this.constructor === BasePdfManager
+    ) {
       unreachable("Cannot initialize BasePdfManager.");
     }
-    this._docBaseUrl = parseDocBaseUrl(args.docBaseUrl);
-    this._docId = args.docId;
-    this._password = args.password;
-    this.enableXfa = args.enableXfa;
+    this._docBaseUrl = parseDocBaseUrl(docBaseUrl);
+    this._docId = docId;
+    this._password = password;
+    this.enableXfa = enableXfa;
 
-    // Check `OffscreenCanvas` support once, rather than repeatedly throughout
-    // the worker-thread code.
-    args.evaluatorOptions.isOffscreenCanvasSupported &&=
+    // Check `OffscreenCanvas` and `ImageDecoder` support once,
+    // rather than repeatedly throughout the worker-thread code.
+    evaluatorOptions.isOffscreenCanvasSupported &&=
       FeatureTest.isOffscreenCanvasSupported;
-    this.evaluatorOptions = args.evaluatorOptions;
+    evaluatorOptions.isImageDecoderSupported &&=
+      FeatureTest.isImageDecoderSupported;
+
+    // Set up a one-shot callback so evaluators can notify the main thread that
+    // WebGPU-acceleratable content was found. The flag ensures the message is
+    // sent at most once per document.
+    if (evaluatorOptions.enableWebGPU) {
+      let prepareWebGPUSent = false;
+      evaluatorOptions.prepareWebGPU = () => {
+        if (!prepareWebGPUSent) {
+          prepareWebGPUSent = true;
+          handler.send("PrepareWebGPU", null);
+        }
+      };
+    }
+    delete evaluatorOptions.enableWebGPU;
+    this.evaluatorOptions = Object.freeze(evaluatorOptions);
+
+    // Initialize image-options once per document.
+    ImageResizer.setOptions(evaluatorOptions);
+    JpegStream.setOptions(evaluatorOptions);
+    OperatorList.setOptions(evaluatorOptions);
+
+    const options = { ...evaluatorOptions, handler };
+    JpxImage.setOptions(options);
+    IccColorSpace.setOptions(options);
+    CmykICCBasedCS.setOptions(options);
+    JBig2CCITTFaxWasmImage.setOptions(options);
   }
 
   get docId() {
@@ -62,10 +109,6 @@ class BasePdfManager {
 
   get docBaseUrl() {
     return this._docBaseUrl;
-  }
-
-  get catalog() {
-    return this.pdfDocument.catalog;
   }
 
   ensureDoc(prop, args) {
@@ -86,18 +129,6 @@ class BasePdfManager {
 
   fontFallback(id, handler) {
     return this.pdfDocument.fontFallback(id, handler);
-  }
-
-  loadXfaFonts(handler, task) {
-    return this.pdfDocument.loadXfaFonts(handler, task);
-  }
-
-  loadXfaImages() {
-    return this.pdfDocument.loadXfaImages();
-  }
-
-  serializeXfaData(annotationStorage) {
-    return this.pdfDocument.serializeXfaData(annotationStorage);
   }
 
   cleanup(manuallyTriggered = false) {

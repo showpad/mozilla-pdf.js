@@ -41,7 +41,7 @@ const COMMAND_MAP = {
 };
 
 /**
- * CharStrings are encoded following the the CharString Encoding sequence
+ * CharStrings are encoded following the CharString Encoding sequence
  * describe in Chapter 6 of the "Adobe Type1 Font Format" specification.
  * The value in a byte indicates a command, a number, or subsequent bytes
  * that are to be interpreted in a special way.
@@ -79,13 +79,15 @@ const COMMAND_MAP = {
  *  the charStrings.
  */
 class Type1CharString {
-  constructor() {
-    this.width = 0;
-    this.lsb = 0;
-    this.flexing = false;
-    this.output = [];
-    this.stack = [];
-  }
+  width = 0;
+
+  lsb = 0;
+
+  flexing = false;
+
+  output = [];
+
+  stack = [];
 
   convert(encoded, subrs, seacAnalysisEnabled) {
     const count = encoded.length;

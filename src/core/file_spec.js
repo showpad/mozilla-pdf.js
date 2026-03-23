@@ -13,23 +13,18 @@
  * limitations under the License.
  */
 
-import { stringToPDFString, warn } from "../shared/util.js";
+import { stringToPDFString, stripPath, warn } from "../shared/util.js";
 import { BaseStream } from "./base_stream.js";
 import { Dict } from "./primitives.js";
 
 function pickPlatformItem(dict) {
-  // Look for the filename in this order:
-  // UF, F, Unix, Mac, DOS
-  if (dict.has("UF")) {
-    return dict.get("UF");
-  } else if (dict.has("F")) {
-    return dict.get("F");
-  } else if (dict.has("Unix")) {
-    return dict.get("Unix");
-  } else if (dict.has("Mac")) {
-    return dict.get("Mac");
-  } else if (dict.has("DOS")) {
-    return dict.get("DOS");
+  if (dict instanceof Dict) {
+    // Look for the filename in this order: UF, F, Unix, Mac, DOS
+    for (const key of ["UF", "F", "Unix", "Mac", "DOS"]) {
+      if (dict.has(key)) {
+        return dict.get(key);
+      }
+    }
   }
   return null;
 }
@@ -42,66 +37,69 @@ function pickPlatformItem(dict) {
  * collections attributes and related files (/RF)
  */
 class FileSpec {
-  constructor(root, xref) {
+  #contentAvailable = false;
+
+  constructor(root, skipContent = false) {
     if (!(root instanceof Dict)) {
       return;
     }
-    this.xref = xref;
     this.root = root;
     if (root.has("FS")) {
       this.fs = root.get("FS");
     }
-    this.description = root.has("Desc")
-      ? stringToPDFString(root.get("Desc"))
-      : "";
     if (root.has("RF")) {
       warn("Related file specifications are not supported");
     }
-    this.contentAvailable = true;
-    if (!root.has("EF")) {
-      this.contentAvailable = false;
-      warn("Non-embedded file specifications are not supported");
+    if (!skipContent) {
+      if (root.has("EF")) {
+        this.#contentAvailable = true;
+      } else {
+        warn("Non-embedded file specifications are not supported");
+      }
     }
   }
 
   get filename() {
-    if (!this._filename && this.root) {
-      const filename = pickPlatformItem(this.root) || "unnamed";
-      this._filename = stringToPDFString(filename)
+    const item = pickPlatformItem(this.root);
+    if (item && typeof item === "string") {
+      // NOTE: The following replacement order is INTENTIONAL, regardless of
+      //       what some static code analysers (e.g. CodeQL) may claim.
+      return stringToPDFString(item, /* keepEscapeSequence = */ true)
         .replaceAll("\\\\", "\\")
         .replaceAll("\\/", "/")
         .replaceAll("\\", "/");
     }
-    return this._filename;
+    return "";
   }
 
   get content() {
-    if (!this.contentAvailable) {
+    if (!this.#contentAvailable) {
       return null;
     }
-    if (!this.contentRef && this.root) {
-      this.contentRef = pickPlatformItem(this.root.get("EF"));
+    const ef = pickPlatformItem(this.root?.get("EF"));
+
+    if (ef instanceof BaseStream) {
+      return ef.getBytes();
     }
-    let content = null;
-    if (this.contentRef) {
-      const fileObj = this.xref.fetchIfRef(this.contentRef);
-      if (fileObj instanceof BaseStream) {
-        content = fileObj.getBytes();
-      } else {
-        warn(
-          "Embedded file specification points to non-existing/invalid content"
-        );
-      }
-    } else {
-      warn("Embedded file specification does not have a content");
+    warn("Embedded file specification points to non-existing/invalid content");
+    return null;
+  }
+
+  get description() {
+    const desc = this.root?.get("Desc");
+    if (desc && typeof desc === "string") {
+      return stringToPDFString(desc);
     }
-    return content;
+    return "";
   }
 
   get serializable() {
+    const { filename, content, description } = this;
     return {
-      filename: this.filename,
-      content: this.content,
+      rawFilename: filename,
+      filename: stripPath(filename) || "unnamed",
+      content,
+      description,
     };
   }
 }

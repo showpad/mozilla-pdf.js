@@ -22,13 +22,7 @@ const FieldType = {
 };
 
 function createActionsMap(actions) {
-  const actionsMap = new Map();
-  if (actions) {
-    for (const [eventType, actionsForEvent] of Object.entries(actions)) {
-      actionsMap.set(eventType, actionsForEvent);
-    }
-  }
-  return actionsMap;
+  return new Map(actions ? Object.entries(actions) : null);
 }
 
 function getFieldType(actions) {
@@ -49,7 +43,7 @@ function getFieldType(actions) {
   if (format.startsWith("AFDate_")) {
     return FieldType.date;
   }
-  if (format.startsWith("AFTime__")) {
+  if (format.startsWith("AFTime_")) {
     return FieldType.time;
   }
   return FieldType.none;

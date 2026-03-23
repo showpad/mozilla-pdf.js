@@ -13,9 +13,10 @@
  * limitations under the License.
  */
 
-import { createActionsMap, getFieldType } from "./common.js";
+import { createActionsMap, FieldType, getFieldType } from "./common.js";
 import { Color } from "./color.js";
 import { PDFObject } from "./pdf_object.js";
+import { serializeError } from "./app_utils.js";
 
 class Field extends PDFObject {
   constructor(data) {
@@ -85,6 +86,9 @@ class Field extends PDFObject {
     this._fieldType = getFieldType(this._actions);
     this._siblings = data.siblings || null;
     this._rotation = data.rotation || 0;
+    this._datetimeFormat = data.datetimeFormat || null;
+    this._hasDateOrTime = !!data.hasDatetimeHTML;
+    this._util = data.util;
 
     this._globalEval = data.globalEval;
     this._appObjects = data.appObjects;
@@ -245,7 +249,22 @@ class Field extends PDFObject {
       return;
     }
 
-    if (value === "" || typeof value !== "string") {
+    if (this._hasDateOrTime && value) {
+      const date = this._util.scand(this._datetimeFormat, value);
+      if (date) {
+        this._originalValue = date.valueOf();
+        value = this._util.printd(this._datetimeFormat, date);
+        this._value = !isNaN(value) ? parseFloat(value) : value;
+        return;
+      }
+    }
+
+    if (
+      value === "" ||
+      typeof value !== "string" ||
+      // When the field type is date or time, the value must be a string.
+      this._fieldType >= FieldType.date
+    ) {
       this._originalValue = undefined;
       this._value = value;
       return;
@@ -254,6 +273,10 @@ class Field extends PDFObject {
     this._originalValue = value;
     const _value = value.trim().replace(",", ".");
     this._value = !isNaN(_value) ? parseFloat(_value) : value;
+  }
+
+  get _initialValue() {
+    return (this._hasDateOrTime && this._originalValue) || null;
   }
 
   _getValue() {
@@ -430,11 +453,9 @@ class Field extends PDFObject {
       return array;
     }
 
-    if (this._children === null) {
-      this._children = this._document.obj._getTerminalChildren(this._fieldPath);
-    }
-
-    return this._children;
+    return (this._children ??= this._document.obj._getTerminalChildren(
+      this._fieldPath
+    ));
   }
 
   getLock() {
@@ -547,14 +568,15 @@ class Field extends PDFObject {
     }
 
     const actions = this._actions.get(eventName);
-    try {
-      for (const action of actions) {
+    for (const action of actions) {
+      try {
         // Action evaluation must happen in the global scope
         this._globalEval(action);
+      } catch (error) {
+        const serializedError = serializeError(error);
+        serializedError.value = `Error when executing "${eventName}" for field "${this._id}"\n${serializedError.value}`;
+        this._send(serializedError);
       }
-    } catch (error) {
-      event.rc = false;
-      throw error;
     }
 
     return true;
@@ -581,6 +603,12 @@ class RadioButtonField extends Field {
     this._hasBeenInitialized = true;
     this._value = data.value || "";
   }
+
+  get _siblings() {
+    return this._radioIds.filter(id => id !== this._id);
+  }
+
+  set _siblings(_) {}
 
   get value() {
     return this._value;

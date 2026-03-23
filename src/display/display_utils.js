@@ -14,20 +14,16 @@
  */
 
 import {
-  BaseCanvasFactory,
-  BaseCMapReaderFactory,
-  BaseFilterFactory,
-  BaseStandardFontDataFactory,
-  BaseSVGFactory,
-} from "./base_factory.js";
-import {
   BaseException,
+  DrawOPS,
   FeatureTest,
+  MathClamp,
   shadow,
-  stringToBytes,
+  stripPath,
   Util,
   warn,
 } from "../shared/util.js";
+import { XfaLayer } from "./xfa_layer.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -39,355 +35,7 @@ class PixelsPerInch {
   static PDF_TO_CSS_UNITS = this.CSS / this.PDF;
 }
 
-/**
- * FilterFactory aims to create some SVG filters we can use when drawing an
- * image (or whatever) on a canvas.
- * Filters aren't applied with ctx.putImageData because it just overwrites the
- * underlying pixels.
- * With these filters, it's possible for example to apply some transfer maps on
- * an image without the need to apply them on the pixel arrays: the renderer
- * does the magic for us.
- */
-class DOMFilterFactory extends BaseFilterFactory {
-  #_cache;
-
-  #_defs;
-
-  #docId;
-
-  #document;
-
-  #hcmFilter;
-
-  #hcmKey;
-
-  #hcmUrl;
-
-  #hcmHighlightFilter;
-
-  #hcmHighlightKey;
-
-  #hcmHighlightUrl;
-
-  #id = 0;
-
-  constructor({ docId, ownerDocument = globalThis.document } = {}) {
-    super();
-    this.#docId = docId;
-    this.#document = ownerDocument;
-  }
-
-  get #cache() {
-    return (this.#_cache ||= new Map());
-  }
-
-  get #defs() {
-    if (!this.#_defs) {
-      const div = this.#document.createElement("div");
-      const { style } = div;
-      style.visibility = "hidden";
-      style.contain = "strict";
-      style.width = style.height = 0;
-      style.position = "absolute";
-      style.top = style.left = 0;
-      style.zIndex = -1;
-
-      const svg = this.#document.createElementNS(SVG_NS, "svg");
-      svg.setAttribute("width", 0);
-      svg.setAttribute("height", 0);
-      this.#_defs = this.#document.createElementNS(SVG_NS, "defs");
-      div.append(svg);
-      svg.append(this.#_defs);
-      this.#document.body.append(div);
-    }
-    return this.#_defs;
-  }
-
-  addFilter(maps) {
-    if (!maps) {
-      return "none";
-    }
-
-    // When a page is zoomed the page is re-drawn but the maps are likely
-    // the same.
-    let value = this.#cache.get(maps);
-    if (value) {
-      return value;
-    }
-
-    let tableR, tableG, tableB, key;
-    if (maps.length === 1) {
-      const mapR = maps[0];
-      const buffer = new Array(256);
-      for (let i = 0; i < 256; i++) {
-        buffer[i] = mapR[i] / 255;
-      }
-      key = tableR = tableG = tableB = buffer.join(",");
-    } else {
-      const [mapR, mapG, mapB] = maps;
-      const bufferR = new Array(256);
-      const bufferG = new Array(256);
-      const bufferB = new Array(256);
-      for (let i = 0; i < 256; i++) {
-        bufferR[i] = mapR[i] / 255;
-        bufferG[i] = mapG[i] / 255;
-        bufferB[i] = mapB[i] / 255;
-      }
-      tableR = bufferR.join(",");
-      tableG = bufferG.join(",");
-      tableB = bufferB.join(",");
-      key = `${tableR}${tableG}${tableB}`;
-    }
-
-    value = this.#cache.get(key);
-    if (value) {
-      this.#cache.set(maps, value);
-      return value;
-    }
-
-    // We create a SVG filter: feComponentTransferElement
-    //  https://www.w3.org/TR/SVG11/filters.html#feComponentTransferElement
-
-    const id = `g_${this.#docId}_transfer_map_${this.#id++}`;
-    const url = `url(#${id})`;
-    this.#cache.set(maps, url);
-    this.#cache.set(key, url);
-
-    const filter = this.#createFilter(id);
-    this.#addTransferMapConversion(tableR, tableG, tableB, filter);
-
-    return url;
-  }
-
-  addHCMFilter(fgColor, bgColor) {
-    const key = `${fgColor}-${bgColor}`;
-    if (this.#hcmKey === key) {
-      return this.#hcmUrl;
-    }
-
-    this.#hcmKey = key;
-    this.#hcmUrl = "none";
-    this.#hcmFilter?.remove();
-
-    if (!fgColor || !bgColor) {
-      return this.#hcmUrl;
-    }
-
-    const fgRGB = this.#getRGB(fgColor);
-    fgColor = Util.makeHexColor(...fgRGB);
-    const bgRGB = this.#getRGB(bgColor);
-    bgColor = Util.makeHexColor(...bgRGB);
-    this.#defs.style.color = "";
-
-    if (
-      (fgColor === "#000000" && bgColor === "#ffffff") ||
-      fgColor === bgColor
-    ) {
-      return this.#hcmUrl;
-    }
-
-    // https://developer.mozilla.org/en-US/docs/Web/Accessibility/Understanding_Colors_and_Luminance
-    //
-    // Relative luminance:
-    // https://www.w3.org/TR/WCAG20/#relativeluminancedef
-    //
-    // We compute the rounded luminance of the default background color.
-    // Then for every color in the pdf, if its rounded luminance is the
-    // same as the background one then it's replaced by the new
-    // background color else by the foreground one.
-    const map = new Array(256);
-    for (let i = 0; i <= 255; i++) {
-      const x = i / 255;
-      map[i] = x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
-    }
-    const table = map.join(",");
-
-    const id = `g_${this.#docId}_hcm_filter`;
-    const filter = (this.#hcmHighlightFilter = this.#createFilter(id));
-    this.#addTransferMapConversion(table, table, table, filter);
-    this.#addGrayConversion(filter);
-
-    const getSteps = (c, n) => {
-      const start = fgRGB[c] / 255;
-      const end = bgRGB[c] / 255;
-      const arr = new Array(n + 1);
-      for (let i = 0; i <= n; i++) {
-        arr[i] = start + (i / n) * (end - start);
-      }
-      return arr.join(",");
-    };
-    this.#addTransferMapConversion(
-      getSteps(0, 5),
-      getSteps(1, 5),
-      getSteps(2, 5),
-      filter
-    );
-
-    this.#hcmUrl = `url(#${id})`;
-    return this.#hcmUrl;
-  }
-
-  addHighlightHCMFilter(fgColor, bgColor, newFgColor, newBgColor) {
-    const key = `${fgColor}-${bgColor}-${newFgColor}-${newBgColor}`;
-    if (this.#hcmHighlightKey === key) {
-      return this.#hcmHighlightUrl;
-    }
-
-    this.#hcmHighlightKey = key;
-    this.#hcmHighlightUrl = "none";
-    this.#hcmHighlightFilter?.remove();
-
-    if (!fgColor || !bgColor) {
-      return this.#hcmHighlightUrl;
-    }
-
-    const [fgRGB, bgRGB] = [fgColor, bgColor].map(this.#getRGB.bind(this));
-    let fgGray = Math.round(
-      0.2126 * fgRGB[0] + 0.7152 * fgRGB[1] + 0.0722 * fgRGB[2]
-    );
-    let bgGray = Math.round(
-      0.2126 * bgRGB[0] + 0.7152 * bgRGB[1] + 0.0722 * bgRGB[2]
-    );
-    let [newFgRGB, newBgRGB] = [newFgColor, newBgColor].map(
-      this.#getRGB.bind(this)
-    );
-    if (bgGray < fgGray) {
-      [fgGray, bgGray, newFgRGB, newBgRGB] = [
-        bgGray,
-        fgGray,
-        newBgRGB,
-        newFgRGB,
-      ];
-    }
-    this.#defs.style.color = "";
-
-    // Now we can create the filters to highlight some canvas parts.
-    // The colors in the pdf will almost be Canvas and CanvasText, hence we
-    // want to filter them to finally get Highlight and HighlightText.
-    // Since we're in HCM the background color and the foreground color should
-    // be really different when converted to grayscale (if they're not then it
-    // means that we've a poor contrast). Once the canvas colors are converted
-    // to grayscale we can easily map them on their new colors.
-    // The grayscale step is important because if we've something like:
-    //   fgColor = #FF....
-    //   bgColor = #FF....
-    //   then we are enable to map the red component on the new red components
-    //   which can be different.
-
-    const getSteps = (fg, bg, n) => {
-      const arr = new Array(256);
-      const step = (bgGray - fgGray) / n;
-      const newStart = fg / 255;
-      const newStep = (bg - fg) / (255 * n);
-      let prev = 0;
-      for (let i = 0; i <= n; i++) {
-        const k = Math.round(fgGray + i * step);
-        const value = newStart + i * newStep;
-        for (let j = prev; j <= k; j++) {
-          arr[j] = value;
-        }
-        prev = k + 1;
-      }
-      for (let i = prev; i < 256; i++) {
-        arr[i] = arr[prev - 1];
-      }
-      return arr.join(",");
-    };
-
-    const id = `g_${this.#docId}_hcm_highlight_filter`;
-    const filter = (this.#hcmHighlightFilter = this.#createFilter(id));
-
-    this.#addGrayConversion(filter);
-    this.#addTransferMapConversion(
-      getSteps(newFgRGB[0], newBgRGB[0], 5),
-      getSteps(newFgRGB[1], newBgRGB[1], 5),
-      getSteps(newFgRGB[2], newBgRGB[2], 5),
-      filter
-    );
-
-    this.#hcmHighlightUrl = `url(#${id})`;
-    return this.#hcmHighlightUrl;
-  }
-
-  destroy(keepHCM = false) {
-    if (keepHCM && (this.#hcmUrl || this.#hcmHighlightUrl)) {
-      return;
-    }
-    if (this.#_defs) {
-      this.#_defs.parentNode.parentNode.remove();
-      this.#_defs = null;
-    }
-    if (this.#_cache) {
-      this.#_cache.clear();
-      this.#_cache = null;
-    }
-    this.#id = 0;
-  }
-
-  #addGrayConversion(filter) {
-    const feColorMatrix = this.#document.createElementNS(
-      SVG_NS,
-      "feColorMatrix"
-    );
-    feColorMatrix.setAttribute("type", "matrix");
-    feColorMatrix.setAttribute(
-      "values",
-      "0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 1 0"
-    );
-    filter.append(feColorMatrix);
-  }
-
-  #createFilter(id) {
-    const filter = this.#document.createElementNS(SVG_NS, "filter");
-    filter.setAttribute("color-interpolation-filters", "sRGB");
-    filter.setAttribute("id", id);
-    this.#defs.append(filter);
-
-    return filter;
-  }
-
-  #appendFeFunc(feComponentTransfer, func, table) {
-    const feFunc = this.#document.createElementNS(SVG_NS, func);
-    feFunc.setAttribute("type", "discrete");
-    feFunc.setAttribute("tableValues", table);
-    feComponentTransfer.append(feFunc);
-  }
-
-  #addTransferMapConversion(rTable, gTable, bTable, filter) {
-    const feComponentTransfer = this.#document.createElementNS(
-      SVG_NS,
-      "feComponentTransfer"
-    );
-    filter.append(feComponentTransfer);
-    this.#appendFeFunc(feComponentTransfer, "feFuncR", rTable);
-    this.#appendFeFunc(feComponentTransfer, "feFuncG", gTable);
-    this.#appendFeFunc(feComponentTransfer, "feFuncB", bTable);
-  }
-
-  #getRGB(color) {
-    this.#defs.style.color = color;
-    return getRGB(getComputedStyle(this.#defs).getPropertyValue("color"));
-  }
-}
-
-class DOMCanvasFactory extends BaseCanvasFactory {
-  constructor({ ownerDocument = globalThis.document } = {}) {
-    super();
-    this._document = ownerDocument;
-  }
-
-  /**
-   * @ignore
-   */
-  _createCanvas(width, height) {
-    const canvas = this._document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    return canvas;
-  }
-}
-
-async function fetchData(url, asTypedArray = false) {
+async function fetchData(url, type = "text") {
   if (
     (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
     isValidFetchUrl(url, document.baseURI)
@@ -396,34 +44,39 @@ async function fetchData(url, asTypedArray = false) {
     if (!response.ok) {
       throw new Error(response.statusText);
     }
-    return asTypedArray
-      ? new Uint8Array(await response.arrayBuffer())
-      : stringToBytes(await response.text());
+    switch (type) {
+      case "blob":
+        return response.blob();
+      case "bytes":
+        return response.bytes();
+      case "json":
+        return response.json();
+    }
+    return response.text();
   }
 
   // The Fetch API is not supported.
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("GET", url, /* asTypedArray = */ true);
+    request.open("GET", url, /* async = */ true);
+    request.responseType = type === "bytes" ? "arraybuffer" : type;
 
-    if (asTypedArray) {
-      request.responseType = "arraybuffer";
-    }
     request.onreadystatechange = () => {
       if (request.readyState !== XMLHttpRequest.DONE) {
         return;
       }
       if (request.status === 200 || request.status === 0) {
-        let data;
-        if (asTypedArray && request.response) {
-          data = new Uint8Array(request.response);
-        } else if (!asTypedArray && request.responseText) {
-          data = stringToBytes(request.responseText);
+        switch (type) {
+          case "bytes":
+            resolve(new Uint8Array(request.response));
+            return;
+          case "blob":
+          case "json":
+            resolve(request.response);
+            return;
         }
-        if (data) {
-          resolve(data);
-          return;
-        }
+        resolve(request.responseText);
+        return;
       }
       reject(new Error(request.statusText));
     };
@@ -432,39 +85,11 @@ async function fetchData(url, asTypedArray = false) {
   });
 }
 
-class DOMCMapReaderFactory extends BaseCMapReaderFactory {
-  /**
-   * @ignore
-   */
-  _fetchData(url, compressionType) {
-    return fetchData(url, /* asTypedArray = */ this.isCompressed).then(data => {
-      return { cMapData: data, compressionType };
-    });
-  }
-}
-
-class DOMStandardFontDataFactory extends BaseStandardFontDataFactory {
-  /**
-   * @ignore
-   */
-  _fetchData(url) {
-    return fetchData(url, /* asTypedArray = */ true);
-  }
-}
-
-class DOMSVGFactory extends BaseSVGFactory {
-  /**
-   * @ignore
-   */
-  _createSVG(type) {
-    return document.createElementNS(SVG_NS, type);
-  }
-}
-
 /**
  * @typedef {Object} PageViewportParameters
  * @property {Array<number>} viewBox - The xMin, yMin, xMax and
  *   yMax coordinates.
+ * @property {number} userUnit - The size of units.
  * @property {number} scale - The scale of the viewport.
  * @property {number} rotation - The rotation, in degrees, of the viewport.
  * @property {number} [offsetX] - The horizontal, i.e. x-axis, offset. The
@@ -498,6 +123,7 @@ class PageViewport {
    */
   constructor({
     viewBox,
+    userUnit,
     scale,
     rotation,
     offsetX = 0,
@@ -505,10 +131,13 @@ class PageViewport {
     dontFlip = false,
   }) {
     this.viewBox = viewBox;
+    this.userUnit = userUnit;
     this.scale = scale;
     this.rotation = rotation;
     this.offsetX = offsetX;
     this.offsetY = offsetY;
+
+    scale *= userUnit; // Take the userUnit into account.
 
     // creating transform to convert pdf coordinate system to the normal
     // canvas like coordinates taking in account scale and rotation
@@ -590,12 +219,13 @@ class PageViewport {
    * @type {Object}
    */
   get rawDims() {
-    const { viewBox } = this;
+    const dims = this.viewBox;
+
     return shadow(this, "rawDims", {
-      pageWidth: viewBox[2] - viewBox[0],
-      pageHeight: viewBox[3] - viewBox[1],
-      pageX: viewBox[0],
-      pageY: viewBox[1],
+      pageWidth: dims[2] - dims[0],
+      pageHeight: dims[3] - dims[1],
+      pageX: dims[0],
+      pageY: dims[1],
     });
   }
 
@@ -613,6 +243,7 @@ class PageViewport {
   } = {}) {
     return new PageViewport({
       viewBox: this.viewBox.slice(),
+      userUnit: this.userUnit,
       scale,
       rotation,
       offsetX,
@@ -632,7 +263,9 @@ class PageViewport {
    * @see {@link convertToViewportRectangle}
    */
   convertToViewportPoint(x, y) {
-    return Util.applyTransform([x, y], this.transform);
+    const p = [x, y];
+    Util.applyTransform(p, this.transform);
+    return p;
   }
 
   /**
@@ -643,8 +276,10 @@ class PageViewport {
    * @see {@link convertToViewportPoint}
    */
   convertToViewportRectangle(rect) {
-    const topLeft = Util.applyTransform([rect[0], rect[1]], this.transform);
-    const bottomRight = Util.applyTransform([rect[2], rect[3]], this.transform);
+    const topLeft = [rect[0], rect[1]];
+    Util.applyTransform(topLeft, this.transform);
+    const bottomRight = [rect[2], rect[3]];
+    Util.applyTransform(bottomRight, this.transform);
     return [topLeft[0], topLeft[1], bottomRight[0], bottomRight[1]];
   }
 
@@ -658,7 +293,9 @@ class PageViewport {
    * @see {@link convertToViewportPoint}
    */
   convertToPdfPoint(x, y) {
-    return Util.applyInverseTransform([x, y], this.transform);
+    const p = [x, y];
+    Util.applyInverseTransform(p, this.transform);
+    return p;
   }
 }
 
@@ -685,14 +322,11 @@ function isPdfFile(filename) {
 /**
  * Gets the filename from a given URL.
  * @param {string} url
- * @param {boolean} [onlyStripPath]
  * @returns {string}
  */
-function getFilenameFromUrl(url, onlyStripPath = false) {
-  if (!onlyStripPath) {
-    [url] = url.split(/[#?]/, 1);
-  }
-  return url.substring(url.lastIndexOf("/") + 1);
+function getFilenameFromUrl(url) {
+  [url] = url.split(/[#?]/, 1);
+  return stripPath(url);
 }
 
 /**
@@ -710,31 +344,76 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
     warn('getPdfFilenameFromUrl: ignore "data:"-URL for performance reasons.');
     return defaultFilename;
   }
-  const reURI = /^(?:(?:[^:]+:)?\/\/[^/]+)?([^?#]*)(\?[^#]*)?(#.*)?$/;
-  //              SCHEME        HOST        1.PATH  2.QUERY   3.REF
-  // Pattern to get last matching NAME.pdf
-  const reFilename = /[^/?#=]+\.pdf\b(?!.*\.pdf\b)/i;
-  const splitURI = reURI.exec(url);
-  let suggestedFilename =
-    reFilename.exec(splitURI[1]) ||
-    reFilename.exec(splitURI[2]) ||
-    reFilename.exec(splitURI[3]);
-  if (suggestedFilename) {
-    suggestedFilename = suggestedFilename[0];
-    if (suggestedFilename.includes("%")) {
-      // URL-encoded %2Fpath%2Fto%2Ffile.pdf should be file.pdf
+
+  const getURL = urlString => {
+    try {
+      return new URL(urlString);
+    } catch {
       try {
-        suggestedFilename = reFilename.exec(
-          decodeURIComponent(suggestedFilename)
-        )[0];
+        return new URL(decodeURIComponent(urlString));
       } catch {
-        // Possible (extremely rare) errors:
-        // URIError "Malformed URI", e.g. for "%AA.pdf"
-        // TypeError "null has no properties", e.g. for "%2F.pdf"
+        try {
+          // Attempt to parse the URL using the document's base URI.
+          return new URL(urlString, "https://foo.bar");
+        } catch {
+          try {
+            return new URL(decodeURIComponent(urlString), "https://foo.bar");
+          } catch {
+            return null;
+          }
+        }
       }
     }
+  };
+
+  const newURL = getURL(url);
+  if (!newURL) {
+    // If the URL is invalid, return the default filename.
+    return defaultFilename;
   }
-  return suggestedFilename || defaultFilename;
+
+  const decode = name => {
+    try {
+      let decoded = decodeURIComponent(name);
+      if (decoded.includes("/")) {
+        decoded = stripPath(decoded);
+        if (/^\.pdf$/i.test(decoded)) {
+          return name;
+        }
+      }
+      return decoded;
+    } catch {
+      return name;
+    }
+  };
+
+  const pdfRegex = /\.pdf$/i;
+  const filename = stripPath(newURL.pathname);
+  if (pdfRegex.test(filename)) {
+    return decode(filename);
+  }
+
+  if (newURL.searchParams.size > 0) {
+    const getLast = iterator => [...iterator].findLast(v => pdfRegex.test(v));
+
+    // If any of the search parameters ends with ".pdf", return it.
+    const name =
+      getLast(newURL.searchParams.values()) ??
+      getLast(newURL.searchParams.keys());
+    if (name) {
+      return decode(name);
+    }
+  }
+
+  if (newURL.hash) {
+    const reFilename = /[^/?#=]+\.pdf\b(?!.*\.pdf\b)/i;
+    const hashFilename = reFilename.exec(newURL.hash);
+    if (hashFilename) {
+      return decode(hashFilename[0]);
+    }
+  }
+
+  return defaultFilename;
 }
 
 class StatTimer {
@@ -780,13 +459,9 @@ function isValidFetchUrl(url, baseUrl) {
   if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
     throw new Error("Not implemented: isValidFetchUrl");
   }
-  try {
-    const { protocol } = baseUrl ? new URL(url, baseUrl) : new URL(url);
-    // The Fetch API only supports the http/https protocols, and not file/ftp.
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false; // `new URL()` will throw on incorrect data.
-  }
+  const res = baseUrl ? URL.parse(url, baseUrl) : URL.parse(url);
+  // The Fetch API only supports the http/https protocols, and not file/ftp.
+  return /https?:/.test(res?.protocol ?? "");
 }
 
 /**
@@ -796,14 +471,20 @@ function noContextMenu(e) {
   e.preventDefault();
 }
 
+function stopEvent(e) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
 // Deprecated API function -- display regardless of the `verbosity` setting.
 function deprecated(details) {
+  // eslint-disable-next-line no-console
   console.log("Deprecated API usage: " + details);
 }
 
-let pdfDateStringRegex;
-
 class PDFDateString {
+  static #regex;
+
   /**
    * Convert a PDF date string to a JavaScript `Date` object.
    *
@@ -821,12 +502,15 @@ class PDFDateString {
    * @returns {Date|null}
    */
   static toDateObject(input) {
+    if (input instanceof Date) {
+      return input;
+    }
     if (!input || typeof input !== "string") {
       return null;
     }
 
     // Lazily initialize the regular expression.
-    pdfDateStringRegex ||= new RegExp(
+    this.#regex ||= new RegExp(
       "^D:" + // Prefix (required)
         "(\\d{4})" + // Year (required)
         "(\\d{2})?" + // Month (optional)
@@ -844,7 +528,7 @@ class PDFDateString {
     // Optional fields that don't satisfy the requirements from the regular
     // expression (such as incorrect digit counts or numbers that are out of
     // range) will fall back the defaults from the specification.
-    const matches = pdfDateStringRegex.exec(input);
+    const matches = this.#regex.exec(input);
     if (!matches) {
       return null;
     }
@@ -893,6 +577,7 @@ function getXfaPageViewport(xfaPage, { scale = 1, rotation = 0 }) {
 
   return new PageViewport({
     viewBox,
+    userUnit: 1,
     scale,
     rotation,
   });
@@ -931,6 +616,8 @@ function getRGB(color) {
 function getColorValues(colors) {
   const span = document.createElement("span");
   span.style.visibility = "hidden";
+  // NOTE: The following does *not* affect `forced-colors: active` mode.
+  span.style.colorScheme = "only light";
   document.body.append(span);
   for (const name of colors.keys()) {
     span.style.color = name;
@@ -967,10 +654,14 @@ function setLayerDimensions(
     const { style } = div;
     const useRound = FeatureTest.isCSSRoundSupported;
 
-    const w = `var(--scale-factor) * ${pageWidth}px`,
-      h = `var(--scale-factor) * ${pageHeight}px`;
-    const widthStr = useRound ? `round(${w}, 1px)` : `calc(${w})`,
-      heightStr = useRound ? `round(${h}, 1px)` : `calc(${h})`;
+    const w = `var(--total-scale-factor) * ${pageWidth}px`,
+      h = `var(--total-scale-factor) * ${pageHeight}px`;
+    const widthStr = useRound
+        ? `round(down, ${w}, var(--scale-round-x))`
+        : `calc(${w})`,
+      heightStr = useRound
+        ? `round(down, ${h}, var(--scale-round-y))`
+        : `calc(${h})`;
 
     if (!mustFlip || viewport.rotation % 180 === 0) {
       style.width = widthStr;
@@ -986,13 +677,368 @@ function setLayerDimensions(
   }
 }
 
+/**
+ * Scale factors for the canvas, necessary with HiDPI displays.
+ */
+class OutputScale {
+  constructor() {
+    const { pixelRatio } = OutputScale;
+
+    /**
+     * @type {number} Horizontal scale.
+     */
+    this.sx = pixelRatio;
+
+    /**
+     * @type {number} Vertical scale.
+     */
+    this.sy = pixelRatio;
+  }
+
+  /**
+   * @type {boolean} Returns `true` when scaling is required, `false` otherwise.
+   */
+  get scaled() {
+    return this.sx !== 1 || this.sy !== 1;
+  }
+
+  /**
+   * @type {boolean} Returns `true` when scaling is symmetric,
+   *   `false` otherwise.
+   */
+  get symmetric() {
+    return this.sx === this.sy;
+  }
+
+  /**
+   * @returns {boolean} Returns `true` if scaling was limited,
+   *   `false` otherwise.
+   */
+  limitCanvas(width, height, maxPixels, maxDim, capAreaFactor = -1) {
+    let maxAreaScale = Infinity,
+      maxWidthScale = Infinity,
+      maxHeightScale = Infinity;
+
+    maxPixels = OutputScale.capPixels(maxPixels, capAreaFactor);
+    if (maxPixels > 0) {
+      maxAreaScale = Math.sqrt(maxPixels / (width * height));
+    }
+    if (maxDim !== -1) {
+      maxWidthScale = maxDim / width;
+      maxHeightScale = maxDim / height;
+    }
+    const maxScale = Math.min(maxAreaScale, maxWidthScale, maxHeightScale);
+
+    if (this.sx > maxScale || this.sy > maxScale) {
+      this.sx = maxScale;
+      this.sy = maxScale;
+      return true;
+    }
+    return false;
+  }
+
+  static get pixelRatio() {
+    return globalThis.devicePixelRatio || 1;
+  }
+
+  static capPixels(maxPixels, capAreaFactor) {
+    if (capAreaFactor >= 0) {
+      const winPixels = Math.ceil(
+        (typeof PDFJSDev !== "undefined" && PDFJSDev.test("TESTING")
+          ? window.innerWidth * window.innerHeight
+          : window.screen.availWidth * window.screen.availHeight) *
+          this.pixelRatio ** 2 *
+          (1 + capAreaFactor / 100)
+      );
+      return maxPixels > 0 ? Math.min(maxPixels, winPixels) : winPixels;
+    }
+    return maxPixels;
+  }
+}
+
+// See https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Image_types
+// to know which types are supported by the browser.
+const SupportedImageMimeTypes = [
+  "image/apng",
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/svg+xml",
+  "image/webp",
+  "image/x-icon",
+];
+
+class ColorScheme {
+  static get isDarkMode() {
+    return shadow(
+      this,
+      "isDarkMode",
+      !!window?.matchMedia?.("(prefers-color-scheme: dark)").matches
+    );
+  }
+}
+
+class CSSConstants {
+  static get commentForegroundColor() {
+    const element = document.createElement("span");
+    element.classList.add("comment", "sidebar");
+    const { style } = element;
+    style.width = style.height = "0";
+    style.display = "none";
+    style.color = "var(--comment-fg-color)";
+    document.body.append(element);
+    const { color } = window.getComputedStyle(element);
+    element.remove();
+    return shadow(this, "commentForegroundColor", getRGB(color));
+  }
+}
+
+function applyOpacity(r, g, b, opacity) {
+  opacity = MathClamp(opacity ?? 1, 0, 1);
+  const white = 255 * (1 - opacity);
+  r = Math.round(r * opacity + white);
+  g = Math.round(g * opacity + white);
+  b = Math.round(b * opacity + white);
+  return [r, g, b];
+}
+
+function RGBToHSL(rgb, output) {
+  const r = rgb[0] / 255;
+  const g = rgb[1] / 255;
+  const b = rgb[2] / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+
+  if (max === min) {
+    // achromatic
+    output[0] = output[1] = 0; // hue and saturation are 0
+  } else {
+    const d = max - min;
+    output[1] = l < 0.5 ? d / (max + min) : d / (2 - max - min);
+    // hue
+    switch (max) {
+      case r:
+        output[0] = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+        break;
+      case g:
+        output[0] = ((b - r) / d + 2) * 60;
+        break;
+      case b:
+        output[0] = ((r - g) / d + 4) * 60;
+        break;
+    }
+  }
+  output[2] = l;
+}
+
+function HSLToRGB(hsl, output) {
+  const h = hsl[0];
+  const s = hsl[1];
+  const l = hsl[2];
+  const c = (1 - Math.abs(2 * l - 1)) * s; // chroma
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  switch (Math.floor(h / 60)) {
+    case 0:
+      output[0] = c + m;
+      output[1] = x + m;
+      output[2] = m;
+      break;
+    case 1:
+      output[0] = x + m;
+      output[1] = c + m;
+      output[2] = m;
+      break;
+    case 2:
+      output[0] = m;
+      output[1] = c + m;
+      output[2] = x + m;
+      break;
+    case 3:
+      output[0] = m;
+      output[1] = x + m;
+      output[2] = c + m;
+      break;
+    case 4:
+      output[0] = x + m;
+      output[1] = m;
+      output[2] = c + m;
+      break;
+    case 5:
+    case 6:
+      output[0] = c + m;
+      output[1] = m;
+      output[2] = x + m;
+      break;
+  }
+}
+
+function computeLuminance(x) {
+  return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+}
+
+function contrastRatio(hsl1, hsl2, output) {
+  HSLToRGB(hsl1, output);
+  output.map(computeLuminance);
+  const lum1 = 0.2126 * output[0] + 0.7152 * output[1] + 0.0722 * output[2];
+  HSLToRGB(hsl2, output);
+  output.map(computeLuminance);
+  const lum2 = 0.2126 * output[0] + 0.7152 * output[1] + 0.0722 * output[2];
+  return lum1 > lum2
+    ? (lum1 + 0.05) / (lum2 + 0.05)
+    : (lum2 + 0.05) / (lum1 + 0.05);
+}
+
+// Cache for the findContrastColor function, to improve performance.
+const contrastCache = new Map();
+
+/**
+ * Find a color that has sufficient contrast against a fixed color.
+ * The luminance (in HSL color space) of the base color is adjusted
+ * until the contrast ratio between the base color and the fixed color
+ * is at least the minimum contrast ratio required by WCAG 2.1.
+ * @param {Array<number>} baseColor
+ * @param {Array<number>} fixedColor
+ * @returns {string}
+ */
+function findContrastColor(baseColor, fixedColor) {
+  const key =
+    baseColor[0] +
+    baseColor[1] * 0x100 +
+    baseColor[2] * 0x10000 +
+    fixedColor[0] * 0x1000000 +
+    fixedColor[1] * 0x100000000 +
+    fixedColor[2] * 0x10000000000;
+  let cachedValue = contrastCache.get(key);
+  if (cachedValue) {
+    return cachedValue;
+  }
+  const array = new Float32Array(9);
+  const output = array.subarray(0, 3);
+  const baseHSL = array.subarray(3, 6);
+  RGBToHSL(baseColor, baseHSL);
+  const fixedHSL = array.subarray(6, 9);
+  RGBToHSL(fixedColor, fixedHSL);
+  const isFixedColorDark = fixedHSL[2] < 0.5;
+
+  // Use the contrast ratio requirements from WCAG 2.1.
+  // https://www.w3.org/TR/WCAG21/#contrast-minimum
+  // https://www.w3.org/TR/WCAG21/#contrast-enhanced
+  const minContrast = isFixedColorDark ? 12 : 4.5;
+
+  baseHSL[2] = isFixedColorDark
+    ? Math.sqrt(baseHSL[2])
+    : 1 - Math.sqrt(1 - baseHSL[2]);
+
+  if (contrastRatio(baseHSL, fixedHSL, output) < minContrast) {
+    let start, end;
+    if (isFixedColorDark) {
+      start = baseHSL[2];
+      end = 1;
+    } else {
+      start = 0;
+      end = baseHSL[2];
+    }
+    const PRECISION = 0.005;
+    while (end - start > PRECISION) {
+      const mid = (baseHSL[2] = (start + end) / 2);
+      if (
+        isFixedColorDark ===
+        contrastRatio(baseHSL, fixedHSL, output) < minContrast
+      ) {
+        start = mid;
+      } else {
+        end = mid;
+      }
+    }
+    baseHSL[2] = isFixedColorDark ? end : start;
+  }
+
+  HSLToRGB(baseHSL, output);
+  cachedValue = Util.makeHexColor(
+    Math.round(output[0] * 255),
+    Math.round(output[1] * 255),
+    Math.round(output[2] * 255)
+  );
+  contrastCache.set(key, cachedValue);
+  return cachedValue;
+}
+
+function renderRichText({ html, dir, className }, container) {
+  const fragment = document.createDocumentFragment();
+  if (typeof html === "string") {
+    const p = document.createElement("p");
+    p.dir = dir || "auto";
+    const lines = html.split(/(?:\r\n?|\n)/);
+    for (let i = 0, ii = lines.length; i < ii; ++i) {
+      const line = lines[i];
+      p.append(document.createTextNode(line));
+      if (i < ii - 1) {
+        p.append(document.createElement("br"));
+      }
+    }
+    fragment.append(p);
+  } else {
+    XfaLayer.render({
+      xfaHtml: html,
+      div: fragment,
+      intent: "richText",
+    });
+  }
+  fragment.firstElementChild.classList.add("richText", className);
+  container.append(fragment);
+}
+
+function makePathFromDrawOPS(data) {
+  // Using a SVG string is slightly slower than using the following loop.
+  const path = new Path2D();
+  if (!data) {
+    return path;
+  }
+  for (let i = 0, ii = data.length; i < ii; ) {
+    switch (data[i++]) {
+      case DrawOPS.moveTo:
+        path.moveTo(data[i++], data[i++]);
+        break;
+      case DrawOPS.lineTo:
+        path.lineTo(data[i++], data[i++]);
+        break;
+      case DrawOPS.curveTo:
+        path.bezierCurveTo(
+          data[i++],
+          data[i++],
+          data[i++],
+          data[i++],
+          data[i++],
+          data[i++]
+        );
+        break;
+      case DrawOPS.quadraticCurveTo:
+        path.quadraticCurveTo(data[i++], data[i++], data[i++], data[i++]);
+        break;
+      case DrawOPS.closePath:
+        path.closePath();
+        break;
+      default:
+        warn(`Unrecognized drawing path operator: ${data[i - 1]}`);
+        break;
+    }
+  }
+  return path;
+}
+
 export {
+  applyOpacity,
+  ColorScheme,
+  CSSConstants,
   deprecated,
-  DOMCanvasFactory,
-  DOMCMapReaderFactory,
-  DOMFilterFactory,
-  DOMStandardFontDataFactory,
-  DOMSVGFactory,
+  fetchData,
+  findContrastColor,
   getColorValues,
   getCurrentTransform,
   getCurrentTransformInverse,
@@ -1003,11 +1049,17 @@ export {
   isDataScheme,
   isPdfFile,
   isValidFetchUrl,
+  makePathFromDrawOPS,
   noContextMenu,
+  OutputScale,
   PageViewport,
   PDFDateString,
   PixelsPerInch,
   RenderingCancelledException,
+  renderRichText,
   setLayerDimensions,
   StatTimer,
+  stopEvent,
+  SupportedImageMimeTypes,
+  SVG_NS,
 };

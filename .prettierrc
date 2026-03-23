@@ -5,5 +5,21 @@
   "semi": true,
   "tabWidth": 2,
   "trailingComma": "es5",
-  "useTabs": false
+  "useTabs": false,
+
+  "overrides": [
+    {
+      "files": ["tsconfig.json", ".prettierrc"],
+      "options": {
+        "parser": "json"
+      }
+    },
+    {
+      "files": ["**/*.html"],
+      "options": {
+        "parser": "html",
+        "printWidth": 160
+      }
+    }
+  ]
 }

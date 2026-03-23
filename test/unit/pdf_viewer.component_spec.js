@@ -22,7 +22,6 @@ import {
 import {
   parseQueryString,
   ProgressBar,
-  RenderingStates,
   ScrollMode,
   SpreadMode,
 } from "../../web/ui_utils.js";
@@ -30,16 +29,40 @@ import { AnnotationLayerBuilder } from "../../web/annotation_layer_builder.js";
 import { DownloadManager } from "../../web/download_manager.js";
 import { EventBus } from "../../web/event_utils.js";
 import { GenericL10n } from "../../web/genericl10n.js";
-import { L10n } from "../../web/l10n.js";
-import { NullL10n } from "../../web/l10n_utils.js";
 import { PDFHistory } from "../../web/pdf_history.js";
 import { PDFPageView } from "../../web/pdf_page_view.js";
 import { PDFScriptingManager } from "../../web/pdf_scripting_manager.component.js";
 import { PDFSinglePageViewer } from "../../web/pdf_single_page_viewer.js";
 import { PDFViewer } from "../../web/pdf_viewer.js";
+import { RenderingStates } from "../../web/renderable_view.js";
 import { StructTreeLayerBuilder } from "../../web/struct_tree_layer_builder.js";
 import { TextLayerBuilder } from "../../web/text_layer_builder.js";
 import { XfaLayerBuilder } from "../../web/xfa_layer_builder.js";
+
+const expectedAPI = Object.freeze({
+  AnnotationLayerBuilder,
+  DownloadManager,
+  EventBus,
+  FindState,
+  GenericL10n,
+  LinkTarget,
+  parseQueryString,
+  PDFFindController,
+  PDFHistory,
+  PDFLinkService,
+  PDFPageView,
+  PDFScriptingManager,
+  PDFSinglePageViewer,
+  PDFViewer,
+  ProgressBar,
+  RenderingStates,
+  ScrollMode,
+  SimpleLinkService,
+  SpreadMode,
+  StructTreeLayerBuilder,
+  TextLayerBuilder,
+  XfaLayerBuilder,
+});
 
 describe("pdfviewer_api", function () {
   it("checks that the *official* PDF.js-viewer API exposes the expected functionality", async function () {
@@ -47,40 +70,10 @@ describe("pdfviewer_api", function () {
 
     // The imported Object contains an (automatically) inserted Symbol,
     // hence we copy the data to allow using a simple comparison below.
-    expect({ ...pdfviewerAPI }).toEqual({
-      AnnotationLayerBuilder,
-      DownloadManager,
-      EventBus,
-      FindState,
-      GenericL10n,
-      LinkTarget,
-      NullL10n,
-      parseQueryString,
-      PDFFindController,
-      PDFHistory,
-      PDFLinkService,
-      PDFPageView,
-      PDFScriptingManager,
-      PDFSinglePageViewer,
-      PDFViewer,
-      ProgressBar,
-      RenderingStates,
-      ScrollMode,
-      SimpleLinkService,
-      SpreadMode,
-      StructTreeLayerBuilder,
-      TextLayerBuilder,
-      XfaLayerBuilder,
-    });
-  });
+    expect({ ...pdfviewerAPI }).toEqual(expectedAPI);
 
-  it("checks that `NullL10n` implements all methods", function () {
-    const methods = Object.getOwnPropertyNames(NullL10n).sort();
-
-    const baseMethods = Object.getOwnPropertyNames(L10n.prototype)
-      .filter(m => m !== "constructor" && !m.startsWith("_"))
-      .sort();
-
-    expect(methods).toEqual(baseMethods);
+    expect(Object.keys(globalThis.pdfjsViewer).sort()).toEqual(
+      Object.keys(expectedAPI).sort()
+    );
   });
 });

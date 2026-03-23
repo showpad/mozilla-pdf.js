@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-import { closePages, loadAndWait } from "./test_utils.mjs";
+import { closePages, FSI, loadAndWait, PDI } from "./test_utils.mjs";
 
 function fuzzyMatch(a, b, browserName, pixelFuzz = 3) {
   expect(a)
@@ -28,66 +28,80 @@ describe("find bar", () => {
   describe("highlight all", () => {
     let pages;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       pages = await loadAndWait("find_all.pdf", ".textLayer", 100);
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       await closePages(pages);
     });
 
     it("must highlight text in the right position", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          await page.click("#viewFind");
-          await page.waitForSelector("#viewFind", { hidden: false });
+          // Highlight all occurrences of the letter A (case insensitive).
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { visible: true });
           await page.type("#findInput", "a");
-          await page.click("#findHighlightAll");
+          await page.click("#findHighlightAll + label");
           await page.waitForSelector(".textLayer .highlight");
-          // The PDF has the text "AB BA" in a monospace font.
-          // Make sure we have the right number of highlighted divs.
+
+          // The PDF file contains the text 'AB BA' in a monospace font on a
+          // single line. Check if the two occurrences of A are highlighted.
           const highlights = await page.$$(".textLayer .highlight");
           expect(highlights.length).withContext(`In ${browserName}`).toEqual(2);
-          const glyphWidth = 15.98; // From the PDF.
-          const pageDiv = await page.$(".page canvas");
-          const pageBox = await pageDiv.boundingBox();
+
+          // Normalize the highlight's height. The font data in the PDF sets the
+          // size of the glyphs (and therefore the size of the highlights), but
+          // the viewer applies extra padding to them. For the comparison we
+          // therefore use the unpadded, glyph-sized parent element's height.
+          const parentSpan = (await highlights[0].$$("xpath/.."))[0];
+          const parentBox = await parentSpan.boundingBox();
           const firstA = await highlights[0].boundingBox();
           const secondA = await highlights[1].boundingBox();
-          // Subtract the page offset from the text bounding boxes;
-          firstA.x -= pageBox.x;
-          firstA.y -= pageBox.y;
-          secondA.x -= pageBox.x;
-          secondA.y -= pageBox.y;
-          // They should be on the same line.
+          firstA.height = parentBox.height;
+          secondA.height = parentBox.height;
+
+          // Check if the vertical position of the highlights is correct. Both
+          // should be on a single line.
           expect(firstA.y).withContext(`In ${browserName}`).toEqual(secondA.y);
+
+          // Check if the height of the two highlights is correct. Both should
+          // match the font size.
           const fontSize = 26.66; // From the PDF.
-          // The highlighted text has more padding.
-          fuzzyMatch(firstA.height, fontSize + 5, browserName);
-          fuzzyMatch(secondA.height, fontSize + 5, browserName);
-          const expectedFirstAX = 28;
-          fuzzyMatch(firstA.x, expectedFirstAX, browserName);
-          // The second 'A' should be 4 glyphs widths from the first.
-          fuzzyMatch(secondA.x, expectedFirstAX + glyphWidth * 4, browserName);
+          fuzzyMatch(firstA.height, fontSize, browserName);
+          fuzzyMatch(secondA.height, fontSize, browserName);
+
+          // Check if the horizontal position of the highlights is correct. The
+          // second occurrence should be four glyph widths (three letters and
+          // one space) away from the first occurrence.
+          const pageDiv = await page.$(".page canvas");
+          const pageBox = await pageDiv.boundingBox();
+          const expectedFirstAX = 30; // From the PDF.
+          const glyphWidth = 15.98; // From the PDF.
+          fuzzyMatch(firstA.x, pageBox.x + expectedFirstAX, browserName);
+          fuzzyMatch(secondA.x, firstA.x + glyphWidth * 4, browserName);
         })
       );
     });
   });
-  describe("highlight all", () => {
+
+  describe("highlight all (XFA)", () => {
     let pages;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       pages = await loadAndWait("xfa_imm5257e.pdf", ".xfaLayer");
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       await closePages(pages);
     });
 
     it("must search xfa correctly", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          await page.click("#viewFind");
-          await page.waitForSelector("#viewFind", { hidden: false });
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { visible: true });
           await page.type("#findInput", "preferences");
           await page.waitForSelector("#findInput[data-status='']");
           await page.waitForSelector(".xfaLayer .highlight");
@@ -96,10 +110,6 @@ describe("find bar", () => {
           );
           const resultElement = await page.waitForSelector("#findResultsCount");
           const resultText = await resultElement.evaluate(el => el.textContent);
-          /** Unicode bidi isolation characters. */
-          const FSI = "\u2068";
-          const PDI = "\u2069";
-          // Fluent adds these markers to the result text.
           expect(resultText).toEqual(`${FSI}1${PDI} of ${FSI}1${PDI} match`);
           const selectedElement = await page.waitForSelector(
             ".highlight.selected"
@@ -108,6 +118,113 @@ describe("find bar", () => {
             el => el.textContent
           );
           expect(selectedText).toEqual("Preferences");
+        })
+      );
+    });
+  });
+
+  describe("issue19207.pdf", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("issue19207.pdf", ".textLayer", 200);
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must scroll to the search result text", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          // Search for "40"
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { visible: true });
+          await page.type("#findInput", "40");
+
+          const highlight = await page.waitForSelector(".textLayer .highlight");
+
+          expect(await highlight.isIntersectingViewport()).toBeTrue();
+        })
+      );
+    });
+  });
+
+  describe("scrolls to the search result text for smaller viewports", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("tracemonkey.pdf", ".textLayer", 100);
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must scroll to the search result text", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          // Set a smaller viewport to simulate a mobile device
+          await page.setViewport({ width: 350, height: 600 });
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { visible: true });
+          await page.type("#findInput", "productivity");
+
+          const highlight = await page.waitForSelector(".textLayer .highlight");
+
+          expect(await highlight.isIntersectingViewport()).toBeTrue();
+        })
+      );
+    });
+  });
+
+  describe("Check that the search results are correctly visible in rotated PDFs (bug 2021392)", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "hello_world_rotated.pdf",
+        ".textLayer",
+        "page-fit"
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must scroll each match into the viewport when navigating search results", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { visible: true });
+          await page.type("#findInput", "hello");
+          await page.waitForSelector("#findInput[data-status='']");
+
+          for (let i = 0; i < 5; i++) {
+            if (i > 0) {
+              await page.click("#findNextButton");
+              await page.waitForSelector("#findInput[data-status='']");
+            }
+
+            // Verify we are on the expected match number.
+            const resultElement =
+              await page.waitForSelector("#findResultsCount");
+            const resultText = await resultElement.evaluate(
+              el => el.textContent
+            );
+            expect(resultText)
+              .withContext(`In ${browserName}, match ${i + 1}`)
+              .toEqual(`${FSI}${i + 1}${PDI} of ${FSI}5${PDI} matches`);
+
+            // The selected highlight must be visible in the viewport.
+            const selected = await page.waitForSelector(
+              ".textLayer .highlight.selected"
+            );
+            expect(await selected.isIntersectingViewport())
+              .withContext(`In ${browserName}, match ${i + 1}`)
+              .toBeTrue();
+          }
         })
       );
     });

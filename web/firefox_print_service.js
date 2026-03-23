@@ -19,8 +19,10 @@ import {
   RenderingCancelledException,
   shadow,
 } from "pdfjs-lib";
-import { getXfaHtmlForPrinting } from "./print_utils.js";
-import { PDFPrintServiceFactory } from "./app.js";
+import {
+  BasePrintServiceFactory,
+  getXfaHtmlForPrinting,
+} from "./print_utils.js";
 
 // Creates a placeholder with div and canvas with right size for the page.
 function composePage(
@@ -74,6 +76,7 @@ function composePage(
         }
         const renderContext = {
           canvasContext: ctx,
+          canvas: null,
           transform: [PRINT_UNITS, 0, 0, PRINT_UNITS, 0, 0],
           viewport: pdfPage.getViewport({ scale: 1, rotation: size.rotation }),
           intent: "print",
@@ -115,20 +118,20 @@ function composePage(
 }
 
 class FirefoxPrintService {
-  constructor(
+  constructor({
     pdfDocument,
     pagesOverview,
     printContainer,
     printResolution,
-    optionalContentConfigPromise = null,
-    printAnnotationStoragePromise = null
-  ) {
+    printAnnotationStoragePromise = null,
+  }) {
     this.pdfDocument = pdfDocument;
     this.pagesOverview = pagesOverview;
     this.printContainer = printContainer;
     this._printResolution = printResolution || 150;
-    this._optionalContentConfigPromise =
-      optionalContentConfigPromise || pdfDocument.getOptionalContentConfig();
+    this._optionalContentConfigPromise = pdfDocument.getOptionalContentConfig({
+      intent: "print",
+    });
     this._printAnnotationStoragePromise =
       printAnnotationStoragePromise || Promise.resolve();
   }
@@ -194,31 +197,15 @@ class FirefoxPrintService {
   }
 }
 
-PDFPrintServiceFactory.instance = {
-  get supportsPrinting() {
+class PDFPrintServiceFactory extends BasePrintServiceFactory {
+  static get supportsPrinting() {
     const canvas = document.createElement("canvas");
-    const value = "mozPrintCallback" in canvas;
+    return shadow(this, "supportsPrinting", "mozPrintCallback" in canvas);
+  }
 
-    return shadow(this, "supportsPrinting", value);
-  },
+  static createPrintService(params) {
+    return new FirefoxPrintService(params);
+  }
+}
 
-  createPrintService(
-    pdfDocument,
-    pagesOverview,
-    printContainer,
-    printResolution,
-    optionalContentConfigPromise,
-    printAnnotationStoragePromise
-  ) {
-    return new FirefoxPrintService(
-      pdfDocument,
-      pagesOverview,
-      printContainer,
-      printResolution,
-      optionalContentConfigPromise,
-      printAnnotationStoragePromise
-    );
-  },
-};
-
-export { FirefoxPrintService };
+export { PDFPrintServiceFactory };

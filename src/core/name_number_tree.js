@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-import { Dict, RefSet } from "./primitives.js";
+import { Dict, Ref, RefSet } from "./primitives.js";
 import { FormatError, unreachable, warn } from "../shared/util.js";
 
 /**
@@ -23,7 +23,10 @@ import { FormatError, unreachable, warn } from "../shared/util.js";
  */
 class NameOrNumberTree {
   constructor(root, xref, type) {
-    if (this.constructor === NameOrNumberTree) {
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
+      this.constructor === NameOrNumberTree
+    ) {
       unreachable("Cannot initialize NameOrNumberTree.");
     }
     this.root = root;
@@ -31,7 +34,7 @@ class NameOrNumberTree {
     this._type = type;
   }
 
-  getAll() {
+  getAll(isRaw = false) {
     const map = new Map();
     if (!this.root) {
       return map;
@@ -39,7 +42,9 @@ class NameOrNumberTree {
     const xref = this.xref;
     // Reading Name/Number tree.
     const processed = new RefSet();
-    processed.put(this.root);
+    if (this.root instanceof Ref) {
+      processed.put(this.root);
+    }
     const queue = [this.root];
     while (queue.length > 0) {
       const obj = xref.fetchIfRef(queue.shift());
@@ -52,11 +57,13 @@ class NameOrNumberTree {
           continue;
         }
         for (const kid of kids) {
-          if (processed.has(kid)) {
-            throw new FormatError(`Duplicate entry in "${this._type}" tree.`);
+          if (kid instanceof Ref) {
+            if (processed.has(kid)) {
+              throw new FormatError(`Duplicate entry in "${this._type}" tree.`);
+            }
+            processed.put(kid);
           }
           queue.push(kid);
-          processed.put(kid);
         }
         continue;
       }
@@ -65,13 +72,16 @@ class NameOrNumberTree {
         continue;
       }
       for (let i = 0, ii = entries.length; i < ii; i += 2) {
-        map.set(xref.fetchIfRef(entries[i]), xref.fetchIfRef(entries[i + 1]));
+        map.set(
+          xref.fetchIfRef(entries[i]),
+          isRaw ? entries[i + 1] : xref.fetchIfRef(entries[i + 1])
+        );
       }
     }
     return map;
   }
 
-  get(key) {
+  getRaw(key) {
     if (!this.root) {
       return null;
     }
@@ -132,11 +142,15 @@ class NameOrNumberTree {
         } else if (key > currentKey) {
           l = m + 2;
         } else {
-          return xref.fetchIfRef(entries[m + 1]);
+          return entries[m + 1];
         }
       }
     }
     return null;
+  }
+
+  get(key) {
+    return this.xref.fetchIfRef(this.getRaw(key));
   }
 }
 

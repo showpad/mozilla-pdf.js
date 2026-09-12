@@ -33,52 +33,39 @@ import {
 } from "../../src/shared/util.js";
 import { calculateMD5 } from "../../src/core/calculate_md5.js";
 import { calculateSHA256 } from "../../src/core/calculate_sha256.js";
+import { saslPrep } from "../../src/core/sasl_prep.js";
 
 describe("crypto", function () {
-  function hex2binary(s) {
-    const digits = "0123456789ABCDEF";
-    s = s.toUpperCase();
-    const n = s.length >> 1;
-    const result = new Uint8Array(n);
-    for (let i = 0, j = 0; i < n; ++i) {
-      const d1 = s.charAt(j++);
-      const d2 = s.charAt(j++);
-      const value = (digits.indexOf(d1) << 4) | digits.indexOf(d2);
-      result[i] = value;
-    }
-    return result;
-  }
-
   // RFC 1321, A.5 Test suite
   describe("calculateMD5", function () {
     it("should pass RFC 1321 test #1", function () {
       const input = stringToBytes("");
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("d41d8cd98f00b204e9800998ecf8427e");
+      const expected = Uint8Array.fromHex("d41d8cd98f00b204e9800998ecf8427e");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #2", function () {
       const input = stringToBytes("a");
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("0cc175b9c0f1b6a831c399e269772661");
+      const expected = Uint8Array.fromHex("0cc175b9c0f1b6a831c399e269772661");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #3", function () {
       const input = stringToBytes("abc");
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("900150983cd24fb0d6963f7d28e17f72");
+      const expected = Uint8Array.fromHex("900150983cd24fb0d6963f7d28e17f72");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #4", function () {
       const input = stringToBytes("message digest");
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("f96b697d7cb7938d525a2f31aaf161d0");
+      const expected = Uint8Array.fromHex("f96b697d7cb7938d525a2f31aaf161d0");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #5", function () {
       const input = stringToBytes("abcdefghijklmnopqrstuvwxyz");
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("c3fcd3d76192e4007dfb496cca67e13b");
+      const expected = Uint8Array.fromHex("c3fcd3d76192e4007dfb496cca67e13b");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #6", function () {
@@ -86,7 +73,7 @@ describe("crypto", function () {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
       );
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("d174ab98d277d9f5a5611c2c9f419d9f");
+      const expected = Uint8Array.fromHex("d174ab98d277d9f5a5611c2c9f419d9f");
       expect(result).toEqual(expected);
     });
     it("should pass RFC 1321 test #7", function () {
@@ -95,7 +82,7 @@ describe("crypto", function () {
           "90123456789012345678901234567890"
       );
       const result = calculateMD5(input, 0, input.length);
-      const expected = hex2binary("57edf4a22be3c955ac49da2e2107b67a");
+      const expected = Uint8Array.fromHex("57edf4a22be3c955ac49da2e2107b67a");
       expect(result).toEqual(expected);
     });
   });
@@ -103,40 +90,40 @@ describe("crypto", function () {
   // http://www.freemedialibrary.com/index.php/RC4_test_vectors are used
   describe("ARCFourCipher", function () {
     it("should pass test #1", function () {
-      const key = hex2binary("0123456789abcdef");
-      const input = hex2binary("0123456789abcdef");
+      const key = Uint8Array.fromHex("0123456789abcdef");
+      const input = Uint8Array.fromHex("0123456789abcdef");
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary("75b7878099e0c596");
+      const expected = Uint8Array.fromHex("75b7878099e0c596");
       expect(result).toEqual(expected);
     });
     it("should pass test #2", function () {
-      const key = hex2binary("0123456789abcdef");
-      const input = hex2binary("0000000000000000");
+      const key = Uint8Array.fromHex("0123456789abcdef");
+      const input = Uint8Array.fromHex("0000000000000000");
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary("7494c2e7104b0879");
+      const expected = Uint8Array.fromHex("7494c2e7104b0879");
       expect(result).toEqual(expected);
     });
     it("should pass test #3", function () {
-      const key = hex2binary("0000000000000000");
-      const input = hex2binary("0000000000000000");
+      const key = Uint8Array.fromHex("0000000000000000");
+      const input = Uint8Array.fromHex("0000000000000000");
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary("de188941a3375d3a");
+      const expected = Uint8Array.fromHex("de188941a3375d3a");
       expect(result).toEqual(expected);
     });
     it("should pass test #4", function () {
-      const key = hex2binary("ef012345");
-      const input = hex2binary("00000000000000000000");
+      const key = Uint8Array.fromHex("ef012345");
+      const input = Uint8Array.fromHex("00000000000000000000");
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary("d6a141a7ec3c38dfbd61");
+      const expected = Uint8Array.fromHex("d6a141a7ec3c38dfbd61");
       expect(result).toEqual(expected);
     });
     it("should pass test #5", function () {
-      const key = hex2binary("0123456789abcdef");
-      const input = hex2binary(
+      const key = Uint8Array.fromHex("0123456789abcdef");
+      const input = Uint8Array.fromHex(
         "010101010101010101010101010101010101010101010101010" +
           "10101010101010101010101010101010101010101010101010101010101010101010" +
           "10101010101010101010101010101010101010101010101010101010101010101010" +
@@ -156,7 +143,7 @@ describe("crypto", function () {
       );
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "7595c3e6114a09780c4ad452338e1ffd9a1be9498f813d76" +
           "533449b6778dcad8c78a8d2ba9ac66085d0e53d59c26c2d1c490c1ebbe0ce66d1b6b" +
           "1b13b6b919b847c25a91447a95e75e4ef16779cde8bf0a95850e32af9689444fd377" +
@@ -177,15 +164,15 @@ describe("crypto", function () {
       expect(result).toEqual(expected);
     });
     it("should pass test #6", function () {
-      const key = hex2binary("fb029e3031323334");
-      const input = hex2binary(
+      const key = Uint8Array.fromHex("fb029e3031323334");
+      const input = Uint8Array.fromHex(
         "aaaa0300000008004500004e661a00008011be640a0001220af" +
           "fffff00890089003a000080a601100001000000000000204543454a4548454346434" +
           "550464545494546464343414341434143414341414100002000011bd0b604"
       );
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "f69c5806bd6ce84626bcbefb9474650aad1f7909b0f64d5f" +
           "58a503a258b7ed22eb0ea64930d3a056a55742fcce141d485f8aa836dea18df42c53" +
           "80805ad0c61a5d6f58f41040b24b7d1a693856ed0d4398e7aee3bf0e2a2ca8f7"
@@ -193,13 +180,13 @@ describe("crypto", function () {
       expect(result).toEqual(expected);
     });
     it("should pass test #7", function () {
-      const key = hex2binary("0123456789abcdef");
-      const input = hex2binary(
+      const key = Uint8Array.fromHex("0123456789abcdef");
+      const input = Uint8Array.fromHex(
         "123456789abcdef0123456789abcdef0123456789abcdef012345678"
       );
       const cipher = new ARCFourCipher(key);
       const result = cipher.encryptBlock(input);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "66a0949f8af7d6891f7f832ba833c00c892ebe30143ce28740011ecf"
       );
       expect(result).toEqual(expected);
@@ -210,7 +197,7 @@ describe("crypto", function () {
     it("should properly hash abc", function () {
       const input = stringToBytes("abc");
       const result = calculateSHA256(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
       );
       expect(result).toEqual(expected);
@@ -220,7 +207,7 @@ describe("crypto", function () {
         "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
       );
       const result = calculateSHA256(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1"
       );
       expect(result).toEqual(expected);
@@ -231,7 +218,7 @@ describe("crypto", function () {
     it("should properly hash abc", function () {
       const input = stringToBytes("abc");
       const result = calculateSHA384(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "CB00753F45A35E8BB5A03D699AC65007272C32AB0EDED163" +
           "1A8B605A43FF5BED8086072BA1E7CC2358BAECA134C825A7"
       );
@@ -244,7 +231,7 @@ describe("crypto", function () {
           "mnopqrstnopqrstu"
       );
       const result = calculateSHA384(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "09330C33F71147E83D192FC782CD1B4753111B173B3B05D2" +
           "2FA08086E3B0F712FCC7C71A557E2DB966C3E9FA91746039"
       );
@@ -256,7 +243,7 @@ describe("crypto", function () {
     it("should properly hash abc", function () {
       const input = stringToBytes("abc");
       const result = calculateSHA512(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "DDAF35A193617ABACC417349AE20413112E6FA4E89A97EA2" +
           "0A9EEEE64B55D39A2192992A274FC1A836BA3C23A3FEEBBD" +
           "454D4423643CE80E2A9AC94FA54CA49F"
@@ -270,7 +257,7 @@ describe("crypto", function () {
           "mnopqrstnopqrstu"
       );
       const result = calculateSHA512(input, 0, input.length);
-      const expected = hex2binary(
+      const expected = Uint8Array.fromHex(
         "8E959B75DAE313DA8CF4F72814FC143F8F7779C6EB9F7FA1" +
           "7299AEADB6889018501D289E4900F7E4331B99DEC4B5433A" +
           "C7D329EEB6DD26545E96E55B874BE909"
@@ -282,26 +269,25 @@ describe("crypto", function () {
   describe("AES128", function () {
     describe("Encryption", function () {
       it("should be able to encrypt a block", function () {
-        const input = hex2binary("00112233445566778899aabbccddeeff");
-        const key = hex2binary("000102030405060708090a0b0c0d0e0f");
-        const iv = hex2binary("00000000000000000000000000000000");
+        const input = Uint8Array.fromHex("00112233445566778899aabbccddeeff");
+        const key = Uint8Array.fromHex("000102030405060708090a0b0c0d0e0f");
+        const iv = Uint8Array.fromHex("00000000000000000000000000000000");
         const cipher = new AES128Cipher(key);
         const result = cipher.encrypt(input, iv);
-        const expected = hex2binary("69c4e0d86a7b0430d8cdb78070b4c55a");
+        const expected = Uint8Array.fromHex("69c4e0d86a7b0430d8cdb78070b4c55a");
         expect(result).toEqual(expected);
       });
     });
 
     describe("Decryption", function () {
       it("should be able to decrypt a block with IV in stream", function () {
-        const input = hex2binary(
-          "0000000000000000000000000000000069c4e0d86a7b0430d" +
-            "8cdb78070b4c55a"
+        const input = Uint8Array.fromHex(
+          "0000000000000000000000000000000069c4e0d86a7b0430d8cdb78070b4c55a"
         );
-        const key = hex2binary("000102030405060708090a0b0c0d0e0f");
+        const key = Uint8Array.fromHex("000102030405060708090a0b0c0d0e0f");
         const cipher = new AES128Cipher(key);
         const result = cipher.decryptBlock(input);
-        const expected = hex2binary("00112233445566778899aabbccddeeff");
+        const expected = Uint8Array.fromHex("00112233445566778899aabbccddeeff");
         expect(result).toEqual(expected);
       });
     });
@@ -310,44 +296,40 @@ describe("crypto", function () {
   describe("AES256", function () {
     describe("Encryption", function () {
       it("should be able to encrypt a block", function () {
-        const input = hex2binary("00112233445566778899aabbccddeeff");
-        const key = hex2binary(
-          "000102030405060708090a0b0c0d0e0f101112131415161718" +
-            "191a1b1c1d1e1f"
+        const input = Uint8Array.fromHex("00112233445566778899aabbccddeeff");
+        const key = Uint8Array.fromHex(
+          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
-        const iv = hex2binary("00000000000000000000000000000000");
+        const iv = Uint8Array.fromHex("00000000000000000000000000000000");
         const cipher = new AES256Cipher(key);
         const result = cipher.encrypt(input, iv);
-        const expected = hex2binary("8ea2b7ca516745bfeafc49904b496089");
+        const expected = Uint8Array.fromHex("8ea2b7ca516745bfeafc49904b496089");
         expect(result).toEqual(expected);
       });
     });
 
     describe("Decryption", function () {
       it("should be able to decrypt a block with specified iv", function () {
-        const input = hex2binary("8ea2b7ca516745bfeafc49904b496089");
-        const key = hex2binary(
-          "000102030405060708090a0b0c0d0e0f101112131415161718" +
-            "191a1b1c1d1e1f"
+        const input = Uint8Array.fromHex("8ea2b7ca516745bfeafc49904b496089");
+        const key = Uint8Array.fromHex(
+          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
-        const iv = hex2binary("00000000000000000000000000000000");
+        const iv = Uint8Array.fromHex("00000000000000000000000000000000");
         const cipher = new AES256Cipher(key);
         const result = cipher.decryptBlock(input, false, iv);
-        const expected = hex2binary("00112233445566778899aabbccddeeff");
+        const expected = Uint8Array.fromHex("00112233445566778899aabbccddeeff");
         expect(result).toEqual(expected);
       });
       it("should be able to decrypt a block with IV in stream", function () {
-        const input = hex2binary(
-          "000000000000000000000000000000008ea2b7ca516745bf" +
-            "eafc49904b496089"
+        const input = Uint8Array.fromHex(
+          "000000000000000000000000000000008ea2b7ca516745bfeafc49904b496089"
         );
-        const key = hex2binary(
-          "000102030405060708090a0b0c0d0e0f101112131415161718" +
-            "191a1b1c1d1e1f"
+        const key = Uint8Array.fromHex(
+          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         );
         const cipher = new AES256Cipher(key);
         const result = cipher.decryptBlock(input, false);
-        const expected = hex2binary("00112233445566778899aabbccddeeff");
+        const expected = Uint8Array.fromHex("00112233445566778899aabbccddeeff");
         expect(result).toEqual(expected);
       });
     });
@@ -370,7 +352,7 @@ describe("crypto", function () {
         userValidation,
         userPassword
       );
-      expect(result).toEqual(true);
+      expect(result).toBeTrue();
     });
 
     it("should correctly check an owner key", function () {
@@ -396,7 +378,7 @@ describe("crypto", function () {
         uBytes,
         ownerPassword
       );
-      expect(result).toEqual(true);
+      expect(result).toBeTrue();
     });
 
     it("should generate a file encryption key from the user key", function () {
@@ -463,7 +445,7 @@ describe("crypto", function () {
         userValidation,
         userPassword
       );
-      expect(result).toEqual(true);
+      expect(result).toBeTrue();
     });
 
     it("should correctly check an owner key", function () {
@@ -488,7 +470,7 @@ describe("crypto", function () {
         uBytes,
         ownerPassword
       );
-      expect(result).toEqual(true);
+      expect(result).toBeTrue();
     });
 
     it("should generate a file encryption key from the user key", function () {
@@ -538,6 +520,47 @@ describe("crypto", function () {
   });
 });
 
+describe("saslPrep", function () {
+  it("should leave ASCII strings unchanged", function () {
+    expect(saslPrep("")).toEqual("");
+    expect(saslPrep("password")).toEqual("password");
+  });
+
+  it("should map non-ASCII space characters to U+0020", function () {
+    expect(saslPrep("a\u00A0b")).toEqual("a b");
+    expect(saslPrep("a\u2003b")).toEqual("a b");
+    expect(saslPrep("a\u3000b")).toEqual("a b");
+  });
+
+  it("should remove characters commonly mapped to nothing", function () {
+    expect(saslPrep("pass\u00ADword")).toEqual("password");
+    expect(saslPrep("a\u200Db")).toEqual("ab");
+    expect(saslPrep("a\uFEFFb")).toEqual("ab");
+  });
+
+  it("should apply NFKC normalization", function () {
+    expect(saslPrep("\u00AA")).toEqual("a");
+    expect(saslPrep("\u2168")).toEqual("IX");
+    expect(saslPrep("\uFB01")).toEqual("fi");
+  });
+
+  it("should tolerate bidirectional text rejected by SASLprep", function () {
+    // A RandALCat character followed by a non-RandALCat character would fail
+    // the SASLprep bidirectional-text check, which we intentionally omit.
+    expect(saslPrep("\u0627\u0031")).toEqual("\u0627\u0031");
+  });
+
+  it("should normalize using the runtime Unicode version", function () {
+    // U+1D2C was unassigned in Unicode 3.2, on which SASLprep is based, but
+    // current Unicode normalization maps it to LATIN CAPITAL LETTER A.
+    expect(saslPrep("\u1D2C")).toEqual("A");
+  });
+
+  it("should prepare the password `SªSL­prep`", function () {
+    expect(saslPrep("SªSL­prep")).toEqual("SaSLprep");
+  });
+});
+
 describe("CipherTransformFactory", function () {
   function buildDict(map) {
     const dict = new Dict();
@@ -550,10 +573,10 @@ describe("CipherTransformFactory", function () {
   function ensurePasswordCorrect(dict, fileId, password) {
     try {
       const factory = new CipherTransformFactory(dict, fileId, password);
-      expect("createCipherTransform" in factory).toEqual(true);
+      expect("createCipherTransform" in factory).toBeTrue();
     } catch {
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     }
   }
 
@@ -563,7 +586,7 @@ describe("CipherTransformFactory", function () {
       new CipherTransformFactory(dict, fileId, password);
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (ex) {
       expect(ex).toBeInstanceOf(PasswordException);
       expect(ex.code).toEqual(PasswordResponses.NEED_PASSWORD);
@@ -576,7 +599,7 @@ describe("CipherTransformFactory", function () {
       new CipherTransformFactory(dict, fileId, password);
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (ex) {
       expect(ex).toBeInstanceOf(PasswordException);
       expect(ex.code).toEqual(PasswordResponses.INCORRECT_PASSWORD);
@@ -616,8 +639,27 @@ describe("CipherTransformFactory", function () {
     expect(string).toEqual(decrypted);
   }
 
+  function ensureCrossCipherIsIdentity(
+    encryptDict,
+    decryptDict,
+    fileId,
+    password,
+    string
+  ) {
+    const encrypted = new CipherTransformFactory(encryptDict, fileId, password)
+      .createCipherTransform(123, 0)
+      .encryptString(string);
+    const decrypted = new CipherTransformFactory(decryptDict, fileId, password)
+      .createCipherTransform(123, 0)
+      .decryptString(encrypted);
+
+    expect(decrypted).toEqual(string);
+  }
+
   let fileId1, fileId2, dict1, dict2, dict3;
   let aes256Dict, aes256IsoDict, aes256BlankDict, aes256IsoBlankDict;
+  let aes256UnicodeDict;
+  let aes256SaslPrepDict, aes256SaslPrepFallbackDict;
 
   beforeAll(function () {
     fileId1 = unescape("%F6%C6%AF%17%F3rR%8DRM%9A%80%D1%EF%DF%18");
@@ -755,11 +797,89 @@ describe("CipherTransformFactory", function () {
       P: -1084,
       R: 6,
     });
+    aes256UnicodeDict = buildDict({
+      Filter: Name.get("Standard"),
+      V: 5,
+      Length: 256,
+      O: unescape(
+        "%07%E7%C3%30%6B%EE%F5%54%BD%69%11%AC%82%48%76%0C%9D%F0%5A%5C" +
+          "%9E%63%29%9A%24%A0%C2%A1%5B%22%90%30%33%33%33%33%33%33%33%33" +
+          "%44%44%44%44%44%44%44%44"
+      ),
+      U: unescape(
+        "%B0%B5%E1%DA%16%13%4D%FE%F0%0C%4D%09%F2%EE%F2%6A%38%67%49%85" +
+          "%81%10%8D%A0%4F%3E%5D%24%B9%B5%F3%78%11%11%11%11%11%11%11%11" +
+          "%22%22%22%22%22%22%22%22"
+      ),
+      OE: unescape(
+        "%7A%2C%97%53%F5%6C%7C%7C%CA%2F%83%3E%2D%32%33%90%57%DB%21%B9" +
+          "%ED%D2%4B%6F%7D%D9%71%9B%4B%9B%65%42"
+      ),
+      UE: unescape(
+        "%8C%EE%2C%8A%D2%16%82%DC%BB%DF%65%52%72%96%07%C4%AB%6C%99%54" +
+          "%A7%42%BE%BA%43%9F%66%47%F2%68%66%B8"
+      ),
+      Perms: unescape("%E9%4D%1D%8D%96%BE%D3%A9%8D%BD%A6%BE%3E%1A%2A%AD"),
+      P: -1084,
+      R: 5,
+    });
+    aes256SaslPrepDict = buildDict({
+      Filter: Name.get("Standard"),
+      V: 5,
+      Length: 256,
+      O: unescape(
+        "%21%14%DF%F5%89%2A%5F%97%B6%B7%EB%F8P%02%7DY%FD%95%82%CA%BD" +
+          "%1C%A6T%5E%8Bq%01%FC%9D%D2%00%84z%F4%89%E8%3EX%DFq%CF%CE%F2F" +
+          "%A6%B2%95"
+      ),
+      U: unescape(
+        "%98%1E%80%12%14Y%93D%0By%2F%07q%5E%CC%7B%D1%CDg%2C%5B2%DD%B7" +
+          "%C0%7D%C7%D5%1F5Q%23%BD%CA1%FDm%7B%B7%D1%60%29v%91%D23%E1%B4"
+      ),
+      OE: unescape(
+        "A%F1%BF%91%AA%8B%F03%D8m%CF%0B%14%19%D6%BF%8B%2AO%FAln%AAb%85" +
+          "%F2SB%7C%CF%FBX"
+      ),
+      UE: unescape(
+        "w%20v%EF%AD%EC%02%AD%C6%1B%06%DEP%DE%BE8%DD%A5%DB%C77%8E%035L" +
+          "%1D%FD%DD%13%83%AC%9B"
+      ),
+      Perms: unescape("%0E%FE%02%22%FB5f%A68t%0Ca%11%17Jf"),
+      P: -4,
+      R: 6,
+    });
+    aes256SaslPrepFallbackDict = buildDict({
+      Filter: Name.get("Standard"),
+      V: 5,
+      Length: 256,
+      O: unescape(
+        "%B1O%A6A%BD%E9%19%09%EC%FFuG%3C%BEWZ%2CN%F6%C7Cz%9A%E1%84%15" +
+          "%0C66%AE%B4%E6%C0%C1%C2%C3%C4%C5%C6%C7%D0%D1%D2%D3%D4%D5%D6%D7"
+      ),
+      U: unescape(
+        "i%0C%B0%B9%B7%90%AAXN%C916E%2E%C2%CF%BEG%DE%1Dqf%8F%3A%BF%92" +
+          "%FB%FA%C8o%23%11%A0%A1%A2%A3%A4%A5%A6%A7%B0%B1%B2%B3%B4%B5%B6" +
+          "%B7"
+      ),
+      OE: unescape(
+        "%0BE%22%A4%AAX%DA%C5%D4%DAL%A0%91Q%3E%3AE%EE%B7%97W%CFm%B8%AC" +
+          "%8Ak%80%B4%5D%EB%0F"
+      ),
+      UE: unescape(
+        "%D0%C0%E4rM%F7%E7%D2%FA%A0%90%7B%BC%BE%86p5%B5%27%A1%10%8A%86" +
+          "%86%95%2B%92%B4%E1%F4%A5%9A"
+      ),
+      Perms: unescape("%ED%D4%5FM%ED%9E%DE%F9%82%C8%A9%7F%C1%CC%C4%B4"),
+      P: -4,
+      R: 6,
+    });
   });
 
   afterAll(function () {
     fileId1 = fileId2 = dict1 = dict2 = dict3 = null;
     aes256Dict = aes256IsoDict = aes256BlankDict = aes256IsoBlankDict = null;
+    aes256UnicodeDict = null;
+    aes256SaslPrepDict = aes256SaslPrepFallbackDict = null;
   });
 
   describe("#ctor", function () {
@@ -781,6 +901,25 @@ describe("CipherTransformFactory", function () {
       });
     });
 
+    describe("AES256 Revision 5 with a non-ASCII password", function () {
+      it("should accept UTF-8 user password", function () {
+        ensurePasswordCorrect(aes256UnicodeDict, fileId1, "pässwört");
+      });
+      it("should accept UTF-8 owner password", function () {
+        ensurePasswordCorrect(aes256UnicodeDict, fileId1, "Öwner");
+      });
+      it("should not accept the UTF-8 bytes as a Latin-1 password", function () {
+        ensurePasswordIncorrect(
+          aes256UnicodeDict,
+          fileId1,
+          unescape("p%C3%A4ssw%C3%B6rt")
+        );
+      });
+      it("should not accept wrong password", function () {
+        ensurePasswordIncorrect(aes256UnicodeDict, fileId1, "wrong");
+      });
+    });
+
     describe("AES256 Revision 6", function () {
       it("should accept user password", function () {
         ensurePasswordCorrect(aes256IsoDict, fileId1, "user");
@@ -796,6 +935,29 @@ describe("CipherTransformFactory", function () {
       });
       it("should accept blank password", function () {
         ensurePasswordCorrect(aes256IsoBlankDict, fileId1);
+      });
+    });
+
+    describe("AES256 Revision 6 with SASLprep", function () {
+      it("should accept a password requiring SASLprep", function () {
+        ensurePasswordCorrect(
+          aes256SaslPrepDict,
+          fileId1,
+          "S\u00AASL\u00ADprep"
+        );
+      });
+      it("should accept an already prepared password", function () {
+        ensurePasswordCorrect(aes256SaslPrepDict, fileId1, "SaSLprep");
+      });
+      it("should not accept wrong password", function () {
+        ensurePasswordIncorrect(aes256SaslPrepDict, fileId1, "wrong");
+      });
+      it("should fall back to the raw password", function () {
+        ensurePasswordCorrect(
+          aes256SaslPrepFallbackDict,
+          fileId1,
+          "pass\u00ADword"
+        );
       });
     });
 
@@ -871,6 +1033,39 @@ describe("CipherTransformFactory", function () {
         "user",
         "aaaaaaaaaaaaaaaaaaaaaa"
       );
+    });
+    it("should decrypt V=5 with an AESV2 crypt filter using AES256", function () {
+      // Some producers wrongly set the crypt filter's CFM to AESV2 for V=5
+      // documents, which must still be decrypted with AES256 (bug 2046659).
+      dict3.CF = buildDict({
+        Identity: buildDict({
+          CFM: Name.get("AESV3"),
+        }),
+      });
+      const aesv3Dict = buildDict(dict3);
+      dict3.CF = buildDict({
+        Identity: buildDict({
+          CFM: Name.get("AESV2"),
+        }),
+      });
+      const aesv2Dict = buildDict(dict3);
+
+      for (const string of ["", "aaaa", "aaaaa", "aaaaaaaaaaaaaaaa"]) {
+        ensureCrossCipherIsIdentity(
+          aesv3Dict,
+          aesv2Dict,
+          fileId1,
+          "user",
+          string
+        );
+        ensureCrossCipherIsIdentity(
+          aesv2Dict,
+          aesv3Dict,
+          fileId1,
+          "user",
+          string
+        );
+      }
     });
     it("should encrypt and have the correct length using AES128", function () {
       dict3.CF = buildDict({

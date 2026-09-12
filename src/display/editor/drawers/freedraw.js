@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
+import { BBOX_INIT, Util } from "../../../shared/util.js";
 import { Outline } from "./outline.js";
-import { Util } from "../../../shared/util.js";
 
 class FreeDrawOutliner {
   #box;
@@ -56,7 +56,7 @@ class FreeDrawOutliner {
 
   static #MIN = FreeDrawOutliner.#MIN_DIST + FreeDrawOutliner.#MIN_DIFF;
 
-  constructor({ x, y }, box, scaleFactor, thickness, isLTR, innerMargin = 0) {
+  constructor(x, y, box, scaleFactor, thickness, isLTR, innerMargin = 0) {
     this.#box = box;
     this.#thickness = thickness * scaleFactor;
     this.#isLTR = isLTR;
@@ -75,6 +75,19 @@ class FreeDrawOutliner {
     return isNaN(this.#last[8]);
   }
 
+  isCancellable() {
+    // Treat strokes of at most five points as cancellable.
+    return this.#points.length <= 10;
+  }
+
+  /** @returns {object} The SVG properties to apply. */
+  removeLastElement() {
+    this.#last.fill(NaN);
+    this.#top.length = this.#bottom.length = this.#points.length = 0;
+
+    return { path: { d: "" } };
+  }
+
   #getLastCoords() {
     const lastTop = this.#last.subarray(4, 6);
     const lastBottom = this.#last.subarray(16, 18);
@@ -88,7 +101,7 @@ class FreeDrawOutliner {
     ];
   }
 
-  add({ x, y }) {
+  add(x, y) {
     this.#lastX = x;
     this.#lastY = y;
     const [layerX, layerY, layerWidth, layerHeight] = this.#box;
@@ -588,22 +601,14 @@ class FreeDrawOutline extends Outline {
           lastPointX = ltrCallback(lastPointX, x);
         }
       } else {
-        bezierBbox[0] = bezierBbox[1] = Infinity;
-        bezierBbox[2] = bezierBbox[3] = -Infinity;
+        bezierBbox.set(BBOX_INIT, 0);
         Util.bezierBoundingBox(
           lastX,
           lastY,
           ...outline.slice(i, i + 6),
           bezierBbox
         );
-
-        Util.rectBoundingBox(
-          bezierBbox[0],
-          bezierBbox[1],
-          bezierBbox[2],
-          bezierBbox[3],
-          minMax
-        );
+        Util.rectBoundingBox(...bezierBbox, minMax);
 
         if (firstPointY > bezierBbox[1]) {
           firstPointX = bezierBbox[0];
@@ -635,15 +640,31 @@ class FreeDrawOutline extends Outline {
     return this.#bbox;
   }
 
-  newOutliner(point, box, scaleFactor, thickness, isLTR, innerMargin = 0) {
+  newOutliner(x, y, box, scaleFactor, thickness, isLTR, innerMargin = 0) {
     return new FreeDrawOutliner(
-      point,
+      x,
+      y,
       box,
       scaleFactor,
       thickness,
       isLTR,
       innerMargin
     );
+  }
+
+  /**
+   * @param {number} thickness
+   * @returns {Float32Array} The new bounding box.
+   */
+  updateThickness(thickness) {
+    const outline = this.getNewOutline(thickness);
+    this.#outline = outline.#outline;
+    this.#points = outline.#points;
+    this.#bbox.set(outline.#bbox);
+    this.firstPoint = outline.firstPoint;
+    this.lastPoint = outline.lastPoint;
+
+    return this.#bbox;
   }
 
   getNewOutline(thickness, innerMargin) {
@@ -654,22 +675,18 @@ class FreeDrawOutline extends Outline {
     const sy = height * layerHeight;
     const tx = x * layerWidth + layerX;
     const ty = y * layerHeight + layerY;
+    const points = this.#points;
     const outliner = this.newOutliner(
-      {
-        x: this.#points[0] * sx + tx,
-        y: this.#points[1] * sy + ty,
-      },
+      points[0] * sx + tx,
+      points[1] * sy + ty,
       this.#box,
       this.#scaleFactor,
       thickness,
       this.#isLTR,
       innerMargin ?? this.#innerMargin
     );
-    for (let i = 2; i < this.#points.length; i += 2) {
-      outliner.add({
-        x: this.#points[i] * sx + tx,
-        y: this.#points[i + 1] * sy + ty,
-      });
+    for (let i = 2, ii = points.length; i < ii; i += 2) {
+      outliner.add(points[i] * sx + tx, points[i + 1] * sy + ty);
     }
     return outliner.getOutlines();
   }

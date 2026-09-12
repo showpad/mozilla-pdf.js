@@ -13,19 +13,19 @@
  * limitations under the License.
  */
 
-import { assert, shadow, unreachable } from "../shared/util.js";
+import { assert, makeArr, shadow, unreachable } from "../shared/util.js";
 
 const CIRCULAR_REF = Symbol("CIRCULAR_REF");
 const EOF = Symbol("EOF");
 
-let CmdCache = Object.create(null);
-let NameCache = Object.create(null);
-let RefCache = Object.create(null);
+const CmdCache = new Map();
+const NameCache = new Map();
+const RefCache = new Map();
 
 function clearPrimitiveCaches() {
-  CmdCache = Object.create(null);
-  NameCache = Object.create(null);
-  RefCache = Object.create(null);
+  CmdCache.clear();
+  NameCache.clear();
+  RefCache.clear();
 }
 
 class Name {
@@ -39,9 +39,18 @@ class Name {
     this.name = name;
   }
 
+  /**
+   * NOTE: This method is invoked a lot, hence `getOrInsertComputed` is
+   *       purposely *not* used to avoid creating unneeded callback functions.
+   */
   static get(name) {
-    // eslint-disable-next-line no-restricted-syntax
-    return (NameCache[name] ||= new Name(name));
+    let n = NameCache.get(name);
+    if (!n) {
+      // eslint-disable-next-line no-restricted-syntax
+      n = new Name(name);
+      NameCache.set(name, n);
+    }
+    return n;
   }
 }
 
@@ -56,15 +65,22 @@ class Cmd {
     this.cmd = cmd;
   }
 
+  /**
+   * NOTE: This method is invoked a lot, hence `getOrInsertComputed` is
+   *       purposely *not* used to avoid creating unneeded callback functions.
+   */
   static get(cmd) {
-    // eslint-disable-next-line no-restricted-syntax
-    return (CmdCache[cmd] ||= new Cmd(cmd));
+    let c = CmdCache.get(cmd);
+    if (!c) {
+      // eslint-disable-next-line no-restricted-syntax
+      c = new Cmd(cmd);
+      CmdCache.set(cmd, c);
+    }
+    return c;
   }
 }
 
-const nonSerializable = function nonSerializableClosure() {
-  return nonSerializable; // Creating closure on some variable.
-};
+const nonSerializable = () => nonSerializable; // Creating closure on some variable.
 
 class Dict {
   __nonSerializable__ = nonSerializable; // Disable cloning of the Dict.
@@ -89,7 +105,7 @@ class Dict {
     return this.#map.size;
   }
 
-  #getValue(isAsync, key1, key2, key3) {
+  #getValue(isAsync, key1, key2) {
     let value = this.#map.get(key1);
     if (value === undefined && key2 !== undefined) {
       if (
@@ -99,15 +115,6 @@ class Dict {
         unreachable("Dict.#getValue: Expected keys to be ordered by length.");
       }
       value = this.#map.get(key2);
-      if (value === undefined && key3 !== undefined) {
-        if (
-          (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
-          key3.length < key2.length
-        ) {
-          unreachable("Dict.#getValue: Expected keys to be ordered by length.");
-        }
-        value = this.#map.get(key3);
-      }
     }
     if (value instanceof Ref && this.xref) {
       return isAsync
@@ -118,18 +125,18 @@ class Dict {
   }
 
   // Automatically dereferences Ref objects.
-  get(key1, key2, key3) {
-    return this.#getValue(/* isAsync = */ false, key1, key2, key3);
+  get(key1, key2) {
+    return this.#getValue(/* isAsync = */ false, key1, key2);
   }
 
   // Same as get(), but returns a promise and uses fetchIfRefAsync().
-  async getAsync(key1, key2, key3) {
-    return this.#getValue(/* isAsync = */ true, key1, key2, key3);
+  async getAsync(key1, key2) {
+    return this.#getValue(/* isAsync = */ true, key1, key2);
   }
 
   // Same as get(), but dereferences all elements if the result is an Array.
-  getArray(key1, key2, key3) {
-    let value = this.#getValue(/* isAsync = */ false, key1, key2, key3);
+  getArray(key1, key2) {
+    let value = this.#getValue(/* isAsync = */ false, key1, key2);
 
     if (Array.isArray(value)) {
       value = value.slice(); // Ensure that we don't modify the Dict data.
@@ -242,11 +249,9 @@ class Dict {
         continue;
       }
       for (const [key, value] of dict.getRawEntries()) {
-        let property = properties.get(key);
-        if (property === undefined) {
-          property = [];
-          properties.set(key, property);
-        } else if (!mergeSubDicts || !(value instanceof Dict)) {
+        const property = properties.getOrInsertComputed(key, makeArr);
+
+        if (property.length && !(mergeSubDicts && value instanceof Dict)) {
           // Ignore additional entries, if either:
           //  - This is a "shallow" merge, where only the first element matters.
           //  - The value is *not* a `Dict`, since other types cannot be merged.
@@ -290,7 +295,10 @@ class Dict {
 }
 
 class Ref {
-  constructor(num, gen) {
+  #str;
+
+  constructor(str, num, gen) {
+    this.#str = str;
     this.num = num;
     this.gen = gen;
   }
@@ -298,48 +306,61 @@ class Ref {
   toString() {
     // This function is hot, so we make the string as compact as possible.
     // |this.gen| is almost always zero, so we treat that case specially.
-    if (this.gen === 0) {
-      return `${this.num}R`;
-    }
-    return `${this.num}R${this.gen}`;
+    return this.#str;
   }
 
   static fromString(str) {
-    const ref = RefCache[str];
+    let ref = RefCache.get(str);
     if (ref) {
       return ref;
     }
-    const m = /^(\d+)R(\d*)$/.exec(str);
-    if (!m || m[1] === "0") {
+    const m = /^([1-9]\d*)R([1-9]\d*)?$/.exec(str);
+    if (!m) {
       return null;
     }
-
     // eslint-disable-next-line no-restricted-syntax
-    return (RefCache[str] = new Ref(
-      parseInt(m[1]),
-      !m[2] ? 0 : parseInt(m[2])
-    ));
+    ref = new Ref(
+      str,
+      /* num = */ parseInt(m[1], 10),
+      /* gen = */ !m[2] ? 0 : parseInt(m[2], 10)
+    );
+    RefCache.set(str, ref);
+    return ref;
   }
 
+  /**
+   * NOTE: This method is invoked a lot, hence `getOrInsertComputed` is
+   *       purposely *not* used to avoid creating unneeded callback functions.
+   */
   static get(num, gen) {
-    const key = gen === 0 ? `${num}R` : `${num}R${gen}`;
-    // eslint-disable-next-line no-restricted-syntax
-    return (RefCache[key] ||= new Ref(num, gen));
+    const str = gen === 0 ? `${num}R` : `${num}R${gen}`;
+    let ref = RefCache.get(str);
+    if (!ref) {
+      // eslint-disable-next-line no-restricted-syntax
+      ref = new Ref(str, num, gen);
+      RefCache.set(str, ref);
+    }
+    return ref;
   }
 }
 
 // The reference is identified by number and generation.
 // This structure stores only one instance of the reference.
 class RefSet {
+  #set = new Set();
+
   constructor(parent = null) {
-    if (
-      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
-      parent &&
-      !(parent instanceof RefSet)
-    ) {
-      unreachable('RefSet: Invalid "parent" value.');
+    if (parent) {
+      if (
+        (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
+        !(parent instanceof RefSet)
+      ) {
+        unreachable('RefSet: Invalid "parent" value.');
+      }
+      for (const refStr of parent) {
+        this.#set.add(refStr);
+      }
     }
-    this._set = new Set(parent?._set);
   }
 
   has(ref) {
@@ -350,7 +371,7 @@ class RefSet {
     ) {
       unreachable('RefSet: Invalid "ref" value in has.');
     }
-    return this._set.has(ref.toString());
+    return this.#set.has(ref.toString());
   }
 
   put(ref) {
@@ -361,65 +382,75 @@ class RefSet {
     ) {
       unreachable('RefSet: Invalid "ref" value in put.');
     }
-    this._set.add(ref.toString());
+    this.#set.add(ref.toString());
   }
 
   remove(ref) {
-    this._set.delete(ref.toString());
+    this.#set.delete(ref.toString());
   }
 
   [Symbol.iterator]() {
-    return this._set.values();
+    return this.#set.keys();
   }
 
   clear() {
-    this._set.clear();
+    this.#set.clear();
   }
 }
 
-class RefSetCache {
-  _map = new Map();
+class RefMap {
+  #map = new Map();
 
   get size() {
-    return this._map.size;
+    return this.#map.size;
   }
 
   get(ref) {
-    return this._map.get(ref.toString());
+    return this.#map.get(ref.toString());
   }
 
   has(ref) {
-    return this._map.has(ref.toString());
+    return this.#map.has(ref.toString());
   }
 
   put(ref, obj) {
-    this._map.set(ref.toString(), obj);
+    this.#map.set(ref.toString(), obj);
   }
 
   putAlias(ref, aliasRef) {
-    this._map.set(ref.toString(), this.get(aliasRef));
+    this.#map.set(ref.toString(), this.get(aliasRef));
+  }
+
+  getOrPutComputed(ref, callback) {
+    const map = this.#map,
+      refStr = ref.toString();
+
+    if (!map.has(refStr)) {
+      map.set(refStr, callback(ref));
+    }
+    return map.get(refStr);
   }
 
   [Symbol.iterator]() {
-    return this._map.values();
+    return this.#map.values();
   }
 
   clear() {
-    this._map.clear();
+    this.#map.clear();
   }
 
   *values() {
-    yield* this._map.values();
+    yield* this.#map.values();
   }
 
   *items() {
-    for (const [ref, value] of this._map) {
+    for (const [ref, value] of this.#map) {
       yield [Ref.fromString(ref), value];
     }
   }
 
   *keys() {
-    for (const ref of this._map.keys()) {
+    for (const ref of this.#map.keys()) {
       yield Ref.fromString(ref);
     }
   }
@@ -461,6 +492,6 @@ export {
   isRefsEqual,
   Name,
   Ref,
+  RefMap,
   RefSet,
-  RefSetCache,
 };

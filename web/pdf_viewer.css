@@ -12,6 +12,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * Firefox design-system bridge.
+ *
+ * The viewer chrome is authored against Firefox design-token names with the
+ * shipped literal as the fallback: `var(--fx-token, <literal>)`. GENERIC and
+ * the components build resolve the fallback and stay self-contained; the
+ * MOZCENTRAL build imports tokens-brand.css when pdfjs.enableNova is set (see
+ * viewer.css), so those names resolve to live Firefox values and the theme
+ * never has to be re-synced by hand.
+ *
+ * Firefox declares its tokens inside `@layer tokens-foundation-brand`, so any
+ * unlayered declaration wins over them. To *consume* a Firefox value,
+ * reference it through var() (with a fallback) and do NOT redeclare the same
+ * name: that would shadow Firefox's for the whole subtree.
+ */
+@import url(buttons.css);
 @import url(message_bar.css);
 @import url(dialog.css);
 @import url(text_layer_builder.css);
@@ -34,18 +50,34 @@
   --page-border: 9px solid transparent;
   --spreadHorizontalWrapped-margin-LR: -3.5px;
   --loading-icon-delay: 400ms;
-  --focus-ring-color: light-dark(#0060df, #0df);
-  --focus-ring-outline: 2px solid var(--focus-ring-color);
+  --focus-ring-color: var(--focus-outline-color, light-dark(#0060df, #0df));
+  --focus-ring-outline: var(--focus-outline-width, 2px) solid
+    var(--focus-ring-color);
+  --text-primary-color: var(--text-color, light-dark(#15141a, #fbfbfe));
+  --link-fg-color: var(--link-color, light-dark(#0060df, #0df));
+  --link-hover-fg-color: var(--link-color-hover, light-dark(#0250bb, #80ebff));
   --new-badge-bg: light-dark(#070, #37b847);
   --new-badge-color: light-dark(#fff, #15141a);
   --new-badge-border-color: light-dark(#fbfbfe / 40%, #15141a / 40%);
+
+  /* Use Nova's semantic success surface and text color. */
+  /*#if MOZCENTRAL && !GECKOVIEW*/
+  @media -moz-pref("pdfjs.enableNova") and -moz-pref("browser.nova.enabled") {
+    --new-badge-bg: var(--background-color-success);
+    --new-badge-color: var(--text-color);
+    --new-badge-border-color: transparent;
+  }
+  /*#endif*/
 
   @media screen and (forced-colors: active) {
     --pdfViewer-padding-bottom: 9px;
     --page-margin: 8px auto -1px;
     --page-border: 1px solid CanvasText;
     --spreadHorizontalWrapped-margin-LR: 3.5px;
-    --focus-ring-color: CanvasText;
+    --focus-ring-color: var(--focus-outline-color, CanvasText);
+    --text-primary-color: var(--text-color, CanvasText);
+    --link-fg-color: var(--link-color, LinkText);
+    --link-hover-fg-color: var(--link-color-hover, LinkText);
     --new-badge-bg: AccentColor;
     --new-badge-color: ButtonFace;
     --new-badge-border-color: CanvasText;
@@ -58,6 +90,13 @@
   border-radius: 4px;
   border: 1px solid var(--new-badge-border-color);
   padding-inline: 4px;
+
+  /*#if MOZCENTRAL && !GECKOVIEW*/
+  @media -moz-pref("pdfjs.enableNova") and -moz-pref("browser.nova.enabled") {
+    border-radius: var(--border-radius-circle);
+    padding-inline: var(--space-small);
+  }
+  /*#endif*/
   margin-inline: 4px;
   font: menu;
   font-size: 12px;
@@ -76,16 +115,6 @@
 }
 [data-main-rotation="270"] {
   transform: rotate(270deg) translateX(-100%);
-}
-
-#hiddenCopyElement,
-.hiddenCanvasElement {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  display: none;
 }
 
 .pdfViewer {
@@ -129,6 +158,19 @@
       &.detailView {
         image-rendering: pixelated;
       }
+    }
+
+    /* Used by the DrawLayer, but we keep these styles here and not in
+     * draw_layer_builder.css because we need them to be loaded in GECKOVIEW for
+     * text selection. */
+    .selection {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      background: rgb(0 90 255 / 0.22);
     }
   }
 }

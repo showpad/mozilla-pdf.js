@@ -39,14 +39,9 @@ class Menu {
   constructor(menuContainer, triggeringButton, menuItems) {
     this.#menu = menuContainer;
     this.#triggeringButton = triggeringButton;
-    if (Array.isArray(menuItems)) {
-      this.#menuItems = menuItems;
-    } else {
-      this.#menuItems = [];
-      for (const button of this.#menu.querySelectorAll("button")) {
-        this.#menuItems.push(button);
-      }
-    }
+    this.#menuItems = Array.isArray(menuItems)
+      ? menuItems
+      : [...this.#menu.querySelectorAll("button")];
     this.#setUpMenu();
   }
 
@@ -146,19 +141,11 @@ class Menu {
             stopEvent(e);
             break;
           case "Home":
-            this.#menuItems
-              .find(
-                item => !item.disabled && !item.classList.contains("hidden")
-              )
-              ?.focus();
+            this.#goToFirstLast(false);
             stopEvent(e);
             break;
           case "End":
-            this.#menuItems
-              .findLast(
-                item => !item.disabled && !item.classList.contains("hidden")
-              )
-              ?.focus();
+            this.#goToFirstLast(true);
             stopEvent(e);
             break;
           default:
@@ -194,11 +181,7 @@ class Menu {
             if (!this.#openMenuAC) {
               this.#openMenu();
             }
-            this.#menuItems
-              .find(
-                item => !item.disabled && !item.classList.contains("hidden")
-              )
-              ?.focus();
+            this.#goToFirstLast(false);
             break;
           case "ArrowUp":
           case "End":
@@ -206,11 +189,7 @@ class Menu {
             if (!this.#openMenuAC) {
               this.#openMenu();
             }
-            this.#menuItems
-              .findLast(
-                item => !item.disabled && !item.classList.contains("hidden")
-              )
-              ?.focus();
+            this.#goToFirstLast(true);
             break;
           case "Escape":
             this.#closeMenu();
@@ -249,6 +228,20 @@ class Menu {
         this.#lastIndex = i;
         break;
       }
+    }
+  }
+
+  /**
+   * Go to the first/last menu item.
+   * @param {boolean} [last]
+   */
+  #goToFirstLast(last = false) {
+    const i = this.#menuItems[last ? "findLastIndex" : "findIndex"](
+      item => !item.disabled && !item.classList.contains("hidden")
+    );
+    if (i >= 0) {
+      this.#menuItems[i].focus();
+      this.#lastIndex = i;
     }
   }
 

@@ -76,12 +76,12 @@ describe("message_handler", function () {
       let result = await reader.read();
       expect(log).toEqual("p");
       expect(result.value).toEqual("hi");
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
     });
 
     it("should not read any data when cancelled", async function () {
@@ -135,7 +135,7 @@ describe("message_handler", function () {
 
       const result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2");
@@ -185,13 +185,13 @@ describe("message_handler", function () {
 
       const result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       try {
         await reader.read();
 
         // Shouldn't get here.
-        expect(false).toEqual(true);
+        expect(false).toBeTrue();
       } catch (reason) {
         expect(log).toEqual("01pe");
         expect(reason).toBeInstanceOf(UnknownErrorException);
@@ -247,21 +247,21 @@ describe("message_handler", function () {
 
       let result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2");
 
       result = await reader.read();
       expect(result.value).toEqual([5, 6, 7, 8]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2p");
 
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
     });
 
     it(
@@ -314,21 +314,21 @@ describe("message_handler", function () {
 
         let result = await reader.read();
         expect(result.value).toEqual([1, 2, 3, 4]);
-        expect(result.done).toEqual(false);
+        expect(result.done).toBeFalse();
 
         await sleep(10);
         expect(log).toEqual("012p");
 
         result = await reader.read();
         expect(result.value).toEqual([5, 6, 7, 8]);
-        expect(result.done).toEqual(false);
+        expect(result.done).toBeFalse();
 
         await sleep(10);
         expect(log).toEqual("012p");
 
         result = await reader.read();
-        expect(result.value).toEqual(undefined);
-        expect(result.done).toEqual(true);
+        expect(result.value).toBeUndefined();
+        expect(result.done).toBeTrue();
       }
     );
 
@@ -375,14 +375,14 @@ describe("message_handler", function () {
 
       let result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01");
 
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
     });
   });
 });

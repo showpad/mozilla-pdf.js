@@ -14,6 +14,7 @@
  */
 
 import { assert, isNodeJS } from "../../src/shared/util.js";
+import { Dict, Name, Ref } from "../../src/core/primitives.js";
 import {
   fetchData as fetchDataNode,
   NodeBinaryDataFactory,
@@ -22,7 +23,6 @@ import { NullStream, StringStream } from "../../src/core/stream.js";
 import { Page, PDFDocument } from "../../src/core/document.js";
 import { DOMBinaryDataFactory } from "../../src/display/binary_data_factory.js";
 import { fetchData as fetchDataDOM } from "../../src/display/display_utils.js";
-import { Ref } from "../../src/core/primitives.js";
 
 const TEST_PDFS_PATH = isNodeJS ? "./test/pdfs/" : "../pdfs/";
 
@@ -32,14 +32,15 @@ const STANDARD_FONT_DATA_URL = isNodeJS
   ? "./external/standard_fonts/"
   : "../../external/standard_fonts/";
 
-const WASM_URL = isNodeJS ? "./external/openjpeg/" : "../../external/openjpeg/";
+const WASM_URL = isNodeJS
+  ? "../../generic-legacy/web/wasm/"
+  : "../../build/generic/web/wasm/";
 
 class DefaultFileReaderFactory {
   static async fetch(params) {
-    if (isNodeJS) {
-      return fetchDataNode(params.path);
-    }
-    return fetchDataDOM(params.path, /* type = */ "bytes");
+    return isNodeJS
+      ? fetchDataNode(params.path)
+      : fetchDataDOM(params.path, /* type = */ "bytes");
   }
 }
 
@@ -72,6 +73,39 @@ function buildGetDocumentParams(filename, options) {
   return params;
 }
 
+// Builds a PDF sound object's stream dictionary (ISO 32000-1, 12.5.6.16). Pass
+// a key as `null` to omit it (to exercise defaults/missing entries); pass
+// `type: true` to add the optional `/Type /Sound` entry.
+function createSoundDict({
+  R = 22050,
+  C = 1,
+  B = 16,
+  E = "Signed",
+  CO,
+  type = false,
+} = {}) {
+  const dict = new Dict();
+  if (type) {
+    dict.set("Type", Name.get("Sound"));
+  }
+  if (R !== null) {
+    dict.set("R", R);
+  }
+  if (C !== null) {
+    dict.set("C", C);
+  }
+  if (B !== null) {
+    dict.set("B", B);
+  }
+  if (E !== null) {
+    dict.set("E", Name.get(E));
+  }
+  if (CO) {
+    dict.set("CO", Name.get(CO));
+  }
+  return dict;
+}
+
 function getCrossOriginHostname(hostname) {
   if (hostname === "localhost") {
     // Note: This does not work if localhost is listening on IPv6 only.
@@ -89,40 +123,46 @@ function getCrossOriginHostname(hostname) {
 }
 
 class XRefMock {
-  constructor(array) {
-    this._map = Object.create(null);
-    this._newTemporaryRefNum = null;
-    this._newPersistentRefNum = null;
-    this.stream = new NullStream();
+  #map = new Map();
 
-    for (const key in array) {
-      const obj = array[key];
-      this._map[obj.ref.toString()] = obj.data;
+  #newPersistentRefNum = null;
+
+  #newTemporaryRefNum = null;
+
+  stream = new NullStream();
+
+  constructor(array = []) {
+    for (const { ref, data } of array) {
+      this.#map.set(ref.toString(), data);
     }
   }
 
   getNewPersistentRef(obj) {
-    if (this._newPersistentRefNum === null) {
-      this._newPersistentRefNum = Object.keys(this._map).length || 1;
+    if (this.#newPersistentRefNum === null) {
+      this.#newPersistentRefNum = this.#map.size || 1;
     }
-    const ref = Ref.get(this._newPersistentRefNum++, 0);
-    this._map[ref.toString()] = obj;
+    const ref = Ref.get(this.#newPersistentRefNum++, 0);
+    this.#map.set(ref.toString(), obj);
     return ref;
   }
 
   getNewTemporaryRef() {
-    if (this._newTemporaryRefNum === null) {
-      this._newTemporaryRefNum = Object.keys(this._map).length || 1;
+    if (this.#newTemporaryRefNum === null) {
+      this.#newTemporaryRefNum = this.#map.size || 1;
     }
-    return Ref.get(this._newTemporaryRefNum++, 0);
+    return Ref.get(this.#newTemporaryRefNum++, 0);
   }
 
   resetNewTemporaryRef() {
-    this._newTemporaryRefNum = null;
+    this.#newTemporaryRefNum = null;
+  }
+
+  countUpdatesAfter(offset) {
+    return null;
   }
 
   fetch(ref) {
-    return this._map[ref.toString()];
+    return this.#map.get(ref.toString());
   }
 
   async fetchAsync(ref) {
@@ -130,14 +170,33 @@ class XRefMock {
   }
 
   fetchIfRef(obj) {
-    if (obj instanceof Ref) {
-      return this.fetch(obj);
-    }
-    return obj;
+    return obj instanceof Ref ? this.fetch(obj) : obj;
   }
 
   async fetchIfRefAsync(obj) {
     return this.fetchIfRef(obj);
+  }
+}
+
+/**
+ * `XRefMock` variant that limits the number of fetches, such that tests
+ * exercising cycle detection fail rather than hang when a guard is missing.
+ */
+class BoundedXRefMock extends XRefMock {
+  #limit;
+
+  fetchCount = 0;
+
+  constructor(array, limit = 100) {
+    super(array);
+    this.#limit = limit;
+  }
+
+  fetch(ref) {
+    if (++this.fetchCount > this.#limit) {
+      throw new Error(`BoundedXRefMock: more than ${this.#limit} fetches.`);
+    }
+    return super.fetch(ref);
   }
 }
 
@@ -249,9 +308,11 @@ class TestPdfsServer {
 }
 
 export {
+  BoundedXRefMock,
   buildGetDocumentParams,
   CMAP_URL,
   createIdFactory,
+  createSoundDict,
   DefaultBinaryDataFactory,
   DefaultFileReaderFactory,
   fetchBuiltInCMapHelper,

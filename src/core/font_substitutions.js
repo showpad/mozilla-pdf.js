@@ -21,6 +21,10 @@ const NORMAL = {
   style: "normal",
   weight: "normal",
 };
+const MEDIUM = {
+  style: "normal",
+  weight: "500",
+};
 const BOLD = {
   style: "normal",
   weight: "bold",
@@ -364,6 +368,194 @@ const substitutionMap = new Map([
       alias: "\xCB\xCE\xCC\xE5",
     },
   ],
+  // Standard Acrobat CJK fonts. These BaseFont names appear in PDFs that
+  // don't embed a CJK font and rely on the reader having Acrobat's bundled
+  // CJK fonts installed.
+  // Adobe-Japan1 - Mincho (serif).
+  [
+    "HeiseiMin-W3",
+    {
+      local: [
+        "Hiragino Mincho ProN",
+        "Hiragino Mincho Pro",
+        "Yu Mincho",
+        "YuMincho",
+        "Source Han Serif JP",
+        "Noto Serif JP",
+        "Noto Serif CJK JP",
+        "IPAexMincho",
+        "IPAMincho",
+        "Takao Mincho",
+        "MS Mincho",
+        "MS PMincho",
+      ],
+      style: NORMAL,
+      ultimate: "serif",
+    },
+  ],
+  // Adobe-Japan1 - Gothic (sans-serif).
+  [
+    "HeiseiKakuGo-W5",
+    {
+      local: [
+        "Hiragino Kaku Gothic ProN",
+        "Hiragino Kaku Gothic Pro",
+        "Hiragino Sans",
+        "Yu Gothic",
+        "YuGothic",
+        "Source Han Sans JP",
+        "Noto Sans JP",
+        "Noto Sans CJK JP",
+        "IPAexGothic",
+        "IPAGothic",
+        "Takao Gothic",
+        "Meiryo",
+        "MS Gothic",
+        "MS PGothic",
+      ],
+      style: MEDIUM,
+      ultimate: "sans-serif",
+    },
+  ],
+  // Common Adobe-Japan1 variants and Kozuka names.
+  ["HeiseiMin-W3-Acro", { alias: "HeiseiMin-W3" }],
+  ["HeiseiKakuGo-W5-Acro", { alias: "HeiseiKakuGo-W5" }],
+  ["KozMinPro-Regular", { alias: "HeiseiMin-W3" }],
+  ["KozMinProVI-Regular", { alias: "HeiseiMin-W3" }],
+  ["KozMinPr6N-Regular", { alias: "HeiseiMin-W3" }],
+  ["KozGoPro-Regular", { alias: "HeiseiKakuGo-W5" }],
+  ["KozGoProVI-Regular", { alias: "HeiseiKakuGo-W5" }],
+  ["KozGoPr6N-Regular", { alias: "HeiseiKakuGo-W5" }],
+
+  // Adobe-GB1 - Song (Simplified Chinese serif).
+  [
+    "STSong-Light",
+    {
+      local: [
+        "STSong",
+        "Songti SC",
+        "Source Han Serif SC",
+        "Source Han Serif CN",
+        "Noto Serif SC",
+        "Noto Serif CJK SC",
+        "AR PL UMing CN",
+        "SimSun",
+        "NSimSun",
+      ],
+      style: NORMAL,
+      ultimate: "serif",
+    },
+  ],
+  // Adobe-GB1 - Hei (Simplified Chinese sans-serif).
+  [
+    "STHeiti-Regular",
+    {
+      local: [
+        "STHeiti",
+        "Heiti SC",
+        "PingFang SC",
+        "Source Han Sans SC",
+        "Source Han Sans CN",
+        "Noto Sans SC",
+        "Noto Sans CJK SC",
+        "Microsoft YaHei",
+        "SimHei",
+        "WenQuanYi Zen Hei",
+      ],
+      style: NORMAL,
+      ultimate: "sans-serif",
+    },
+  ],
+  ["STSongStd-Light", { alias: "STSong-Light" }],
+  ["AdobeSongStd-Light", { alias: "STSong-Light" }],
+  ["AdobeHeitiStd-Regular", { alias: "STHeiti-Regular" }],
+  // KaiTi (regular script) and FangSong (imitation Song) are different
+  // typographic styles; route to the existing GB2312-keyed entries above.
+  ["AdobeKaitiStd-Regular", { alias: "\xBF\xAC\xCC\xE5" }],
+  ["AdobeFangsongStd-Regular", { alias: "\xB7\xC2\xCB\xCE" }],
+
+  // Adobe-CNS1 - Sung (Traditional Chinese serif).
+  [
+    "MSung-Light",
+    {
+      local: [
+        "Songti TC",
+        "LiSong Pro",
+        "Source Han Serif TC",
+        "Source Han Serif TW",
+        "Noto Serif TC",
+        "Noto Serif CJK TC",
+        "AR PL UMing TW",
+        "PMingLiU",
+        "MingLiU",
+        "MingLiU_HKSCS",
+      ],
+      style: NORMAL,
+      ultimate: "serif",
+    },
+  ],
+  // Adobe-CNS1 - Hei (Traditional Chinese sans-serif).
+  [
+    "MHei-Medium",
+    {
+      local: [
+        "Heiti TC",
+        "STHeiti",
+        "Source Han Sans TC",
+        "Source Han Sans TW",
+        "Noto Sans TC",
+        "Noto Sans CJK TC",
+        "PingFang TC",
+        "Microsoft JhengHei",
+      ],
+      style: MEDIUM,
+      ultimate: "sans-serif",
+    },
+  ],
+  ["MSungStd-Light", { alias: "MSung-Light" }],
+  ["AdobeMingStd-Light", { alias: "MSung-Light" }],
+
+  // Adobe-Korea1 - Myeongjo (Korean serif).
+  [
+    "HYSMyeongJo-Medium",
+    {
+      local: [
+        "AppleMyungjo",
+        "Source Han Serif KR",
+        "Noto Serif KR",
+        "Noto Serif CJK KR",
+        "Nanum Myeongjo",
+        "Batang",
+      ],
+      style: MEDIUM,
+      ultimate: "serif",
+    },
+  ],
+  // Adobe-Korea1 - Gothic (Korean sans-serif).
+  [
+    "HYGoThic-Medium",
+    {
+      local: [
+        "Apple SD Gothic Neo",
+        "AppleGothic",
+        "Source Han Sans KR",
+        "Noto Sans KR",
+        "Noto Sans CJK KR",
+        "Nanum Gothic",
+        "Malgun Gothic",
+        "Dotum",
+        "Gulim",
+      ],
+      style: MEDIUM,
+      ultimate: "sans-serif",
+    },
+  ],
+  ["HYSMyeongJoStd-Medium", { alias: "HYSMyeongJo-Medium" }],
+  ["AdobeMyungjoStd-Medium", { alias: "HYSMyeongJo-Medium" }],
+  // Bold variants reuse the same fallback list with a bold style override
+  // so the @font-face declaration requests a bold local() match.
+  ["HYGoThic-Bold", { alias: "HYGoThic-Medium", style: BOLD }],
+  ["AdobeGothicStd-Bold", { alias: "HYGoThic-Medium", style: BOLD }],
 ]);
 
 const fontAliases = new Map([["Arial-Black", "ArialBlack"]]);
@@ -431,13 +623,22 @@ function getFamilyName(str) {
 
 /**
  * Generate font description.
- * @param {Object} param0, font substitution description.
- * @param {Array<String>} src, contains src values (local(...) or url(...)).
- * @param {String} localFontPath, path to local fonts.
- * @param {boolean} useFallback, whether to use fallback font.
- * @param {boolean} usePath, whether to use path to font.
- * @param {String} append, style (Bold, Italic, ...) to append to font name.
- * @return {Object} { style, ultimate }.
+ * @param {object} substitution - Font substitution description.
+ * @param {string} [substitution.alias] - Key of another substitution to
+ *   inherit the src values from.
+ * @param {Array<string>} [substitution.local] - Local font names.
+ * @param {string} [substitution.path] - Font file name, relative to
+ *   `localFontPath`.
+ * @param {string} [substitution.fallback] - Key of the substitution to take
+ *   the ultimate font from.
+ * @param {object} [substitution.style] - CSS `font-style` and `font-weight`.
+ * @param {string} [substitution.ultimate] - Ultimate (generic) font family.
+ * @param {Array<string>} src - Contains src values (local(...) or url(...)).
+ * @param {string} localFontPath - Path to local fonts.
+ * @param {boolean} useFallback - Whether to use fallback font.
+ * @param {boolean} usePath - Whether to use path to font.
+ * @param {string} append - Style (Bold, Italic, ...) to append to font name.
+ * @returns {object} The resolved `style` and `ultimate` values.
  */
 function generateFont(
   { alias, local, path, fallback, style, ultimate },
@@ -499,9 +700,9 @@ function generateFont(
 
 /**
  * Get a font substitution for a given font.
- * The general idea is to have enough information to create a CSS rule like
- * this:
- *   @font-face {
+ * The general idea is to have enough information to create a CSS `@font-face`
+ * rule like this:
+ *   {
  *    font-family: 'Times';
  *    src: local('Times New Roman'), local('Subst1'), local('Subst2'),
  *         url(.../TimesNewRoman.ttf)
@@ -509,15 +710,15 @@ function generateFont(
  *    font-style: normal;
  *   }
  * or use the FontFace API.
- *
  * @param {Map} systemFontCache The cache of local fonts.
- * @param {Object} idFactory The ids factory.
- * @param {String} localFontPath Path to the fonts directory.
- * @param {String} baseFontName The font name to be substituted.
- * @param {String|undefined} standardFontName The standard font name to use
+ * @param {object} idFactory The ids factory.
+ * @param {string} localFontPath Path to the fonts directory.
+ * @param {string} baseFontName The font name to be substituted.
+ * @param {string | undefined} standardFontName The standard font name to use
  *   if the base font is not available.
- * @param {String} type The font type.
- * @returns an Object with the CSS, the loaded name, the src and the style.
+ * @param {string} type The font type.
+ * @returns {object | null} An object with the CSS, the loaded name, the src
+ *   and the style, or `null` when no substitution can be made.
  */
 function getFontSubstitution(
   systemFontCache,
@@ -579,8 +780,8 @@ function getFontSubstitution(
       return null;
     }
     // Maybe we'll be lucky and the OS will have the font.
-    const bold = /bold/gi.test(baseFontName);
-    const italic = /oblique|italic/gi.test(baseFontName);
+    const bold = /bold/i.test(baseFontName);
+    const italic = /oblique|italic/i.test(baseFontName);
     const style =
       (bold && italic && BOLDITALIC) ||
       (bold && BOLD) ||

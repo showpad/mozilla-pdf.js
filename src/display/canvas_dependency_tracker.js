@@ -13,7 +13,9 @@
  * limitations under the License.
  */
 
-import { FeatureTest, Util } from "../shared/util.js";
+import { BBOX_INIT, FeatureTest, Util } from "../shared/util.js";
+import { getCurrentTransform } from "./display_utils.js";
+import { MathClamp } from "../shared/math_clamp.js";
 
 const FORCED_DEPENDENCY_LABEL = "__forcedDependency";
 
@@ -24,6 +26,34 @@ function expandBBox(array, index, minX, minY, maxX, maxY) {
   array[index * 4 + 1] = Math.min(array[index * 4 + 1], minY);
   array[index * 4 + 2] = Math.max(array[index * 4 + 2], maxX);
   array[index * 4 + 3] = Math.max(array[index * 4 + 3], maxY);
+}
+
+// If a scaling factor is negative then min and max must be swapped.
+function scaleCharBBox(scaleX, scaleY, x, y, bbox) {
+  let temp;
+  if (scaleX) {
+    if (scaleX < 0) {
+      temp = bbox[0];
+      bbox[0] = bbox[2];
+      bbox[2] = temp;
+    }
+    bbox[0] *= scaleX;
+    bbox[2] *= scaleX;
+
+    if (scaleY < 0) {
+      temp = bbox[1];
+      bbox[1] = bbox[3];
+      bbox[3] = temp;
+    }
+    bbox[1] *= scaleY;
+    bbox[3] *= scaleY;
+  } else {
+    bbox.fill(0);
+  }
+  bbox[0] += x;
+  bbox[1] += y;
+  bbox[2] += x;
+  bbox[3] += y;
 }
 
 // This is computed rathter than hard-coded to keep into
@@ -77,10 +107,11 @@ const ensureDebugMetadata = (map, key) =>
 class CanvasBBoxTracker {
   #baseTransformStack = [[1, 0, 0, 1, 0, 0]];
 
+  // minX, minY, maxX, maxY
   #clipBox = [-Infinity, -Infinity, Infinity, Infinity];
 
-  // Float32Array<minX, minY, maxX, maxY>
-  #pendingBBox = new Float64Array([Infinity, Infinity, -Infinity, -Infinity]);
+  // minX, minY, maxX, maxY
+  #pendingBBox = new Float64Array(BBOX_INIT);
 
   _pendingBBoxIdx = -1;
 
@@ -157,10 +188,7 @@ class CanvasBBoxTracker {
   }
 
   getOpenMarker() {
-    if (this._savesStack.length === 0) {
-      return null;
-    }
-    return this._savesStack.at(-1);
+    return this._savesStack.length === 0 ? null : this._savesStack.at(-1);
   }
 
   recordCloseMarker(opIdx, onSavePopped) {
@@ -208,10 +236,7 @@ class CanvasBBoxTracker {
   resetBBox(idx) {
     if (this._pendingBBoxIdx !== idx) {
       this._pendingBBoxIdx = idx;
-      this.#pendingBBox[0] = Infinity;
-      this.#pendingBBox[1] = Infinity;
-      this.#pendingBBox[2] = -Infinity;
-      this.#pendingBBox[3] = -Infinity;
+      this.#pendingBBox.set(BBOX_INIT, 0);
     }
     return this;
   }
@@ -221,7 +246,7 @@ class CanvasBBoxTracker {
       this.#baseTransformStack.at(-1),
       ctx.getTransform()
     );
-    const clipBox = [Infinity, Infinity, -Infinity, -Infinity];
+    const clipBox = BBOX_INIT.slice();
     Util.axialAlignedBoundingBox([minX, minY, maxX, maxY], transform, clipBox);
     const intersection = Util.intersect(this.#clipBox, clipBox);
     if (intersection) {
@@ -255,24 +280,13 @@ class CanvasBBoxTracker {
       return this;
     }
 
-    const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+    const bbox = BBOX_INIT.slice();
     Util.axialAlignedBoundingBox([minX, minY, maxX, maxY], transform, bbox);
-    this.#pendingBBox[0] = Math.min(
-      this.#pendingBBox[0],
-      Math.max(bbox[0], clipBox[0])
-    );
-    this.#pendingBBox[1] = Math.min(
-      this.#pendingBBox[1],
-      Math.max(bbox[1], clipBox[1])
-    );
-    this.#pendingBBox[2] = Math.max(
-      this.#pendingBBox[2],
-      Math.min(bbox[2], clipBox[2])
-    );
-    this.#pendingBBox[3] = Math.max(
-      this.#pendingBBox[3],
-      Math.min(bbox[3], clipBox[3])
-    );
+
+    this.#pendingBBox[0] = MathClamp(bbox[0], clipBox[0], this.#pendingBBox[0]);
+    this.#pendingBBox[1] = MathClamp(bbox[1], clipBox[1], this.#pendingBBox[1]);
+    this.#pendingBBox[2] = MathClamp(bbox[2], this.#pendingBBox[2], clipBox[2]);
+    this.#pendingBBox[3] = MathClamp(bbox[3], this.#pendingBBox[3], clipBox[3]);
     return this;
   }
 
@@ -286,6 +300,11 @@ class CanvasBBoxTracker {
 
   /**
    * @param {number} idx
+   * @param {boolean} [preserve=false] - When false, the pending bounding box
+   *   is cleared once recorded; pass true to keep it for subsequent
+   *   operations.
+   * @param {Iterable<Iterable<number>>} [dependencyLists] - Groups of operation
+   *   indices whose bounding boxes are also expanded to cover this operation.
    */
   recordOperation(idx, preserve = false, dependencyLists) {
     if (this._pendingBBoxIdx !== idx) {
@@ -624,7 +643,7 @@ class CanvasDependencyTracker {
         computedBBox = [0, 0, 0, 0];
         Util.axialAlignedBoundingBox(fontBBox, font.fontMatrix, computedBBox);
         if (scale !== 1 || x !== 0 || y !== 0) {
-          Util.scaleMinMax([scale, 0, 0, -scale, x, y], computedBBox);
+          scaleCharBBox(scale, -scale, x, y, computedBBox);
         }
 
         if (isBBoxTrustworthy) {
@@ -718,6 +737,8 @@ class CanvasDependencyTracker {
 
   /**
    * @param {number} idx
+   * @param {boolean} [preserve=false] - When false, the pending dependencies
+   *   are cleared once recorded; pass true to keep them for later operations.
    */
   recordOperation(idx, preserve = false) {
     this.recordDependencies(idx, [FORCED_DEPENDENCY_LABEL]);
@@ -783,7 +804,6 @@ class CanvasDependencyTracker {
  * Used to track dependencies of nested operations list, that
  * should actually all map to the index of the operation that
  * contains the nested list.
- *
  * @implements {CanvasDependencyTracker}
  */
 class CanvasNestedDependencyTracker {
@@ -1008,7 +1028,6 @@ class CanvasNestedDependencyTracker {
 
   /**
    * @param {number} idx
-   * @param {SimpleDependency[]} dependencyNames
    */
   recordOperation(idx) {
     this.#dependencyTracker.recordOperation(this.#opIdx, true);
@@ -1090,7 +1109,7 @@ const Dependencies = {
     "sameLineText",
   ],
   transform: ["transform"],
-  transformAndFill: ["transform", "fillColor"],
+  transformAndFill: ["transform", "filter", "fillColor"],
 };
 
 /**
@@ -1133,14 +1152,14 @@ class CanvasImagesTracker {
       this.#coords = newCoords;
     }
 
-    const transform = Util.domMatrixToTransform(ctx.getTransform());
+    const transform = getCurrentTransform(ctx);
 
     // We want top left, bottom left, top right.
     // (0, 0) is the bottom left corner.
     let coords;
 
     if (clipBox[0] !== Infinity) {
-      const bbox = [Infinity, Infinity, -Infinity, -Infinity];
+      const bbox = BBOX_INIT.slice();
       Util.axialAlignedBoundingBox([0, -height, width, 0], transform, bbox);
 
       const finalBBox = Util.intersect(clipBox, bbox);

@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
-import { assert, unreachable, warn } from "../shared/util.js";
-import { RefSet, RefSetCache } from "./primitives.js";
+import { assert, makeSet, unreachable, warn } from "../shared/util.js";
+import { RefMap, RefSet } from "./primitives.js";
 
 class BaseLocalCache {
   constructor(options) {
@@ -30,7 +30,7 @@ class BaseLocalCache {
       this._nameRefMap = new Map();
       this._imageMap = new Map();
     }
-    this._imageCache = new RefSetCache();
+    this._imageCache = new RefMap();
   }
 
   getByName(name) {
@@ -205,8 +205,8 @@ class GlobalImageCache {
         "GlobalImageCache - invalid NUM_PAGES_THRESHOLD constant."
       );
     }
-    this._refCache = new RefSetCache();
-    this._imageCache = new RefSetCache();
+    this._refCache = new RefMap();
+    this._imageCache = new RefMap();
   }
 
   get #byteSize() {
@@ -228,11 +228,7 @@ class GlobalImageCache {
   }
 
   shouldCache(ref, pageIndex) {
-    let pageIndexSet = this._refCache.get(ref);
-    if (!pageIndexSet) {
-      pageIndexSet = new Set();
-      this._refCache.put(ref, pageIndexSet);
-    }
+    const pageIndexSet = this._refCache.getOrPutComputed(ref, makeSet);
     pageIndexSet.add(pageIndex);
 
     if (pageIndexSet.size < GlobalImageCache.NUM_PAGES_THRESHOLD) {

@@ -15,7 +15,7 @@
 
 // eslint-disable-next-line max-len
 /** @typedef {import("./tools.js").AnnotationEditorUIManager} AnnotationEditorUIManager */
-/** @typedef {import("../display_utils.js").PageViewport} PageViewport */
+/** @typedef {import("../page_viewport.js").PageViewport} PageViewport */
 // eslint-disable-next-line max-len
 /** @typedef {import("../../../web/text_accessibility.js").TextAccessibilityManager} TextAccessibilityManager */
 // eslint-disable-next-line max-len
@@ -30,17 +30,17 @@ import {
   AnnotationEditorType,
   FeatureTest,
 } from "../../shared/util.js";
+import { setLayerDimensions, stopEvent } from "../display_utils.js";
 import { AnnotationEditor } from "./editor.js";
 import { FreeTextEditor } from "./freetext.js";
 import { HighlightEditor } from "./highlight.js";
 import { InkEditor } from "./ink.js";
-import { setLayerDimensions } from "../display_utils.js";
 import { SignatureEditor } from "./signature.js";
 import { StampEditor } from "./stamp.js";
 
 /**
- * @typedef {Object} AnnotationEditorLayerOptions
- * @property {Object} mode
+ * @typedef {object} AnnotationEditorLayerOptions
+ * @property {object} mode
  * @property {HTMLDivElement} div
  * @property {StructTreeLayerBuilder} structTreeLayer
  * @property {AnnotationEditorUIManager} uiManager
@@ -55,7 +55,7 @@ import { StampEditor } from "./stamp.js";
  */
 
 /**
- * @typedef {Object} RenderEditorLayerOptions
+ * @typedef {object} RenderEditorLayerOptions
  * @property {PageViewport} viewport
  */
 
@@ -156,7 +156,7 @@ class AnnotationEditorLayer {
 
   /**
    * Update the toolbar if it's required to reflect the tool currently used.
-   * @param {Object} options
+   * @param {object} options
    */
   updateToolbar(options) {
     this.#uiManager.updateToolbar(options);
@@ -223,7 +223,7 @@ class AnnotationEditorLayer {
 
   /**
    * Add some commands into the CommandManager (undo/redo stuff).
-   * @param {Object} params
+   * @param {object} params
    */
   addCommands(params) {
     this.#uiManager.addCommands(params);
@@ -344,8 +344,7 @@ class AnnotationEditorLayer {
           }
           const editor = this.#editors.get(id);
           if (editor?.annotationElementId === null) {
-            e.stopPropagation();
-            e.preventDefault();
+            stopEvent(e);
             editor.dblclick(e);
           }
         },
@@ -466,7 +465,9 @@ class AnnotationEditorLayer {
     if (
       target === this.#textLayer.div ||
       ((target.getAttribute("role") === "img" ||
-        target.classList.contains("endOfContent")) &&
+        target.classList.contains("endOfContent") ||
+        target.classList.contains("textLayerImages") ||
+        target.classList.contains("textLayerImagePlaceholder")) &&
         this.#textLayer.div.contains(target))
     ) {
       const { isMac } = FeatureTest.platform;
@@ -479,20 +480,11 @@ class AnnotationEditorLayer {
         true,
         /* updateButton = */ true
       );
-      this.#textLayer.div.classList.add("free");
-      this.toggleDrawing();
-      HighlightEditor.startHighlighting(
+      HighlightEditor.startDrawing(
         this,
+        this.#uiManager,
         this.#uiManager.direction === "ltr",
-        { target: this.#textLayer.div, x: event.x, y: event.y }
-      );
-      this.#textLayer.div.addEventListener(
-        "pointerup",
-        () => {
-          this.#textLayer.div.classList.remove("free");
-          this.toggleDrawing(true);
-        },
-        { once: true, signal: this.#uiManager._signal }
+        event
       );
       event.preventDefault();
     }
@@ -682,7 +674,7 @@ class AnnotationEditorLayer {
 
   /**
    * Create a new editor
-   * @param {Object} params
+   * @param {object} params
    * @returns {AnnotationEditor}
    */
   #createNewEditor(params) {
@@ -696,8 +688,8 @@ class AnnotationEditorLayer {
 
   /**
    * Paste some content into a new editor.
-   * @param {Object} options
-   * @param {Object} params
+   * @param {object} options
+   * @param {object} params
    */
   async pasteEditor(options, params) {
     this.updateToolbar(options);
@@ -721,7 +713,7 @@ class AnnotationEditorLayer {
 
   /**
    * Create a new editor
-   * @param {Object} data
+   * @param {object} data
    * @returns {Promise<AnnotationEditor | null>}
    */
   async deserialize(data) {
@@ -736,7 +728,7 @@ class AnnotationEditorLayer {
    * Create and add a new editor.
    * @param {PointerEvent} event
    * @param {boolean} isCentered
-   * @param [Object] data
+   * @param {object} [data]
    * @returns {AnnotationEditor}
    */
   createAndAddNewEditor(event, isCentered, data = {}) {
@@ -952,11 +944,10 @@ class AnnotationEditorLayer {
   }
 
   /**
-   *
    * @param {AnnotationEditor} editor
    * @param {number} x
    * @param {number} y
-   * @returns
+   * @returns {boolean}
    */
   findNewParent(editor, x, y) {
     const layer = this.#uiManager.findParent(x, y);
@@ -1065,7 +1056,7 @@ class AnnotationEditorLayer {
 
   /**
    * Get page dimensions.
-   * @returns {Object} dimensions.
+   * @returns {object} dimensions.
    */
   get pageDimensions() {
     const { pageWidth, pageHeight } = this.viewport.rawDims;

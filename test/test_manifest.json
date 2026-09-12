@@ -1,5 +1,12 @@
 [
   {
+    "id": "postscript-type4-many-outputs",
+    "file": "pdfs/postscript_type4_many_outputs.pdf",
+    "md5": "90c1ebd35acc6c7d01f4fdb0ae0bef82",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
     "id": "bug1755201",
     "file": "pdfs/bug1755201.pdf",
     "md5": "cece14097812d8a1f69e86a51e4a3804",
@@ -27,6 +34,22 @@
     "id": "issue19835",
     "file": "pdfs/issue19835.pdf",
     "md5": "2940a2f8a41fae299b9a599b8364d05c",
+    "rounds": 1,
+    "link": true,
+    "type": "other"
+  },
+  {
+    "id": "issue21458",
+    "file": "pdfs/issue21458.pdf",
+    "md5": "875754beca276ab63568e06fd49e8375",
+    "rounds": 1,
+    "link": true,
+    "type": "other"
+  },
+  {
+    "id": "issue21582",
+    "file": "pdfs/issue21582.pdf",
+    "md5": "bcc5a2ae3a588f360edbf94c3dd476a8",
     "rounds": 1,
     "link": true,
     "type": "other"
@@ -1957,6 +1980,42 @@
     "type": "eq"
   },
   {
+    "id": "issue20433-initial",
+    "file": "pdfs/issue20433.pdf",
+    "md5": "3a550da7807540982ed457397667db79",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 2,
+    "type": "eq",
+    "forms": true
+  },
+  {
+    "id": "issue20433-no-form",
+    "file": "pdfs/issue20433.pdf",
+    "md5": "3a550da7807540982ed457397667db79",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 2,
+    "type": "eq",
+    "forms": true,
+    "optionalContent": {
+      "73R": false
+    }
+  },
+  {
+    "id": "issue20433-no-mathml",
+    "file": "pdfs/issue20433.pdf",
+    "md5": "3a550da7807540982ed457397667db79",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 2,
+    "type": "eq",
+    "forms": true,
+    "optionalContent": {
+      "115R": false
+    }
+  },
+  {
     "id": "issue13845",
     "file": "pdfs/issue13845.pdf",
     "md5": "7c6b675f61ae68a2e416f4aa26da567c",
@@ -2637,6 +2696,15 @@
     "type": "load"
   },
   {
+    "id": "pr5134",
+    "file": "pdfs/pr5134.pdf",
+    "md5": "6a701a163472e071a2519348b55cbac1",
+    "rounds": 1,
+    "link": true,
+    "firstPage": 2,
+    "type": "eq"
+  },
+  {
     "id": "pr8808",
     "file": "pdfs/pr8808.pdf",
     "md5": "bdac6051a98fd8dcfc5344b05fed06f4",
@@ -2755,6 +2823,13 @@
     "md5": "7de7979270c9136bdd737428185fbbed",
     "rounds": 1,
     "link": true,
+    "type": "eq"
+  },
+  {
+    "id": "issue21436",
+    "file": "pdfs/issue21436.pdf",
+    "md5": "93c4292a52db8a37eefd651cb677d2a9",
+    "rounds": 1,
     "type": "eq"
   },
   {
@@ -3523,6 +3598,15 @@
     "type": "eq"
   },
   {
+    "id": "cmykjpeg-disable-isOffscreenCanvasSupported",
+    "file": "pdfs/cmykjpeg.pdf",
+    "md5": "85d162b48ce98503a382d96f574f70a2",
+    "link": false,
+    "rounds": 1,
+    "type": "eq",
+    "isOffscreenCanvasSupported": false
+  },
+  {
     "id": "cmykjpeg_nowasm",
     "file": "pdfs/cmykjpeg.pdf",
     "md5": "85d162b48ce98503a382d96f574f70a2",
@@ -3775,6 +3859,14 @@
     "md5": "16059a3af6e81ae9272daa57ea03e6e9",
     "rounds": 1,
     "link": false,
+    "type": "eq"
+  },
+  {
+    "id": "issue7998",
+    "file": "pdfs/issue7998.pdf",
+    "md5": "6cf4622cbcb61fb07525dfb0ab23f9c3",
+    "rounds": 1,
+    "link": true,
     "type": "eq"
   },
   {
@@ -5337,6 +5429,14 @@
     "type": "eq"
   },
   {
+    "id": "images_1bit_grayscale-disable-isOffscreenCanvasSupported",
+    "file": "pdfs/images_1bit_grayscale.pdf",
+    "md5": "e1c36a19563944891bd30cfc0199d07f",
+    "rounds": 1,
+    "type": "eq",
+    "isOffscreenCanvasSupported": false
+  },
+  {
     "id": "html5checker",
     "file": "pdfs/html5checker.pdf",
     "md5": "74bbd80d1e7eb5f2951582233ef9ebab",
@@ -6710,6 +6810,13 @@
     "about": "Every blend mode that PDF supports."
   },
   {
+    "id": "bug1873345",
+    "file": "pdfs/bug1873345.pdf",
+    "md5": "03483b94a2c02ac5f98c17ccf14de8ea",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
     "id": "transparency_group",
     "file": "pdfs/transparency_group.pdf",
     "md5": "10391f76434128e5da70cff5fc485ff0",
@@ -6730,6 +6837,62 @@
       "minY": 0.25,
       "maxY": 0.5
     }
+  },
+  {
+    "id": "knockout_smask",
+    "file": "pdfs/knockout_smask.pdf",
+    "md5": "d89fbb623f8e5f200a324607dd30449d",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Knockout group element with an active soft mask."
+  },
+  {
+    "id": "knockout_nested",
+    "file": "pdfs/knockout_nested.pdf",
+    "md5": "e3db1591b84f7654d53f553c60ec9fd1",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Nested knockout group used as an element of an outer knockout group."
+  },
+  {
+    "id": "knockout_nested_group_alpha",
+    "file": "pdfs/knockout_nested_group_alpha.pdf",
+    "md5": "cec0133fe020f089a73530274c295fcc",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Nested transparency group with parent alpha used as an element of an outer knockout group."
+  },
+  {
+    "id": "knockout_nonisolated_sparse",
+    "file": "pdfs/knockout_nonisolated_sparse.pdf",
+    "md5": "6c9837d997785b4d7f848fa7a96ff984",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Sparse non-isolated knockout group under a blend mode."
+  },
+  {
+    "id": "knockout_isolated_overlap",
+    "file": "pdfs/knockout_isolated_overlap.pdf",
+    "md5": "b9c5dda6b8c7eb51a904766171290dc0",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Isolated knockout group with two overlapping translucent fills; the overlap area must show only the second fill (no source-over mix)."
+  },
+  {
+    "id": "knockout_blend_multiply",
+    "file": "pdfs/knockout_blend_multiply.pdf",
+    "md5": "e0b68fa675e58685fbf1b916fa03e301",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Non-isolated knockout group with a Multiply blend mode element on a yellow backdrop; the element must blend against the backdrop, not against a transparent temp canvas."
+  },
+  {
+    "id": "knockout_inner_backdrop",
+    "file": "pdfs/knockout_inner_backdrop.pdf",
+    "md5": "4b3b77319b9b2c6e6f1836c121f488c7",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Non-isolated, non-knockout subgroup that needs isolation (Multiply blend mode in its content) nested inside a knockout group; the subgroup's elements must blend against its own initial backdrop while its transparent areas leave the parent untouched."
   },
   {
     "id": "issue6010_1",
@@ -8722,6 +8885,14 @@
     "md5": "ce718efe601cd7491dd00651b4790329",
     "rounds": 1,
     "type": "eq"
+  },
+  {
+    "id": "ccitt_EndOfBlock_false_nowasm",
+    "file": "pdfs/ccitt_EndOfBlock_false.pdf",
+    "md5": "ce718efe601cd7491dd00651b4790329",
+    "rounds": 1,
+    "type": "eq",
+    "useWasm": false
   },
   {
     "id": "issue9940",
@@ -11152,9 +11323,9 @@
     "md5": "f81c617e5113e0c510a4cfe8b012798e",
     "rounds": 1,
     "link": true,
-    "firstPage": 1,
     "lastPage": 1,
-    "type": "eq"
+    "type": "eq",
+    "forms": true
   },
   {
     "id": "issue17929",
@@ -12295,6 +12466,15 @@
     "type": "eq"
   },
   {
+    "id": "issue21523",
+    "file": "pdfs/issue21523.pdf",
+    "md5": "7d21cf443ec7490b50089a1eb7d6e6a1",
+    "rounds": 1,
+    "link": true,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
     "id": "issue19281",
     "file": "pdfs/issue19281.pdf",
     "md5": "c5db558965e4189cc6db2720cdaa3e55",
@@ -12893,6 +13073,13 @@
         }
       }
     }
+  },
+  {
+    "id": "issue21570",
+    "file": "pdfs/issue21570.pdf",
+    "md5": "3065e65224901203e708e3dacad2d99a",
+    "rounds": 1,
+    "type": "eq"
   },
   {
     "id": "issue2856",
@@ -13510,7 +13697,7 @@
     "file": "pdfs/bitmap-symbol-context-reuse.pdf",
     "md5": "3d79e2d087515c2fdbed6fec0ad86e91",
     "rounds": 1,
-    "type": "skip-because-failing",
+    "type": "eq",
     "useWasm": false
   },
   {
@@ -14027,6 +14214,352 @@
     "md5": "5740b4600e40c6fc920d38f96a74c6a5",
     "rounds": 1,
     "link": true,
+    "type": "eq"
+  },
+  {
+    "id": "tiling_patterns_variations",
+    "file": "pdfs/tiling_patterns_variations.pdf",
+    "md5": "2870c3136be00ddd975149b2c7d1e6df",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "function-based-shading",
+    "file": "pdfs/function_based_shading.pdf",
+    "md5": "7796f0131e7d6428c1bf24a73ff13f95",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "pdfspec-radial-gradient",
+    "file": "pdfs/pdf.pdf",
+    "md5": "dbdb23c939d2be09b43126c3c56060c7",
+    "link": true,
+    "firstPage": 1144,
+    "lastPage": 1144,
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue16091",
+    "file": "pdfs/issue16091.pdf",
+    "md5": "ac6b2b69d9b3675b317708ec00aaf56c",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue7821",
+    "file": "pdfs/issue7821.pdf",
+    "md5": "7f0f390a70228fffe95835518ec266c5",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue21068",
+    "file": "pdfs/issue21068.pdf",
+    "md5": "69558d166186923ad9d639d91884dbd6",
+    "rounds": 1,
+    "type": "eq",
+    "print": true,
+    "annotationStorage": {
+      "27R": {
+        "value": "123"
+      },
+      "28R": {
+        "value": "123"
+      },
+      "29R": {
+        "value": "1234"
+      },
+      "30R": {
+        "value": "123"
+      }
+    }
+  },
+  {
+    "id": "issue21089",
+    "file": "pdfs/issue21089.pdf",
+    "md5": "0ae3954d2f24151dfc36ef717c8afbde",
+    "link": true,
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "recursiveCompositGlyf",
+    "file": "pdfs/recursiveCompositGlyf.pdf",
+    "md5": "e4e106d20e4af10d7a5f1a5da02db66f",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue19634",
+    "file": "pdfs/issue19634.pdf",
+    "md5": "ae33892db2a2421ec7c9c3e2aee07205",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue13520",
+    "file": "pdfs/issue13520.pdf",
+    "md5": "5a690e2303604441308f808b5fc33e22",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue17784",
+    "file": "pdfs/issue17784.pdf",
+    "md5": "e92178bb5ca8d6cd6f79868470adbe1d",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 3,
+    "lastPage": 3,
+    "type": "eq"
+  },
+  {
+    "id": "issue21126",
+    "file": "pdfs/issue21126.pdf",
+    "md5": "29c23022ab3d983733e1ee37fd0bc785",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "bug2022700",
+    "file": "pdfs/bug2022700.pdf",
+    "md5": "27c147191aa76a9f9916b3ede76a9523",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 1,
+    "lastPage": 1,
+    "save": true,
+    "print": true,
+    "annotationStorage": {
+      "35R": {
+        "value": true
+      }
+    },
+    "type": "eq"
+  },
+  {
+    "id": "smask_alpha_oob",
+    "file": "pdfs/smask_alpha_oob.pdf",
+    "md5": "51b86d51d5311db6805a7e5be2ee0aeb",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "smask_alpha_oob_transfer",
+    "file": "pdfs/smask_alpha_oob_transfer.pdf",
+    "md5": "4c5fa755f6cc26283f1b21f9b5f59ada",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "smask_alpha_bc",
+    "file": "pdfs/smask_alpha_bc.pdf",
+    "md5": "493e7aeef054aab09f325f48703d5ba8",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "smask_luminosity_oob_transfer",
+    "file": "pdfs/smask_luminosity_oob_transfer.pdf",
+    "md5": "267dc76f33cc0c0b6d36ff4605f60907",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "knockout_groups_test",
+    "file": "pdfs/knockout_groups_test.pdf",
+    "md5": "8e085d0dcea38e976f81cbfb50ece6cd",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Knockout groups composite-modes survey."
+  },
+  {
+    "id": "issue18032",
+    "file": "pdfs/issue18032.pdf",
+    "md5": "656234fde97953c4e3fc7698831590a9",
+    "rounds": 1,
+    "type": "eq",
+    "about": "Non-isolated knockout group with a nested non-isolated subgroup over existing text."
+  },
+  {
+    "id": "Embedded_font.pdf",
+    "file": "pdfs/Embedded_font.pdf",
+    "md5": "b68dd5a3e6833d1af94e295fe1d60285",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue18548_reduced",
+    "file": "pdfs/issue18548_reduced.pdf",
+    "md5": "39d15f7f810bd89a4e5858df9c75ca4e",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue7625",
+    "file": "pdfs/issue7625.pdf",
+    "md5": "77ca0a41da767dca31ca45219e2ae202",
+    "link": true,
+    "rounds": 1,
+    "firstPage": 1,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue_cff_unsigned_bbox",
+    "file": "pdfs/issue_cff_unsigned_bbox.pdf",
+    "md5": "d2606e2c6cc9e679b8b88c2800c6e1a9",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue21346",
+    "file": "pdfs/issue21346.pdf",
+    "md5": "16b39d943d268ebfa99ee57f1f470f53",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "cidfont_cmap_overflow",
+    "file": "pdfs/cidfont_cmap_overflow.pdf",
+    "md5": "8ce57e23b42b3232b0f2060bdd2c8b2a",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "jbig2_file_header",
+    "file": "pdfs/jbig2_file_header.pdf",
+    "md5": "702be2459f9bdbe93338ab3a584babc4",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue21406",
+    "file": "pdfs/issue21406.pdf",
+    "md5": "d8042e1ee1213e8b0f1f9383d218277f",
+    "rounds": 1,
+    "link": true,
+    "type": "eq"
+  },
+  {
+    "id": "bug1802506",
+    "file": "pdfs/bug1802506.pdf",
+    "md5": "ed56da1780b8480262c7329c4419fbb5",
+    "rounds": 1,
+    "type": "eq",
+    "annotations": true,
+    "forms": true
+  },
+  {
+    "id": "checkbox_no_appearance",
+    "file": "pdfs/checkbox_no_appearance.pdf",
+    "md5": "216ff8ea24c470421ff1c528d805caea",
+    "rounds": 1,
+    "type": "eq",
+    "annotations": true,
+    "forms": true
+  },
+  {
+    "id": "issue21430",
+    "file": "pdfs/issue21430.pdf",
+    "md5": "e317f63bdfd6f3d1939a52c983379454",
+    "rounds": 1,
+    "link": true,
+    "firstPage": 1,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue17333",
+    "file": "pdfs/issue17333.pdf",
+    "md5": "3af896c003dea994c58ab4a875d59829",
+    "rounds": 1,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue21579",
+    "file": "pdfs/issue21579.pdf",
+    "md5": "3e067e3d08edfcb84b70b50937cf247f",
+    "rounds": 1,
+    "type": "eq",
+    "password": "pässwört"
+  },
+  {
+    "id": "saslprep-r6",
+    "file": "pdfs/saslprep-r6.pdf",
+    "md5": "2aee2434f164a00a52b98f29b6f9758c",
+    "rounds": 1,
+    "type": "eq",
+    "password": "S\u00AASL\u00ADprep"
+  },
+  {
+    "id": "jpx_smaskindata",
+    "file": "pdfs/jpx_smaskindata.pdf",
+    "md5": "f7a8628b14ca176700247f106c16812a",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "nonisolated_blend_smask",
+    "file": "pdfs/nonisolated_blend_smask.pdf",
+    "md5": "4b87611416be34894eeb19c158fafbad",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "function_based_shading_cmyk",
+    "file": "pdfs/function_based_shading_cmyk.pdf",
+    "md5": "6c2b4d131a007a6f40ac7a892ad5f2a1",
+    "rounds": 1,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
+    "id": "large_jpeg_downscale",
+    "file": "pdfs/large_jpeg_downscale.pdf",
+    "md5": "cfa0f34c0a615caaa267d70d7c91fd51",
+    "rounds": 1,
+    "lastPage": 1,
+    "type": "eq"
+  },
+  {
+    "id": "bug2055455",
+    "file": "pdfs/bug2055455.pdf",
+    "md5": "e9a7d04240532aa4c6849f291f275895",
+    "rounds": 1,
+    "lastPage": 1,
+    "type": "eq",
+    "print": true
+  },
+  {
+    "id": "devicen-none-zero-domain",
+    "file": "pdfs/devicen-none-zero-domain.pdf",
+    "md5": "65f0b4ca54f82d440e579638ab8abc96",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue20294",
+    "file": "pdfs/issue20294_reduced.pdf",
+    "md5": "29bdb56f4249dc642556c36ecb8de22b",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "issue21878",
+    "file": "pdfs/issue21878.pdf",
+    "md5": "0ab77bc45682d06b55499b95b42f907d",
+    "rounds": 1,
+    "type": "eq"
+  },
+  {
+    "id": "transfer_maps",
+    "file": "pdfs/transfer_maps.pdf",
+    "md5": "3b88d507cdaa55cf3379efea51880288",
+    "rounds": 1,
     "type": "eq"
   }
 ]

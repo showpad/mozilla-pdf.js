@@ -35,6 +35,7 @@ import {
   waitForBrowserTrip,
   waitForSerialized,
   waitForTimeout,
+  waitForTooltipToBe,
 } from "./test_utils.mjs";
 
 const switchToHighlight = switchToEditor.bind(null, "Highlight");
@@ -275,11 +276,7 @@ describe("Comment", () => {
 
           let commentButtonSelector = `${getEditorSelector(0)} button.comment`;
           await page.waitForSelector(commentButtonSelector, { visible: true });
-          let title = await page.evaluate(
-            selector => document.querySelector(selector).title,
-            commentButtonSelector
-          );
-          expect(title).withContext(`In ${browserName}`).toEqual("Add comment");
+          await waitForTooltipToBe(page, commentButtonSelector, "Add comment");
           await page.click(commentButtonSelector);
 
           const textInputSelector = "#commentManagerTextInput";
@@ -294,13 +291,7 @@ describe("Comment", () => {
           await page.waitForSelector(commentButtonSelector, {
             visible: true,
           });
-          title = await page.evaluate(selector => {
-            const button = document.querySelector(selector);
-            return button.title;
-          }, commentButtonSelector);
-          expect(title)
-            .withContext(`In ${browserName}`)
-            .toEqual("Show comment");
+          await waitForTooltipToBe(page, commentButtonSelector, "Show comment");
         })
       );
     });
@@ -537,7 +528,11 @@ describe("Comment", () => {
             await page.mouse.down();
 
             const steps = 20;
-            await page.mouse.move(startX - extraWidth, startY, { steps });
+            for (let i = 1; i <= steps; i++) {
+              const x = Math.round(startX - (extraWidth * i) / steps);
+              await page.mouse.move(x, startY);
+              await waitForBrowserTrip(page);
+            }
             await page.mouse.up();
 
             const rectAfter = await getRect(page, sidebarSelector);
@@ -571,10 +566,10 @@ describe("Comment", () => {
             const rect = await getRect(page, sidebarSelector);
             const arrowKey = extraWidth > 0 ? "ArrowLeft" : "ArrowRight";
             for (let i = 0; i < Math.abs(extraWidth); i++) {
-              await waitForBrowserTrip(page);
               await kbModifierDown(page);
               await page.keyboard.press(arrowKey);
               await kbModifierUp(page);
+              await waitForBrowserTrip(page);
             }
 
             const rectAfter = await getRect(page, sidebarSelector);
@@ -592,6 +587,7 @@ describe("Comment", () => {
             const arrowKey = extraWidth > 0 ? "ArrowLeft" : "ArrowRight";
             for (let i = 0; i < Math.abs(extraWidth); i++) {
               await page.keyboard.press(arrowKey);
+              await waitForBrowserTrip(page);
             }
 
             const rectAfter = await getRect(page, sidebarSelector);
@@ -616,8 +612,9 @@ describe("Comment", () => {
               Array.from(
                 document.querySelectorAll(
                   `#editorCommentParamsToolbar ul > li > time`
-                )
-              ).map(time => new Date(time.getAttribute("datetime")))
+                ),
+                time => new Date(time.getAttribute("datetime"))
+              )
             );
             for (let i = 0; i < dates.length - 1; i++) {
               expect(dates[i])
@@ -907,7 +904,7 @@ describe("Comment", () => {
               ),
             editorSelector
           );
-          expect(hasCommentButton).withContext(`In ${browserName}`).toBe(false);
+          expect(hasCommentButton).withContext(`In ${browserName}`).toBeFalse();
         })
       );
     });

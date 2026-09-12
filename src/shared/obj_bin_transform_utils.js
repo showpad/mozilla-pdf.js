@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+import { shadow } from "./util.js";
+
 class CSS_FONT_INFO {
   static strings = ["fontFamily", "fontWeight", "italicAngle"];
 }
@@ -61,11 +63,21 @@ class PATTERN_INFO {
 
   static N_COORD = 4; // number of coordinate pairs
 
-  static N_COLOR = 8; // number of rgb triplets
+  static N_COLOR = 8; // number of RGBA-stride color entries
 
   static N_STOP = 12; // number of gradient stops
 
   static N_FIGURES = 16; // number of figures
 }
 
-export { CSS_FONT_INFO, FONT_INFO, PATTERN_INFO, SYSTEM_FONT_INFO };
+class InfoUtils {
+  static get decoder() {
+    return shadow(this, "decoder", new TextDecoder());
+  }
+
+  static get encoder() {
+    return shadow(this, "encoder", new TextEncoder());
+  }
+}
+
+export { CSS_FONT_INFO, FONT_INFO, InfoUtils, PATTERN_INFO, SYSTEM_FONT_INFO };

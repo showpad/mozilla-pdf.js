@@ -25,11 +25,19 @@ class BaseStream {
     }
   }
 
+  /**
+   * @abstract
+   * @returns {number}
+   */
   // eslint-disable-next-line getter-return
   get length() {
     unreachable("Abstract getter `length` accessed");
   }
 
+  /**
+   * @abstract
+   * @returns {boolean}
+   */
   // eslint-disable-next-line getter-return
   get isEmpty() {
     unreachable("Abstract getter `isEmpty` accessed");
@@ -43,6 +51,11 @@ class BaseStream {
     unreachable("Abstract method `getByte` called");
   }
 
+  /**
+   * @abstract
+   * @param {number | undefined} [length]
+   * @returns {Uint8Array}
+   */
   getBytes(length) {
     unreachable("Abstract method `getBytes` called");
   }
@@ -76,7 +89,11 @@ class BaseStream {
     return false;
   }
 
-  async getTransferableImage() {
+  /**
+   * @param {number} width - The width from the image dictionary.
+   * @param {number} height - The height from the image dictionary.
+   */
+  async getTransferableImage(width, height) {
     return null;
   }
 
@@ -133,6 +150,10 @@ class BaseStream {
 
   makeSubStream(start, length, dict = null) {
     unreachable("Abstract method `makeSubStream` called");
+  }
+
+  clone() {
+    unreachable("Abstract method `clone` called");
   }
 
   /**

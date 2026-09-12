@@ -16,16 +16,14 @@
 import {
   BaseException,
   DrawOPS,
-  FeatureTest,
-  MathClamp,
   shadow,
   stripPath,
   Util,
   warn,
 } from "../shared/util.js";
+import { MathClamp } from "../shared/math_clamp.js";
+import { PageViewport } from "./page_viewport.js";
 import { XfaLayer } from "./xfa_layer.js";
-
-const SVG_NS = "http://www.w3.org/2000/svg";
 
 class PixelsPerInch {
   static CSS = 96.0;
@@ -85,220 +83,6 @@ async function fetchData(url, type = "text") {
   });
 }
 
-/**
- * @typedef {Object} PageViewportParameters
- * @property {Array<number>} viewBox - The xMin, yMin, xMax and
- *   yMax coordinates.
- * @property {number} userUnit - The size of units.
- * @property {number} scale - The scale of the viewport.
- * @property {number} rotation - The rotation, in degrees, of the viewport.
- * @property {number} [offsetX] - The horizontal, i.e. x-axis, offset. The
- *   default value is `0`.
- * @property {number} [offsetY] - The vertical, i.e. y-axis, offset. The
- *   default value is `0`.
- * @property {boolean} [dontFlip] - If true, the y-axis will not be flipped.
- *   The default value is `false`.
- */
-
-/**
- * @typedef {Object} PageViewportCloneParameters
- * @property {number} [scale] - The scale, overriding the one in the cloned
- *   viewport. The default value is `this.scale`.
- * @property {number} [rotation] - The rotation, in degrees, overriding the one
- *   in the cloned viewport. The default value is `this.rotation`.
- * @property {number} [offsetX] - The horizontal, i.e. x-axis, offset.
- *   The default value is `this.offsetX`.
- * @property {number} [offsetY] - The vertical, i.e. y-axis, offset.
- *   The default value is `this.offsetY`.
- * @property {boolean} [dontFlip] - If true, the x-axis will not be flipped.
- *   The default value is `false`.
- */
-
-/**
- * PDF page viewport created based on scale, rotation and offset.
- */
-class PageViewport {
-  /**
-   * @param {PageViewportParameters}
-   */
-  constructor({
-    viewBox,
-    userUnit,
-    scale,
-    rotation,
-    offsetX = 0,
-    offsetY = 0,
-    dontFlip = false,
-  }) {
-    this.viewBox = viewBox;
-    this.userUnit = userUnit;
-    this.scale = scale;
-    this.rotation = rotation;
-    this.offsetX = offsetX;
-    this.offsetY = offsetY;
-
-    scale *= userUnit; // Take the userUnit into account.
-
-    // creating transform to convert pdf coordinate system to the normal
-    // canvas like coordinates taking in account scale and rotation
-    const centerX = (viewBox[2] + viewBox[0]) / 2;
-    const centerY = (viewBox[3] + viewBox[1]) / 2;
-    let rotateA, rotateB, rotateC, rotateD;
-    // Normalize the rotation, by clamping it to the [0, 360) range.
-    rotation %= 360;
-    if (rotation < 0) {
-      rotation += 360;
-    }
-    switch (rotation) {
-      case 180:
-        rotateA = -1;
-        rotateB = 0;
-        rotateC = 0;
-        rotateD = 1;
-        break;
-      case 90:
-        rotateA = 0;
-        rotateB = 1;
-        rotateC = 1;
-        rotateD = 0;
-        break;
-      case 270:
-        rotateA = 0;
-        rotateB = -1;
-        rotateC = -1;
-        rotateD = 0;
-        break;
-      case 0:
-        rotateA = 1;
-        rotateB = 0;
-        rotateC = 0;
-        rotateD = -1;
-        break;
-      default:
-        throw new Error(
-          "PageViewport: Invalid rotation, must be a multiple of 90 degrees."
-        );
-    }
-
-    if (dontFlip) {
-      rotateC = -rotateC;
-      rotateD = -rotateD;
-    }
-
-    let offsetCanvasX, offsetCanvasY;
-    let width, height;
-    if (rotateA === 0) {
-      offsetCanvasX = Math.abs(centerY - viewBox[1]) * scale + offsetX;
-      offsetCanvasY = Math.abs(centerX - viewBox[0]) * scale + offsetY;
-      width = (viewBox[3] - viewBox[1]) * scale;
-      height = (viewBox[2] - viewBox[0]) * scale;
-    } else {
-      offsetCanvasX = Math.abs(centerX - viewBox[0]) * scale + offsetX;
-      offsetCanvasY = Math.abs(centerY - viewBox[1]) * scale + offsetY;
-      width = (viewBox[2] - viewBox[0]) * scale;
-      height = (viewBox[3] - viewBox[1]) * scale;
-    }
-    // creating transform for the following operations:
-    // translate(-centerX, -centerY), rotate and flip vertically,
-    // scale, and translate(offsetCanvasX, offsetCanvasY)
-    this.transform = [
-      rotateA * scale,
-      rotateB * scale,
-      rotateC * scale,
-      rotateD * scale,
-      offsetCanvasX - rotateA * scale * centerX - rotateC * scale * centerY,
-      offsetCanvasY - rotateB * scale * centerX - rotateD * scale * centerY,
-    ];
-
-    this.width = width;
-    this.height = height;
-  }
-
-  /**
-   * The original, un-scaled, viewport dimensions.
-   * @type {Object}
-   */
-  get rawDims() {
-    const dims = this.viewBox;
-
-    return shadow(this, "rawDims", {
-      pageWidth: dims[2] - dims[0],
-      pageHeight: dims[3] - dims[1],
-      pageX: dims[0],
-      pageY: dims[1],
-    });
-  }
-
-  /**
-   * Clones viewport, with optional additional properties.
-   * @param {PageViewportCloneParameters} [params]
-   * @returns {PageViewport} Cloned viewport.
-   */
-  clone({
-    scale = this.scale,
-    rotation = this.rotation,
-    offsetX = this.offsetX,
-    offsetY = this.offsetY,
-    dontFlip = false,
-  } = {}) {
-    return new PageViewport({
-      viewBox: this.viewBox.slice(),
-      userUnit: this.userUnit,
-      scale,
-      rotation,
-      offsetX,
-      offsetY,
-      dontFlip,
-    });
-  }
-
-  /**
-   * Converts PDF point to the viewport coordinates. For examples, useful for
-   * converting PDF location into canvas pixel coordinates.
-   * @param {number} x - The x-coordinate.
-   * @param {number} y - The y-coordinate.
-   * @returns {Array} Array containing `x`- and `y`-coordinates of the
-   *   point in the viewport coordinate space.
-   * @see {@link convertToPdfPoint}
-   * @see {@link convertToViewportRectangle}
-   */
-  convertToViewportPoint(x, y) {
-    const p = [x, y];
-    Util.applyTransform(p, this.transform);
-    return p;
-  }
-
-  /**
-   * Converts PDF rectangle to the viewport coordinates.
-   * @param {Array} rect - The xMin, yMin, xMax and yMax coordinates.
-   * @returns {Array} Array containing corresponding coordinates of the
-   *   rectangle in the viewport coordinate space.
-   * @see {@link convertToViewportPoint}
-   */
-  convertToViewportRectangle(rect) {
-    const topLeft = [rect[0], rect[1]];
-    Util.applyTransform(topLeft, this.transform);
-    const bottomRight = [rect[2], rect[3]];
-    Util.applyTransform(bottomRight, this.transform);
-    return [topLeft[0], topLeft[1], bottomRight[0], bottomRight[1]];
-  }
-
-  /**
-   * Converts viewport coordinates to the PDF location. For examples, useful
-   * for converting canvas pixel location into PDF one.
-   * @param {number} x - The x-coordinate.
-   * @param {number} y - The y-coordinate.
-   * @returns {Array} Array containing `x`- and `y`-coordinates of the
-   *   point in the PDF coordinate space.
-   * @see {@link convertToViewportPoint}
-   */
-  convertToPdfPoint(x, y) {
-    const p = [x, y];
-    Util.applyInverseTransform(p, this.transform);
-    return p;
-  }
-}
-
 class RenderingCancelledException extends BaseException {
   constructor(msg, extraDelay = 0) {
     super(msg, "RenderingCancelledException");
@@ -348,22 +132,19 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
   const getURL = urlString => {
     try {
       return new URL(urlString);
-    } catch {
-      try {
-        return new URL(decodeURIComponent(urlString));
-      } catch {
-        try {
-          // Attempt to parse the URL using the document's base URI.
-          return new URL(urlString, "https://foo.bar");
-        } catch {
-          try {
-            return new URL(decodeURIComponent(urlString), "https://foo.bar");
-          } catch {
-            return null;
-          }
-        }
-      }
-    }
+    } catch {}
+    try {
+      return new URL(decodeURIComponent(urlString));
+    } catch {}
+    try {
+      // Attempt to parse the URL using the document's base URI.
+      return new URL(urlString, "https://foo.bar");
+    } catch {}
+    try {
+      return new URL(decodeURIComponent(urlString), "https://foo.bar");
+    } catch {}
+
+    return null;
   };
 
   const newURL = getURL(url);
@@ -377,7 +158,8 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
       let decoded = decodeURIComponent(name);
       if (decoded.includes("/")) {
         decoded = stripPath(decoded);
-        if (/^\.pdf$/i.test(decoded)) {
+        // Ignore the decoded name if it's identical to ".pdf".
+        if (decoded.length === 4 && pdfRegex.test(decoded)) {
           return name;
         }
       }
@@ -406,10 +188,22 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
   }
 
   if (newURL.hash) {
-    const reFilename = /[^/?#=]+\.pdf\b(?!.*\.pdf\b)/i;
-    const hashFilename = reFilename.exec(newURL.hash);
-    if (hashFilename) {
-      return decode(hashFilename[0]);
+    // Locate the last ".pdf" and then extend it to the left, up to the closest
+    // separator. Both steps are linear, whereas a single pattern starting with
+    // `[^/?#=]+` is quadratic on a hash which contains no ".pdf" at all.
+    const { hash } = newURL;
+    let extensionStart = -1;
+    for (const { index } of hash.matchAll(/\.pdf\b/gi)) {
+      extensionStart = index;
+    }
+    if (extensionStart > 0) {
+      let filenameStart = extensionStart;
+      while (filenameStart > 0 && !"/?#=".includes(hash[filenameStart - 1])) {
+        filenameStart--;
+      }
+      if (filenameStart < extensionStart) {
+        return decode(hash.slice(filenameStart, extensionStart + 4));
+      }
     }
   }
 
@@ -417,41 +211,37 @@ function getPdfFilenameFromUrl(url, defaultFilename = "document.pdf") {
 }
 
 class StatTimer {
-  started = Object.create(null);
+  #started = new Map();
 
   times = [];
 
   time(name) {
-    if (name in this.started) {
+    if (this.#started.has(name)) {
       warn(`Timer is already running for ${name}`);
     }
-    this.started[name] = Date.now();
+    this.#started.set(name, Date.now());
   }
 
   timeEnd(name) {
-    if (!(name in this.started)) {
+    if (!this.#started.has(name)) {
       warn(`Timer has not been started for ${name}`);
     }
     this.times.push({
       name,
-      start: this.started[name],
+      start: this.#started.get(name),
       end: Date.now(),
     });
     // Remove timer from started so it can be called again.
-    delete this.started[name];
+    this.#started.delete(name);
   }
 
   toString() {
     // Find the longest name for padding purposes.
-    const outBuf = [];
-    let longest = 0;
-    for (const { name } of this.times) {
-      longest = Math.max(name.length, longest);
-    }
-    for (const { name, start, end } of this.times) {
-      outBuf.push(`${name.padEnd(longest)} ${end - start}ms\n`);
-    }
-    return outBuf.join("");
+    const longest = Math.max(...this.times.map(t => t.name.length));
+
+    return this.times
+      .map(t => `${t.name.padEnd(longest)} ${t.end - t.start}ms\n`)
+      .join("");
   }
 }
 
@@ -497,7 +287,6 @@ class PDFDateString {
    * Moreover, Adobe Acrobat doesn't handle changing the date to universal time
    * and doesn't use the user's time zone (effectively ignoring the HH' and mm'
    * parts of the date string).
-   *
    * @param {string} input
    * @returns {Date|null}
    */
@@ -518,7 +307,7 @@ class PDFDateString {
         "(\\d{2})?" + // Hour (optional)
         "(\\d{2})?" + // Minute (optional)
         "(\\d{2})?" + // Second (optional)
-        "([Z|+|-])?" + // Universal time relation (optional)
+        "([Z|+\\-])?" + // Universal time relation (optional)
         "(\\d{2})?" + // Offset hour (optional)
         "'?" + // Splitting apostrophe (optional)
         "(\\d{2})?" + // Offset minute (optional)
@@ -568,49 +357,63 @@ class PDFDateString {
   }
 }
 
-/**
- * NOTE: This is (mostly) intended to support printing of XFA forms.
- */
-function getXfaPageViewport(xfaPage, { scale = 1, rotation = 0 }) {
-  const { width, height } = xfaPage.attributes.style;
-  const viewBox = [0, 0, parseInt(width), parseInt(height)];
-
-  return new PageViewport({
-    viewBox,
-    userUnit: 1,
-    scale,
-    rotation,
-  });
-}
-
-function getRGB(color) {
+function getRGBA(color) {
   if (color.startsWith("#")) {
-    const colorRGB = parseInt(color.slice(1), 16);
+    // #RRGGBB or #RRGGBBAA
+    const hex = color.slice(1);
     return [
-      (colorRGB & 0xff0000) >> 16,
-      (colorRGB & 0x00ff00) >> 8,
-      colorRGB & 0x0000ff,
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+      hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1,
     ];
   }
 
   if (color.startsWith("rgb(")) {
     // getComputedStyle(...).color returns a `rgb(R, G, B)` color.
-    return color
+    const [r, g, b] = color
       .slice(/* "rgb(".length */ 4, -1) // Strip out "rgb(" and ")".
       .split(",")
-      .map(x => parseInt(x));
+      .map(x => parseInt(x, 10));
+    return [r, g, b, 1];
   }
 
   if (color.startsWith("rgba(")) {
-    return color
+    const parts = color
       .slice(/* "rgba(".length */ 5, -1) // Strip out "rgba(" and ")".
-      .split(",")
-      .map(x => parseInt(x))
-      .slice(0, 3);
+      .split(",");
+    return [
+      parseInt(parts[0], 10),
+      parseInt(parts[1], 10),
+      parseInt(parts[2], 10),
+      parseFloat(parts[3]),
+    ];
   }
 
-  warn(`Not a valid color format: "${color}"`);
-  return [0, 0, 0];
+  // color(srgb r g b / a) — CSS Color 4, used e.g. by Firefox alpha inputs.
+  // Components are in [0, 1]; alpha may be "none" (treated as fully opaque).
+  const m = color.match(
+    /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+|none))?\)$/
+  );
+  if (m) {
+    return [
+      Math.round(parseFloat(m[1]) * 255),
+      Math.round(parseFloat(m[2]) * 255),
+      Math.round(parseFloat(m[3]) * 255),
+      m[4] !== undefined && m[4] !== "none" ? parseFloat(m[4]) : 1,
+    ];
+  }
+
+  return null;
+}
+
+function getRGB(color) {
+  const rgba = getRGBA(color);
+  if (!rgba) {
+    warn(`Not a valid color format: "${color}"`);
+    return [0, 0, 0];
+  }
+  return rgba.slice(0, 3);
 }
 
 function getColorValues(colors) {
@@ -652,16 +455,9 @@ function setLayerDimensions(
   if (viewport instanceof PageViewport) {
     const { pageWidth, pageHeight } = viewport.rawDims;
     const { style } = div;
-    const useRound = FeatureTest.isCSSRoundSupported;
 
-    const w = `var(--total-scale-factor) * ${pageWidth}px`,
-      h = `var(--total-scale-factor) * ${pageHeight}px`;
-    const widthStr = useRound
-        ? `round(down, ${w}, var(--scale-round-x))`
-        : `calc(${w})`,
-      heightStr = useRound
-        ? `round(down, ${h}, var(--scale-round-y))`
-        : `calc(${h})`;
+    const widthStr = `round(down, var(--total-scale-factor) * ${pageWidth}px, var(--scale-round-x))`,
+      heightStr = `round(down, var(--total-scale-factor) * ${pageHeight}px, var(--scale-round-y))`;
 
     if (!mustFlip || viewport.rotation % 180 === 0) {
       style.width = widthStr;
@@ -795,13 +591,10 @@ class CSSConstants {
   }
 }
 
-function applyOpacity(r, g, b, opacity) {
+function applyOpacity(color, opacity) {
   opacity = MathClamp(opacity ?? 1, 0, 1);
   const white = 255 * (1 - opacity);
-  r = Math.round(r * opacity + white);
-  g = Math.round(g * opacity + white);
-  b = Math.round(b * opacity + white);
-  return [r, g, b];
+  return color.map(c => Math.round(c * opacity + white));
 }
 
 function RGBToHSL(rgb, output) {
@@ -974,7 +767,7 @@ function renderRichText({ html, dir, className }, container) {
   if (typeof html === "string") {
     const p = document.createElement("p");
     p.dir = dir || "auto";
-    const lines = html.split(/(?:\r\n?|\n)/);
+    const lines = html.split(/\r\n?|\n/);
     for (let i = 0, ii = lines.length; i < ii; ++i) {
       const line = lines[i];
       p.append(document.createTextNode(line));
@@ -1000,7 +793,7 @@ function makePathFromDrawOPS(data) {
   if (!data) {
     return path;
   }
-  for (let i = 0, ii = data.length; i < ii; ) {
+  for (let i = 0, ii = data.length; i < ii;) {
     switch (data[i++]) {
       case DrawOPS.moveTo:
         path.moveTo(data[i++], data[i++]);
@@ -1035,6 +828,7 @@ function makePathFromDrawOPS(data) {
 export {
   applyOpacity,
   ColorScheme,
+  computeLuminance,
   CSSConstants,
   deprecated,
   fetchData,
@@ -1045,14 +839,13 @@ export {
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
   getRGB,
-  getXfaPageViewport,
+  getRGBA,
   isDataScheme,
   isPdfFile,
   isValidFetchUrl,
   makePathFromDrawOPS,
   noContextMenu,
   OutputScale,
-  PageViewport,
   PDFDateString,
   PixelsPerInch,
   RenderingCancelledException,
@@ -1061,5 +854,4 @@ export {
   StatTimer,
   stopEvent,
   SupportedImageMimeTypes,
-  SVG_NS,
 };

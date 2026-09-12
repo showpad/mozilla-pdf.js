@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <!--
 Copyright 2012 Mozilla Foundation
 
@@ -30,6 +30,29 @@ See https://github.com/adobe-type-tools/cmap-resources
     <title>PDF.js viewer</title>
 
     <!--#if MOZCENTRAL-->
+    <!--<link rel="icon" type="image/svg+xml" href="chrome://global/skin/icons/pdf.svg" />-->
+    <!--<meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src resource: chrome: 'wasm-unsafe-eval'; worker-src resource:; style-src resource: chrome:; img-src resource: blob: data:; media-src blob:; font-src resource:; connect-src resource:; base-uri 'none'; form-action 'none';"
+    />-->
+    <!--#elif TESTING-->
+    <!--<meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src * blob: data:; base-uri 'self'; form-action 'none';"
+    />-->
+    <!--#elif CHROME-->
+    <!--<meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src * file: chrome-extension: blob: data: filesystem: drive:; base-uri 'self'; form-action 'none';"
+    />-->
+    <!--#else-->
+    <!--<meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src * blob: data:; base-uri 'none'; form-action 'none';"
+    />-->
+    <!--#endif-->
+
+    <!--#if MOZCENTRAL-->
     <!--#include viewer-snippet-firefox-extension.html-->
     <!--#elif CHROME-->
     <!--#include viewer-snippet-chrome-extension.html-->
@@ -40,12 +63,17 @@ See https://github.com/adobe-type-tools/cmap-resources
     <!--#if MOZCENTRAL-->
     <!--<link rel="stylesheet" href="resource://pdf.js/web/viewer.css">-->
     <!--<link rel="localization" href="toolkit/pdfviewer/viewer.ftl"/>-->
+    <!--<link rel="localization" href="branding/brand.ftl"/>-->
+    <!--<link rel="localization" href="toolkit/global/mozMessageBar.ftl"/>-->
+    <!--<link rel="localization" href="toolkit/about/pdfFeaturesNotification.ftl"/>-->
     <!--#else-->
     <link rel="stylesheet" href="viewer.css" />
     <!--#endif-->
 
     <!--#if MOZCENTRAL-->
     <!--<script src="resource://pdf.js/web/viewer.mjs" type="module"></script>-->
+
+    <!--<script src="chrome://global/content/elements/moz-message-bar.mjs" type="module"></script>-->
     <!--#elif !MOZCENTRAL-->
     <!--<script src="viewer.mjs" type="module"></script>-->
     <!--#elif /* Development mode. */-->
@@ -63,9 +91,7 @@ See https://github.com/adobe-type-tools/cmap-resources
           "cached-iterable": "../node_modules/cached-iterable/src/index.mjs",
 
           "display-binary_data_factory": "../src/display/binary_data_factory.js",
-          "display-fetch_stream": "../src/display/fetch_stream.js",
-          "display-network": "../src/display/network.js",
-          "display-node_stream": "../src/display/stubs.js",
+          "display-network_stream": "../src/display/network_stream.js",
           "display-node_utils": "../src/display/stubs.js",
 
           "web-alt_text_manager": "./alt_text_manager.js",
@@ -86,6 +112,7 @@ See https://github.com/adobe-type-tools/cmap-resources
           "web-print_service": "./pdf_print_service.js",
           "web-secondary_toolbar": "./secondary_toolbar.js",
           "web-signature_manager": "./signature_manager.js",
+          "web-digital_signature_properties_manager": "./digital_signature_properties_manager.js",
           "web-toolbar": "./toolbar.js",
           "web-views_manager": "./views_manager.js"
         }
@@ -164,6 +191,7 @@ See https://github.com/adobe-type-tools/cmap-resources
                         hidden="true"
                       >
                         <span data-l10n-id="pdfjs-views-manager-add-file-button-label"></span>
+                        <input id="viewsManagerAddFilePicker" type="file" accept="application/pdf,image/*" multiple />
                       </button>
                       <button
                         id="viewsManagerCurrentOutlineButton"
@@ -401,6 +429,27 @@ See https://github.com/adobe-type-tools/cmap-resources
               </div>
               <div id="toolbarViewerRight" class="toolbarHorizontalGroup">
                 <div id="editorModeButtons" class="toolbarHorizontalGroup">
+                  <div id="signatureProperties" class="toolbarButtonWithContainer" hidden="true">
+                    <button
+                      id="signaturePropertiesButton"
+                      class="toolbarButton"
+                      type="button"
+                      tabindex="0"
+                      aria-expanded="false"
+                      aria-haspopup="true"
+                      aria-controls="signaturePropertiesPanel"
+                      data-l10n-id="pdfjs-digital-signature-properties-button"
+                    >
+                      <span data-l10n-id="pdfjs-digital-signature-properties-button-label"></span>
+                    </button>
+                    <div class="editorParamsToolbar hidden doorHangerRight" id="signaturePropertiesPanel" role="region">
+                      <div id="signaturePropertiesContainer" class="signaturePropertiesContainer">
+                        <div id="signaturePropertiesBanner" class="sigBanner" hidden="true" role="status"></div>
+                        <ul id="signaturePropertiesList" class="signaturePropertiesList" tabindex="-1"></ul>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="signaturePropertiesSeparator" class="verticalToolbarSeparator" hidden="true"></div>
                   <div id="editorComment" class="toolbarButtonWithContainer" hidden="true">
                     <button
                       id="editorCommentButton"
@@ -836,6 +885,12 @@ See https://github.com/adobe-type-tools/cmap-resources
           </div>
         </div>
 
+        <!--#if MOZCENTRAL-->
+        <!--<moz-message-bar id="pdfFeaturesNotification" type="info" role="region" aria-live="polite" dismissable hidden data-l10n-id="pdf-features-notification">
+          <span slot="message" data-l10n-id="pdf-features-notification-message"><a href="about:pdf#features" data-l10n-name="features-link"></a></span>
+        </moz-message-bar>-->
+        <!--#endif-->
+
         <div id="viewerContainer" tabindex="0">
           <div id="viewer" class="pdfViewer"></div>
         </div>
@@ -851,8 +906,8 @@ See https://github.com/adobe-type-tools/cmap-resources
             <input type="password" id="password" class="toolbarField" />
           </div>
           <div class="buttonRow">
-            <button id="passwordCancel" class="dialogButton" type="button"><span data-l10n-id="pdfjs-password-cancel-button"></span></button>
-            <button id="passwordSubmit" class="dialogButton" type="button"><span data-l10n-id="pdfjs-password-ok-button"></span></button>
+            <button id="passwordCancel" class="secondaryButton" type="button"><span data-l10n-id="pdfjs-password-cancel-button"></span></button>
+            <button id="passwordSubmit" class="primaryButton" type="button"><span data-l10n-id="pdfjs-password-ok-button"></span></button>
           </div>
         </dialog>
         <dialog id="documentPropertiesDialog">
@@ -916,7 +971,9 @@ See https://github.com/adobe-type-tools/cmap-resources
             <p id="linearizedField" aria-labelledby="linearizedLabel">-</p>
           </div>
           <div class="buttonRow">
-            <button id="documentPropertiesClose" class="dialogButton" type="button"><span data-l10n-id="pdfjs-document-properties-close-button"></span></button>
+            <button id="documentPropertiesClose" class="secondaryButton" type="button">
+              <span data-l10n-id="pdfjs-document-properties-close-button"></span>
+            </button>
           </div>
         </dialog>
         <dialog class="dialog altText" id="altTextDialog" aria-labelledby="dialogLabel" aria-describedby="dialogDescription">
@@ -1160,7 +1217,7 @@ See https://github.com/adobe-type-tools/cmap-resources
                       <button class="clearInputButton" type="button" tabindex="0" aria-hidden="true"></button>
                     </span>
                   </div>
-                  <button id="clearSignatureButton" type="button" data-l10n-id="pdfjs-editor-add-signature-clear-button" tabindex="0">
+                  <button id="clearSignatureButton" class="secondaryButton" type="button" data-l10n-id="pdfjs-editor-add-signature-clear-button" tabindex="0">
                     <span data-l10n-id="pdfjs-editor-add-signature-clear-button-label"></span>
                   </button>
                 </div>
@@ -1238,7 +1295,7 @@ See https://github.com/adobe-type-tools/cmap-resources
         </dialog>
 
         <!--#if !MOZCENTRAL-->
-        <dialog id="printServiceDialog" style="min-width: 200px">
+        <dialog id="printServiceDialog">
           <div class="row">
             <span data-l10n-id="pdfjs-print-progress-message"></span>
           </div>
@@ -1247,7 +1304,7 @@ See https://github.com/adobe-type-tools/cmap-resources
             <span data-l10n-id="pdfjs-print-progress-percent" data-l10n-args='{ "progress": 0 }' class="relative-progress">0%</span>
           </div>
           <div class="buttonRow">
-            <button id="printCancel" class="dialogButton" type="button"><span data-l10n-id="pdfjs-print-progress-close-button"></span></button>
+            <button id="printCancel" class="secondaryButton" type="button"><span data-l10n-id="pdfjs-print-progress-close-button"></span></button>
           </div>
         </dialog>
         <!--#endif-->
@@ -1262,7 +1319,7 @@ See https://github.com/adobe-type-tools/cmap-resources
           <div>
             <span id="editorUndoBarMessage" class="description"></span>
           </div>
-          <button id="editorUndoBarUndoButton" class="undoButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-undo-bar-undo-button">
+          <button id="editorUndoBarUndoButton" class="secondaryButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-undo-bar-undo-button">
             <span data-l10n-id="pdfjs-editor-undo-bar-undo-button-label"></span>
           </button>
           <button id="editorUndoBarCloseButton" class="closeButton" type="button" tabindex="0" data-l10n-id="pdfjs-editor-undo-bar-close-button">

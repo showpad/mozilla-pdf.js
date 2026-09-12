@@ -13,18 +13,17 @@
  * limitations under the License.
  */
 
-import { assert, FeatureTest, MeshFigureType, Util } from "../shared/util.js";
+import { assert, BBOX_INIT, FeatureTest, Util } from "../shared/util.js";
 import {
   CSS_FONT_INFO,
   FONT_INFO,
+  InfoUtils,
   PATTERN_INFO,
   SYSTEM_FONT_INFO,
 } from "../shared/obj_bin_transform_utils.js";
 
 class CssFontInfo {
   #buffer;
-
-  #decoder = new TextDecoder();
 
   #view;
 
@@ -35,14 +34,13 @@ class CssFontInfo {
 
   #readString(index) {
     assert(index < CSS_FONT_INFO.strings.length, "Invalid string index");
+    const { decoder } = InfoUtils;
     let offset = 0;
     for (let i = 0; i < index; i++) {
       offset += this.#view.getUint32(offset) + 4;
     }
     const length = this.#view.getUint32(offset);
-    return this.#decoder.decode(
-      new Uint8Array(this.#buffer, offset + 4, length)
-    );
+    return decoder.decode(new Uint8Array(this.#buffer, offset + 4, length));
   }
 
   get fontFamily() {
@@ -61,8 +59,6 @@ class CssFontInfo {
 class SystemFontInfo {
   #buffer;
 
-  #decoder = new TextDecoder();
-
   #view;
 
   constructor(buffer) {
@@ -76,14 +72,13 @@ class SystemFontInfo {
 
   #readString(index) {
     assert(index < SYSTEM_FONT_INFO.strings.length, "Invalid string index");
+    const { decoder } = InfoUtils;
     let offset = 5;
     for (let i = 0; i < index; i++) {
       offset += this.#view.getUint32(offset) + 4;
     }
     const length = this.#view.getUint32(offset);
-    return this.#decoder.decode(
-      new Uint8Array(this.#buffer, offset + 4, length)
-    );
+    return decoder.decode(new Uint8Array(this.#buffer, offset + 4, length));
   }
 
   get css() {
@@ -103,15 +98,16 @@ class SystemFontInfo {
   }
 
   get style() {
+    const { decoder } = InfoUtils;
     let offset = 1;
     offset += 4 + this.#view.getUint32(offset);
     const styleLength = this.#view.getUint32(offset);
-    const style = this.#decoder.decode(
+    const style = decoder.decode(
       new Uint8Array(this.#buffer, offset + 4, styleLength)
     );
     offset += 4 + styleLength;
     const weightLength = this.#view.getUint32(offset);
-    const weight = this.#decoder.decode(
+    const weight = decoder.decode(
       new Uint8Array(this.#buffer, offset + 4, weightLength)
     );
     return { style, weight };
@@ -120,8 +116,6 @@ class SystemFontInfo {
 
 class FontInfo {
   #buffer;
-
-  #decoder = new TextDecoder();
 
   #view;
 
@@ -242,14 +236,13 @@ class FontInfo {
 
   #readString(index) {
     assert(index < FONT_INFO.strings.length, "Invalid string index");
+    const { decoder } = InfoUtils;
     let offset = FONT_INFO.OFFSET_STRINGS + 4;
     for (let i = 0; i < index; i++) {
       offset += this.#view.getUint32(offset) + 4;
     }
     const length = this.#view.getUint32(offset);
-    const stringData = new Uint8Array(length);
-    stringData.set(new Uint8Array(this.#buffer, offset + 4, length));
-    return this.#decoder.decode(stringData);
+    return decoder.decode(new Uint8Array(this.#buffer, offset + 4, length));
   }
 
   get fallbackName() {
@@ -348,13 +341,12 @@ class PatternInfo {
     const nCoord = dataView.getUint32(PATTERN_INFO.N_COORD, true);
     const nColor = dataView.getUint32(PATTERN_INFO.N_COLOR, true);
     const nStop = dataView.getUint32(PATTERN_INFO.N_STOP, true);
-    const nFigures = dataView.getUint32(PATTERN_INFO.N_FIGURES, true);
 
     let offset = 20;
     const coords = new Float32Array(this.buffer, offset, nCoord * 2);
     offset += nCoord * 8;
-    const colors = new Uint8Array(this.buffer, offset, nColor * 3);
-    offset += nColor * 3;
+    const colors = new Uint8Array(this.buffer, offset, nColor * 4);
+    offset += nColor * 4;
     const stops = [];
     for (let i = 0; i < nStop; ++i) {
       const p = dataView.getFloat32(offset, true);
@@ -376,37 +368,6 @@ class PatternInfo {
     if (hasBackground) {
       background = new Uint8Array(this.buffer, offset, 3);
       offset += 3;
-    }
-
-    const figures = [];
-    for (let i = 0; i < nFigures; ++i) {
-      const type = dataView.getUint8(offset);
-      offset += 1;
-      // Ensure 4-byte alignment
-      offset = Math.ceil(offset / 4) * 4;
-
-      const coordsLength = dataView.getUint32(offset, true);
-      offset += 4;
-      const figureCoords = new Int32Array(this.buffer, offset, coordsLength);
-      offset += coordsLength * 4;
-
-      const colorsLength = dataView.getUint32(offset, true);
-      offset += 4;
-      const figureColors = new Int32Array(this.buffer, offset, colorsLength);
-      offset += colorsLength * 4;
-
-      const figure = {
-        type,
-        coords: figureCoords,
-        colors: figureColors,
-      };
-
-      if (type === MeshFigureType.LATTICE) {
-        figure.verticesPerRow = dataView.getUint32(offset, true);
-        offset += 4;
-      }
-
-      figures.push(figure);
     }
 
     if (kind === 1) {
@@ -438,7 +399,7 @@ class PatternInfo {
       const shadingType = this.data[PATTERN_INFO.SHADING_TYPE];
       let bounds = null;
       if (coords.length > 0) {
-        bounds = [Infinity, Infinity, -Infinity, -Infinity];
+        bounds = BBOX_INIT.slice();
 
         for (let i = 0, ii = coords.length; i < ii; i += 2) {
           Util.pointBoundingBox(coords[i], coords[i + 1], bounds);
@@ -449,7 +410,7 @@ class PatternInfo {
         shadingType,
         coords,
         colors,
-        figures,
+        nCoord,
         bounds,
         bbox,
         background,

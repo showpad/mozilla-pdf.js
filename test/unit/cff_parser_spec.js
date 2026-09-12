@@ -18,8 +18,13 @@ import {
   CFFCompiler,
   CFFFDSelect,
   CFFParser,
+  CFFPrivateDict,
   CFFStrings,
+  CFFTopDict,
 } from "../../src/core/cff_parser.js";
+import { DefaultFileReaderFactory, TEST_PDFS_PATH } from "./test_utils.js";
+import { PDFDocument } from "../../src/core/document.js";
+import { Ref } from "../../src/core/primitives.js";
 import { SEAC_ANALYSIS_ENABLED } from "../../src/core/fonts_utils.js";
 import { Stream } from "../../src/core/stream.js";
 
@@ -55,11 +60,7 @@ describe("CFFParser", function () {
       "8b06f79a93fc7c8c077d99f85695f75e" +
       "9908fb6e8cf87393f7108b09a70adf0b" +
       "f78e14";
-    const fontArr = [];
-    for (let i = 0, ii = exampleFont.length; i < ii; i += 2) {
-      const hex = exampleFont.substring(i, i + 2);
-      fontArr.push(parseInt(hex, 16));
-    }
+    const fontArr = Uint8Array.fromHex(exampleFont);
     fontData = new Stream(fontArr);
   });
 
@@ -110,6 +111,301 @@ describe("CFFParser", function () {
     expect(topDict.getByName("FontBBox")).toEqual([-168, -218, 1000, 898]);
     expect(topDict.getByName("CharStrings")).toEqual(94);
     expect(topDict.getByName("Private")).toEqual([45, 102]);
+  });
+
+  it("ignores an empty FontBBox when adjusting ascent/descent", function () {
+    cff.topDict.setByName("FontBBox", [0, 0, 0, 0]);
+    const fontDataWithEmptyBBox = new CFFCompiler(cff).compile();
+
+    const properties = {
+      ascent: 800,
+      descent: -200,
+    };
+    new CFFParser(
+      new Stream(fontDataWithEmptyBBox),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(properties.ascent).toEqual(800);
+    expect(properties.descent).toEqual(-200);
+    expect(properties.ascentScaled).toBeUndefined();
+  });
+
+  it("repairs an empty FontBBox from font descriptor data", function () {
+    cff.topDict.setByName("FontBBox", [0, 0, 0, 0]);
+    const fontDataWithEmptyBBox = new CFFCompiler(cff).compile();
+
+    const properties = {
+      bbox: [2974, -300, 64236, 900],
+    };
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataWithEmptyBBox),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.getByName("FontBBox")).toEqual([
+      -1300, -300, 2974, 900,
+    ]);
+    expect(properties.ascent).toEqual(900);
+    expect(properties.descent).toEqual(-300);
+    expect(properties.ascentScaled).toBeTrue();
+  });
+
+  it("repairs a FontBBox with unsigned-encoded negative coordinates", function () {
+    // [-456, -305, 2158, 989] encoded as unsigned 16-bit values; produced
+    // by some Ghostscript-generated CFF fonts.
+    cff.topDict.setByName("FontBBox", [65080, 65231, 2158, 989]);
+    const fontDataRepaired = new CFFCompiler(cff).compile();
+
+    const properties = {
+      bbox: [-456, -305, 2158, 989],
+    };
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataRepaired),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.getByName("FontBBox")).toEqual([
+      -456, -305, 2158, 989,
+    ]);
+    expect(properties.ascent).toEqual(989);
+    expect(properties.descent).toEqual(-305);
+    expect(properties.ascentScaled).toBeTrue();
+  });
+
+  it("doesn't replace a repairable FontBBox with an empty descriptor bbox", function () {
+    cff.topDict.setByName("FontBBox", [65080, 65231, 2158, 989]);
+    const fontDataRepaired = new CFFCompiler(cff).compile();
+
+    const properties = {
+      bbox: [0, 0, 0, 0],
+    };
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataRepaired),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.getByName("FontBBox")).toEqual([
+      -456, -305, 2158, 989,
+    ]);
+    expect(properties.ascent).toEqual(989);
+    expect(properties.descent).toEqual(-305);
+    expect(properties.ascentScaled).toBeTrue();
+  });
+
+  it("repairs unsigned-encoded negative FontBBox without descriptor data", function () {
+    cff.topDict.setByName("FontBBox", [65080, 65231, 2158, 989]);
+    const fontDataRepaired = new CFFCompiler(cff).compile();
+
+    const properties = {};
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataRepaired),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.getByName("FontBBox")).toEqual([
+      -456, -305, 2158, 989,
+    ]);
+    expect(properties.ascent).toEqual(989);
+    expect(properties.descent).toEqual(-305);
+    expect(properties.ascentScaled).toBeTrue();
+  });
+
+  it("preserves large positive upper FontBBox coordinates", function () {
+    cff.topDict.setByName("FontBBox", [0, -305, 40000, 989]);
+    const fontDataRepaired = new CFFCompiler(cff).compile();
+
+    const properties = {
+      bbox: [0, -305, 40000, 989],
+    };
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataRepaired),
+      properties,
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.getByName("FontBBox")).toEqual([
+      0, -305, 40000, 989,
+    ]);
+    expect(properties.ascent).toEqual(989);
+    expect(properties.descent).toEqual(-305);
+    expect(properties.ascentScaled).toBeTrue();
+  });
+
+  it("repairs likely Ghostscript-zeroed FDArray private defaults", function () {
+    cff.isCIDFont = true;
+    cff.topDict.setByName("ROS", [0, 0, 0]);
+    cff.topDict.setByName("FDSelect", 0);
+    cff.topDict.setByName("FDArray", 0);
+
+    const fdDict = new CFFTopDict(cff.strings);
+    fdDict.setByName("Private", [0, 0]);
+    fdDict.privateDict = new CFFPrivateDict(cff.strings);
+    fdDict.privateDict.setByName("BlueScale", 0);
+    fdDict.privateDict.setByName("BlueShift", 0);
+    fdDict.privateDict.setByName("BlueFuzz", 0);
+    fdDict.privateDict.setByName("ExpansionFactor", 0);
+
+    cff.fdArray = [fdDict];
+    cff.fdSelect = new CFFFDSelect(0, Array(cff.charStrings.count).fill(0));
+    const fontDataWithBrokenFDPrivate = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataWithBrokenFDPrivate),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+    const privateDict = reparsedCff.fdArray[0].privateDict;
+
+    expect(privateDict.getByName("BlueScale")).toEqual(0.039625);
+    expect(privateDict.getByName("BlueShift")).toEqual(7);
+    expect(privateDict.getByName("BlueFuzz")).toEqual(1);
+    expect(privateDict.getByName("ExpansionFactor")).toEqual(0.06);
+  });
+
+  it("clamps a too-small BlueScale up to 0.5 / maxZoneHeight", function () {
+    cff.topDict.privateDict = new CFFPrivateDict(cff.strings);
+    // Zones (deltas): heights are the odd-indexed entries (all 20 here).
+    cff.topDict.privateDict.setByName(
+      "BlueValues",
+      [-20, 20, 530, 20, 220, 20, 30, 20]
+    );
+    cff.topDict.privateDict.setByName("OtherBlues", [-270, 20]);
+    cff.topDict.privateDict.setByName("BlueScale", 0.016666999);
+    cff.topDict.setByName("Private", [0, 0]);
+    const fontDataWithSmallBlueScale = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataWithSmallBlueScale),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    // maxZoneHeight = 20 -> minBlueScale = 0.5 / 20 = 0.025.
+    expect(reparsedCff.topDict.privateDict.getByName("BlueScale")).toEqual(
+      0.025
+    );
+  });
+
+  it("clamps a too-large BlueScale down to 1 / maxZoneHeight", function () {
+    cff.topDict.privateDict = new CFFPrivateDict(cff.strings);
+    cff.topDict.privateDict.setByName(
+      "BlueValues",
+      [-20, 20, 530, 20, 220, 20, 30, 20]
+    );
+    cff.topDict.privateDict.setByName("BlueScale", 0.1);
+    cff.topDict.setByName("Private", [0, 0]);
+    const fontDataWithLargeBlueScale = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataWithLargeBlueScale),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    // maxZoneHeight = 20 -> maxBlueScale = 1 / 20 = 0.05.
+    expect(reparsedCff.topDict.privateDict.getByName("BlueScale")).toEqual(
+      0.05
+    );
+  });
+
+  it("preserves a BlueScale that is already inside the valid range", function () {
+    cff.topDict.privateDict = new CFFPrivateDict(cff.strings);
+    cff.topDict.privateDict.setByName(
+      "BlueValues",
+      [-20, 20, 530, 20, 220, 20, 30, 20]
+    );
+    cff.topDict.privateDict.setByName("BlueScale", 0.039625);
+    cff.topDict.setByName("Private", [0, 0]);
+    const fontDataWithNormalBlueScale = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataWithNormalBlueScale),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.privateDict.getByName("BlueScale")).toEqual(
+      0.039625
+    );
+  });
+
+  it("preserves the default BlueScale even when zones are very small", function () {
+    // Foundry fonts (e.g. Eurostile LT Std Medium, maxZoneHeight 6) ship the
+    // default BlueScale of 0.039625 together with small zones; that combination
+    // technically violates AFDKO's lower bound but is the rendered intent.
+    cff.topDict.privateDict = new CFFPrivateDict(cff.strings);
+    cff.topDict.privateDict.setByName("BlueValues", [-12, 6, 530, 6]);
+    cff.topDict.privateDict.setByName("BlueScale", 0.039625);
+    cff.topDict.setByName("Private", [0, 0]);
+    const fontDataDefaultBlueScale = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataDefaultBlueScale),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(reparsedCff.topDict.privateDict.getByName("BlueScale")).toEqual(
+      0.039625
+    );
+  });
+
+  it("preserves the BlueScale of an embedded CID font with small zones", async function () {
+    // The embedded CID-keyed CFF pairs a near-default BlueScale of 0.037 with
+    // 12-unit zones; clamping it up to the lower bound breaks rendering on
+    // macOS only, so it's guarded here rather than with a reference image.
+    const data = await DefaultFileReaderFactory.fetch({
+      path: TEST_PDFS_PATH + "cff_bluescale_small_zones.pdf",
+    });
+    const pdfManager = {
+      evaluatorOptions: { isOffscreenCanvasSupported: false },
+      password: null,
+    };
+    const pdfDocument = new PDFDocument(pdfManager, new Stream(data));
+    pdfDocument.parseStartXRef();
+    pdfDocument.xref.parse();
+
+    // Object 8 is the `/FontFile3` (`/CIDFontType0C`) stream in the fixture.
+    const fontProgram = pdfDocument.xref.fetch(Ref.get(8, 0)).getBytes();
+    const embeddedCff = new CFFParser(
+      new Stream(fontProgram),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    expect(embeddedCff.isCIDFont).toBeTrue();
+    expect(embeddedCff.fdArray[0].privateDict.getByName("BlueScale")).toEqual(
+      0.037
+    );
+  });
+
+  it("clamps BlueScale to a short decimal so the recompiled operand stays compact", function () {
+    // maxZoneHeight = 13 gives lower bound (0.5 / 13 = 0.038461538461538464)
+    // which is too long (issue 21466).
+    cff.topDict.privateDict = new CFFPrivateDict(cff.strings);
+    cff.topDict.privateDict.setByName(
+      "BlueValues",
+      [-13, 13, 530, 13, 220, 13, 30, 13]
+    );
+    cff.topDict.privateDict.setByName("BlueScale", 0.01);
+    cff.topDict.setByName("Private", [0, 0]);
+    const fontDataShortBlueScale = new CFFCompiler(cff).compile();
+
+    const reparsedCff = new CFFParser(
+      new Stream(fontDataShortBlueScale),
+      {},
+      SEAC_ANALYSIS_ENABLED
+    ).parse();
+
+    const blueScale = reparsedCff.topDict.privateDict.getByName("BlueScale");
+    expect(blueScale).toEqual(0.03847);
+    expect(new CFFCompiler(cff).encodeFloat(blueScale).length).toBeLessThan(6);
   });
 
   it("refuses to add topDict key with invalid value (bug 1068432)", function () {
@@ -190,12 +486,8 @@ describe("CFFParser", function () {
     });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0).length).toEqual(1);
-    expect(result.seacs.length).toEqual(1);
-    expect(result.seacs[0].length).toEqual(4);
-    expect(result.seacs[0][0]).toEqual(130);
-    expect(result.seacs[0][1]).toEqual(180);
-    expect(result.seacs[0][2]).toEqual(65);
-    expect(result.seacs[0][3]).toEqual(194);
+    expect(result.seacs.size).toEqual(1);
+    expect(result.seacs.get(0)).toEqual([130, 180, 65, 194]);
   });
 
   it("parses a CharString endchar with 4 args w/seac disabled", function () {
@@ -220,7 +512,7 @@ describe("CFFParser", function () {
     });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0).length).toEqual(9);
-    expect(result.seacs.length).toEqual(0);
+    expect(result.seacs.size).toEqual(0);
   });
 
   it("parses a CharString endchar no args", function () {
@@ -237,12 +529,12 @@ describe("CFFParser", function () {
     });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0)[0]).toEqual(14);
-    expect(result.seacs.length).toEqual(0);
+    expect(result.seacs.size).toEqual(0);
   });
 
   it("parses predefined charsets", function () {
     const charset = parser.parseCharsets(0, 0, null, true);
-    expect(charset.predefined).toEqual(true);
+    expect(charset.predefined).toBeTrue();
   });
 
   it("parses charset format 0", function () {
@@ -430,47 +722,53 @@ describe("CFFCompiler", function () {
     const fdSelect = new CFFFDSelect(0, [3, 2, 1]);
     const c = new CFFCompiler();
     const out = c.compileFDSelect(fdSelect);
-    expect(out).toEqual([
-      0, // format
-      3, // gid: 0 fd 3
-      2, // gid: 1 fd 3
-      1, // gid: 2 fd 3
-    ]);
+    expect(out).toEqual(
+      new Uint8Array([
+        0, // format
+        3, // gid: 0 fd 3
+        2, // gid: 1 fd 3
+        1, // gid: 2 fd 3
+      ])
+    );
   });
 
   it("compiles fdselect format 3", function () {
     const fdSelect = new CFFFDSelect(3, [0, 0, 1, 1]);
     const c = new CFFCompiler();
     const out = c.compileFDSelect(fdSelect);
-    expect(out).toEqual([
-      3, // format
-      0, // nRanges (high)
-      2, // nRanges (low)
-      0, // range struct 0 - first (high)
-      0, // range struct 0 - first (low)
-      0, // range struct 0 - fd
-      0, // range struct 0 - first (high)
-      2, // range struct 0 - first (low)
-      1, // range struct 0 - fd
-      0, // sentinel (high)
-      4, // sentinel (low)
-    ]);
+    expect(out).toEqual(
+      new Uint8Array([
+        3, // format
+        0, // nRanges (high)
+        2, // nRanges (low)
+        0, // range struct 0 - first (high)
+        0, // range struct 0 - first (low)
+        0, // range struct 0 - fd
+        0, // range struct 0 - first (high)
+        2, // range struct 0 - first (low)
+        1, // range struct 0 - fd
+        0, // sentinel (high)
+        4, // sentinel (low)
+      ])
+    );
   });
 
   it("compiles fdselect format 3, single range", function () {
     const fdSelect = new CFFFDSelect(3, [0, 0]);
     const c = new CFFCompiler();
     const out = c.compileFDSelect(fdSelect);
-    expect(out).toEqual([
-      3, // format
-      0, // nRanges (high)
-      1, // nRanges (low)
-      0, // range struct 0 - first (high)
-      0, // range struct 0 - first (low)
-      0, // range struct 0 - fd
-      0, // sentinel (high)
-      2, // sentinel (low)
-    ]);
+    expect(out).toEqual(
+      new Uint8Array([
+        3, // format
+        0, // nRanges (high)
+        1, // nRanges (low)
+        0, // range struct 0 - first (high)
+        0, // range struct 0 - first (low)
+        0, // range struct 0 - fd
+        0, // sentinel (high)
+        2, // sentinel (low)
+      ])
+    );
   });
 
   it("compiles charset of CID font", function () {
@@ -479,13 +777,15 @@ describe("CFFCompiler", function () {
     const numGlyphs = 7;
     const out = c.compileCharset(charset, numGlyphs, new CFFStrings(), true);
     // All CID charsets get turned into a simple format 2.
-    expect(out).toEqual([
-      2, // format
-      0, // cid (high)
-      1, // cid (low)
-      0, // nLeft (high)
-      numGlyphs - 2, // nLeft (low)
-    ]);
+    expect(out).toEqual(
+      new Uint8Array([
+        2, // format
+        0, // cid (high)
+        1, // cid (low)
+        0, // nLeft (high)
+        numGlyphs - 2, // nLeft (low)
+      ])
+    );
   });
 
   it("compiles charset of non CID font", function () {
@@ -494,13 +794,15 @@ describe("CFFCompiler", function () {
     const numGlyphs = 3;
     const out = c.compileCharset(charset, numGlyphs, new CFFStrings(), false);
     // All non-CID fonts use a format 0 charset.
-    expect(out).toEqual([
-      0, // format
-      0, // sid of 'space' (high)
-      1, // sid of 'space' (low)
-      0, // sid of 'exclam' (high)
-      2, // sid of 'exclam' (low)
-    ]);
+    expect(out).toEqual(
+      new Uint8Array([
+        0, // format
+        0, // sid of 'space' (high)
+        1, // sid of 'space' (low)
+        0, // sid of 'exclam' (high)
+        2, // sid of 'exclam' (low)
+      ])
+    );
   });
 
   // TODO a lot more compiler tests

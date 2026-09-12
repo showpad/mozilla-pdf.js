@@ -13,10 +13,10 @@
  * limitations under the License.
  */
 
-import { createActionsMap, FieldType, getFieldType } from "./common.js";
+import { createMap, FieldType, getFieldType } from "./common.js";
+import { makeArr, serializeError } from "./app_utils.js";
 import { Color } from "./color.js";
 import { PDFObject } from "./pdf_object.js";
-import { serializeError } from "./app_utils.js";
 
 class Field extends PDFObject {
   constructor(data) {
@@ -65,7 +65,7 @@ class Field extends PDFObject {
     this.userName = data.userName;
 
     // Private
-    this._actions = createActionsMap(data.actions);
+    this._actions = createMap(data.actions);
     this._browseForFileToSubmit = data.browseForFileToSubmit || null;
     this._buttonCaption = null;
     this._buttonIcon = null;
@@ -77,7 +77,7 @@ class Field extends PDFObject {
     this._fillColor = data.fillColor || ["T"];
     this._isChoice = Array.isArray(data.items);
     this._items = data.items || [];
-    this._hasValue = data.hasOwnProperty("value");
+    this._hasValue = Object.hasOwn(data, "value");
     this._page = data.page || 0;
     this._strokeColor = data.strokeColor || ["G", 0];
     this._textColor = data.textColor || ["G", 0];
@@ -98,10 +98,7 @@ class Field extends PDFObject {
   }
 
   get currentValueIndices() {
-    if (!this._isChoice) {
-      return 0;
-    }
-    return this._currentValueIndices;
+    return !this._isChoice ? 0 : this._currentValueIndices;
   }
 
   set currentValueIndices(indices) {
@@ -112,13 +109,7 @@ class Field extends PDFObject {
       indices = [indices];
     }
     if (
-      !indices.every(
-        i =>
-          typeof i === "number" &&
-          Number.isInteger(i) &&
-          i >= 0 &&
-          i < this.numItems
-      )
+      !indices.every(i => Number.isInteger(i) && i >= 0 && i < this.numItems)
     ) {
       return;
     }
@@ -334,17 +325,11 @@ class Field extends PDFObject {
   }
 
   buttonGetCaption(nFace = 0) {
-    if (this._buttonCaption) {
-      return this._buttonCaption[nFace];
-    }
-    return "";
+    return this._buttonCaption ? this._buttonCaption[nFace] : "";
   }
 
   buttonGetIcon(nFace = 0) {
-    if (this._buttonIcon) {
-      return this._buttonIcon[nFace];
-    }
-    return null;
+    return this._buttonIcon ? this._buttonIcon[nFace] : null;
   }
 
   buttonImportIcon(cPath = null, nPave = 0) {
@@ -352,9 +337,7 @@ class Field extends PDFObject {
   }
 
   buttonSetCaption(cCaption, nFace = 0) {
-    if (!this._buttonCaption) {
-      this._buttonCaption = ["", "", ""];
-    }
+    this._buttonCaption ??= ["", "", ""];
     this._buttonCaption[nFace] = cCaption;
     // TODO: send to the annotation layer
     // Right now the button is drawn on the canvas using its appearance so
@@ -363,9 +346,7 @@ class Field extends PDFObject {
   }
 
   buttonSetIcon(oIcon, nFace = 0) {
-    if (!this._buttonIcon) {
-      this._buttonIcon = [null, null, null];
-    }
+    this._buttonIcon ??= [null, null, null];
     this._buttonIcon[nFace] = oIcon;
   }
 
@@ -509,10 +490,7 @@ class Field extends PDFObject {
     if (typeof cTrigger !== "string" || typeof cScript !== "string") {
       return;
     }
-    if (!(cTrigger in this._actions)) {
-      this._actions[cTrigger] = [];
-    }
-    this._actions[cTrigger].push(cScript);
+    this._actions.getOrInsertComputed(cTrigger, makeArr).push(cScript);
   }
 
   setFocus() {
@@ -594,7 +572,7 @@ class RadioButtonField extends Field {
     for (const radioData of otherButtons) {
       this.exportValues.push(radioData.exportValues);
       this._radioIds.push(radioData.id);
-      this._radioActions.push(createActionsMap(radioData.actions));
+      this._radioActions.push(createMap(radioData.actions));
       if (this._value === radioData.exportValues) {
         this._id = radioData.id;
       }
@@ -693,17 +671,13 @@ class CheckboxField extends RadioButtonField {
   }
 
   isBoxChecked(nWidget) {
-    if (this._value === "Off") {
-      return false;
-    }
-    return super.isBoxChecked(nWidget);
+    return this._value === "Off" ? false : super.isBoxChecked(nWidget);
   }
 
   isDefaultChecked(nWidget) {
-    if (this.defaultValue === "Off") {
-      return this._value === "Off";
-    }
-    return super.isDefaultChecked(nWidget);
+    return this.defaultValue === "Off"
+      ? this._value === "Off"
+      : super.isDefaultChecked(nWidget);
   }
 
   checkThisBox(nWidget, bCheckIt = true) {

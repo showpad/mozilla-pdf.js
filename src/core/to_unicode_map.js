@@ -28,7 +28,7 @@ class ToUnicodeMap {
 
   forEach(callback) {
     for (const charCode in this._map) {
-      callback(charCode, this._map[charCode].codePointAt(0));
+      callback(+charCode, this._map[charCode].codePointAt(0));
     }
   }
 
@@ -83,10 +83,9 @@ class IdentityToUnicodeMap {
   }
 
   get(i) {
-    if (this.firstChar <= i && i <= this.lastChar) {
-      return String.fromCharCode(i);
-    }
-    return undefined;
+    return this.firstChar <= i && i <= this.lastChar
+      ? String.fromCharCode(i)
+      : undefined;
   }
 
   charCodeOf(v) {

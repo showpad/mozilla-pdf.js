@@ -17,18 +17,82 @@ import {
   awaitPromise,
   closePages,
   createPromise,
+  decodePNG,
   getRect,
   getSpanRectFromText,
   loadAndWait,
+  pinch,
   scrollIntoView,
   showViewsManager,
+  switchToEditor,
   waitAndClick,
   waitForPageChanging,
   waitForPageRendered,
 } from "./test_utils.mjs";
-import { PNG } from "pngjs";
+import path from "path";
+
+const __dirname = import.meta.dirname;
 
 describe("PDF viewer", () => {
+  describe("EFOpen attachments", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "auth-event-ef-open.pdf",
+        ".textLayer .endOfContent",
+        "page-fit"
+      );
+    });
+
+    afterEach(async () => {
+      if (pages) {
+        await closePages(pages);
+      }
+    });
+
+    it("keeps rendering after cancelling attachment password prompt", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          // Open the views manager sidebar.
+          await showViewsManager(page);
+
+          // Open the view selector menu.
+          await page.click("#viewsManagerSelectorButton");
+
+          // Check that the attachments option is not disabled.
+          await page.waitForSelector("#attachmentsViewMenu", { visible: true });
+          const attachmentsEnabled = await page.$eval(
+            "#attachmentsViewMenu",
+            el => !el.disabled
+          );
+          expect(attachmentsEnabled)
+            .withContext(`In ${browserName}`)
+            .toBeTrue();
+
+          // Switch to the attachments view.
+          await page.click("#attachmentsViewMenu");
+          await page.waitForSelector("#attachmentsView a", { timeout: 0 });
+
+          await page.click("#attachmentsView a");
+          await page.waitForSelector("#passwordDialog[open]", { timeout: 0 });
+          await waitAndClick(page, "#passwordCancel");
+
+          const stillRendered = await page.evaluate(() => {
+            const textLayer = document.querySelector(
+              ".page[data-page-number='1'] .textLayer .endOfContent"
+            );
+            const canvas = document.querySelector(
+              ".page[data-page-number='1'] canvas"
+            );
+            return !!textLayer && !!canvas;
+          });
+          expect(stillRendered).withContext(`In ${browserName}`).toBeTrue();
+        })
+      );
+    });
+  });
+
   describe("Zoom origin", () => {
     let pages;
 
@@ -159,7 +223,7 @@ describe("PDF viewer", () => {
             );
             expect(scrollTop < 100)
               .withContext(`In ${browserName}`)
-              .toBe(true);
+              .toBeTrue();
           }
         })
       );
@@ -415,7 +479,7 @@ describe("PDF viewer", () => {
 
             const element = await page.$(`.page[data-page-number="1"]`);
             const png = await element.screenshot({ type: "png" });
-            const pageImage = PNG.sync.read(Buffer.from(png));
+            const pageImage = await decodePNG(png);
             let buffer = new Uint32Array(pageImage.data.buffer);
 
             // Search for the first red pixel.
@@ -424,7 +488,7 @@ describe("PDF viewer", () => {
 
             expect(buffer.every(x => x === 0xff0000ff))
               .withContext(`In ${browserName}, in the ${i}th zoom in`)
-              .toBe(true);
+              .toBeTrue();
 
             const currentScale = await page.evaluate(
               () => window.PDFViewerApplication.pdfViewer.currentScale
@@ -772,8 +836,8 @@ describe("PDF viewer", () => {
                 detailCanvasSelector
               );
 
-              expect(isSame).withContext(`In ${browserName}`).toBe(true);
-              expect(rendered).withContext(`In ${browserName}`).toBe(false);
+              expect(isSame).withContext(`In ${browserName}`).toBeTrue();
+              expect(rendered).withContext(`In ${browserName}`).toBeFalse();
             });
           });
         });
@@ -1296,6 +1360,36 @@ describe("PDF viewer", () => {
     });
   });
 
+  describe("File param with a relative URL and a query string (issue 20137)", () => {
+    let pages;
+
+    beforeEach(async () => {
+      // The `file` parameter is `/test/pdfs/basicapi.pdf?token=%2Ffoo`.
+      pages = await loadAndWait(
+        "basicapi.pdf%3Ftoken%3D%252Ffoo",
+        ".textLayer .endOfContent"
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must not re-encode the file param", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const pdfUrl = await page.evaluate(
+            () => window.PDFViewerApplication.url
+          );
+
+          expect(pdfUrl)
+            .withContext(`In ${browserName}`)
+            .toBe("/test/pdfs/basicapi.pdf?token=%2Ffoo");
+        })
+      );
+    });
+  });
+
   describe("Keyboard scrolling on startup (bug 843653)", () => {
     let pages;
 
@@ -1393,30 +1487,93 @@ describe("PDF viewer", () => {
     });
   });
 
+  describe("Save/download disabled when supportsDownloading is false", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "tracemonkey.pdf",
+        ".textLayer .endOfContent",
+        null,
+        null,
+        { supportsDownloading: false }
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must hide the download buttons and skip save/download", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await page.waitForSelector("#downloadButton", { hidden: true });
+          await waitAndClick(page, "#secondaryToolbarToggleButton");
+          await page.waitForSelector("#secondaryDownload", { hidden: true });
+
+          const triggered = await page.evaluate(async () => {
+            const app = window.PDFViewerApplication;
+            const calls = [];
+            const saveDocument = app.pdfDocument.saveDocument.bind(
+              app.pdfDocument
+            );
+            app.pdfDocument.saveDocument = (...args) => {
+              calls.push("saveDocument");
+              return saveDocument(...args);
+            };
+
+            // Each bail-out path dispatches a TESTING-only "downloadskipped"
+            // event, so we can deterministically wait for all four attempts to
+            // run to completion.
+            let skipped = 0;
+            const allSkipped = new Promise(resolve => {
+              app.eventBus.on("downloadskipped", function listener() {
+                if (++skipped === 4) {
+                  app.eventBus.off("downloadskipped", listener);
+                  resolve();
+                }
+              });
+            });
+
+            await app.download();
+            await app.save();
+            await app.downloadOrSave();
+            app.eventBus.dispatch("download", { source: null });
+            await allSkipped;
+
+            return { calls, skipped, downloadManager: app.downloadManager };
+          });
+          expect(triggered.downloadManager)
+            .withContext(`In ${browserName}`)
+            .toBeNull();
+          expect(triggered.calls).withContext(`In ${browserName}`).toEqual([]);
+          expect(triggered.skipped).withContext(`In ${browserName}`).toBe(4);
+        })
+      );
+    });
+  });
+
   describe("Pinch-zoom", () => {
     let pages;
 
     beforeEach(async () => {
       pages = await loadAndWait(
         "tracemonkey.pdf",
-        `.page[data-page-number = "1"] .endOfContent`
+        `.page[data-page-number = "1"] .endOfContent`,
+        // Pin the zoom: the drift checked below is proportional to the zoom
+        // level reached at the end of the pinch, and the default `page-fit`
+        // depends on the size of the window.
+        50
       );
     });
 
-    it("keeps the content under the pinch centre fixed on the screen", async () => {
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("keeps the content under the pinch center fixed on the screen", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          if (browserName === "firefox") {
-            pending(
-              "Touch events are not supported on devices without touch screen in Firefox."
-            );
-          }
-          if (browserName === "chrome") {
-            pending(
-              "Pinch zoom emulation is not supported for WebDriver BiDi in Chrome."
-            );
-          }
-
           const rect = await getSpanRectFromText(page, 1, "type-stable");
           const originX = rect.x + rect.width / 2;
           const originY = rect.y + rect.height / 2;
@@ -1432,14 +1589,17 @@ describe("PDF viewer", () => {
             };
             window.PDFViewerApplication.eventBus.on("textlayerrendered", cb);
           });
-          const client = await page.target().createCDPSession();
-          await client.send("Input.synthesizePinchGesture", {
-            x: originX,
-            y: originY,
-            scaleFactor: 3,
-            gestureSourceType: "touch",
+          // Spread the two fingers from 50 to 200 pixels apart: the first
+          // moves are swallowed until the distance between them changed by
+          // more than 35 pixels, hence a zoom factor of about 200/85 = 2.4.
+          await pinch(page, {
+            centerX: originX,
+            centerY: originY,
+            startGap: 25,
+            endGap: 100,
           });
           await awaitPromise(rendered);
+
           const spanHandle = await page.evaluateHandle(() =>
             Array.from(
               document.querySelectorAll(
@@ -1447,7 +1607,205 @@ describe("PDF viewer", () => {
               )
             ).find(span => span.textContent.includes("type-stable"))
           );
-          expect(await spanHandle.isIntersectingViewport()).toBeTrue();
+          expect(await spanHandle.isIntersectingViewport())
+            .withContext(`In ${browserName}`)
+            .toBeTrue();
+
+          // The text which was under the fingers must still be at the same
+          // height: only vertically because a page which is larger than its
+          // container isn't centered in it anymore.
+          // A few pixels are tolerated because the origin is preserved by
+          // scrolling: Chrome snaps the scroll offsets to the device pixels and
+          // the discarded fractions show up as a small drift. It's exact in
+          // Firefox, which keeps them.
+          const newRect = await getSpanRectFromText(page, 1, "type-stable");
+          expect(Math.abs(newRect.y + newRect.height / 2 - originY))
+            .withContext(`In ${browserName}`)
+            .toBeLessThan(5);
+        })
+      );
+    });
+
+    it("keeps the content under the fingers when they also move", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const rect = await getSpanRectFromText(page, 1, "type-stable");
+          const originX = rect.x + rect.width / 2;
+          const originY = rect.y + rect.height / 2;
+          const centerDeltaY = -100;
+          const rendered = await createPromise(page, resolve => {
+            const cb = e => {
+              if (e.pageNumber === 1) {
+                window.PDFViewerApplication.eventBus.off(
+                  "textlayerrendered",
+                  cb
+                );
+                resolve();
+              }
+            };
+            window.PDFViewerApplication.eventBus.on("textlayerrendered", cb);
+          });
+          // Spread the fingers, like above, but move them up at the same time:
+          // the zoom origin then follows the gesture instead of being fixed.
+          await pinch(page, {
+            centerX: originX,
+            centerY: originY,
+            centerDeltaY,
+            startGap: 25,
+            endGap: 100,
+          });
+          await awaitPromise(rendered);
+
+          // The text which was under the fingers must have followed them, hence
+          // the same tolerance as above applies.
+          const newRect = await getSpanRectFromText(page, 1, "type-stable");
+          expect(
+            Math.abs(newRect.y + newRect.height / 2 - (originY + centerDeltaY))
+          )
+            .withContext(`In ${browserName}`)
+            .toBeLessThan(5);
+        })
+      );
+    });
+
+    it("keeps pinching when going from three fingers back to two", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const getScale = () =>
+            page.evaluate(
+              () => window.PDFViewerApplication.pdfViewer.currentScale
+            );
+          const centerX = 300,
+            centerY = 400;
+          const initialScale = await getScale();
+          const minDistance = await page.evaluate(
+            () =>
+              window.PDFViewerApplication._touchManager
+                .MIN_TOUCH_DISTANCE_TO_PINCH
+          );
+          let scale;
+
+          // Spread the two fingers well past the dead zone, which zooms in.
+          await pinch(page, {
+            centerX,
+            centerY,
+            startGap: 25,
+            endGap: 100,
+            beforeEnd: async ([finger0, finger1]) => {
+              scale = await getScale();
+              expect(scale)
+                .withContext(`In ${browserName}`)
+                .toBeGreaterThan(initialScale);
+
+              // A third finger lands and is lifted right away: the pinch in
+              // progress mustn't have to earn the dead zone all over again.
+              const finger2 = await page.touchscreen.touchStart(
+                centerX,
+                centerY + 200
+              );
+              await finger2.end();
+
+              // Hence this move, at half the dead-zone distance, still zooms.
+              await finger1.move(centerX + 100 + minDistance / 2, centerY);
+            },
+          });
+
+          expect(await getScale())
+            .withContext(`In ${browserName}`)
+            .toBeGreaterThan(scale);
+        })
+      );
+    });
+  });
+
+  describe("Two-finger pan", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "tracemonkey.pdf",
+        `.page[data-page-number = "1"] .endOfContent`
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    const getScrollTop = page =>
+      page.evaluate(() => document.querySelector("#viewerContainer").scrollTop);
+
+    // Return the scroll delta for a two-finger translation without scaling.
+    async function twoFingerDrag(page, dy) {
+      const before = await getScrollTop(page);
+      await pinch(page, {
+        centerX: 200,
+        centerY: 400,
+        centerDeltaY: dy,
+        startGap: 50,
+      });
+      return (await getScrollTop(page)) - before;
+    }
+
+    it("scrolls the viewer when two fingers move together", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const scale = await page.evaluate(
+            () => window.PDFViewerApplication.pdfViewer.currentScale
+          );
+
+          const scrolled = await twoFingerDrag(page, -150);
+
+          // A pure pan changes the scroll position, not the scale. The content
+          // follows the fingers, hence the scrolling matches their movement: a
+          // few pixels are tolerated because Chrome snaps the scroll offsets to
+          // the device pixels.
+          expect(scrolled)
+            .withContext(`In ${browserName}`)
+            .toBeGreaterThan(145);
+          expect(scrolled).withContext(`In ${browserName}`).toBeLessThan(155);
+          expect(
+            await page.evaluate(
+              () => window.PDFViewerApplication.pdfViewer.currentScale
+            )
+          )
+            .withContext(`In ${browserName}`)
+            .toEqual(scale);
+        })
+      );
+    });
+
+    it("scrolls the viewer in highlighting mode", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          // The text layer sets `touch-action: none` in this mode, hence the
+          // scrolling below can only come from this manager, not from the
+          // browser.
+          await switchToEditor("Highlight", page);
+          await page.waitForSelector(".textLayer.highlighting");
+
+          const scrolled = await twoFingerDrag(page, -150);
+          expect(scrolled)
+            .withContext(`In ${browserName}`)
+            .toBeGreaterThan(145);
+          expect(scrolled).withContext(`In ${browserName}`).toBeLessThan(155);
+        })
+      );
+    });
+
+    it("doesn't pan while a dialog is open", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await page.click("#secondaryToolbarToggleButton");
+          await page.waitForSelector("#secondaryToolbar", { hidden: false });
+          await page.click("#documentProperties");
+          await page.waitForSelector("#documentPropertiesDialog", {
+            hidden: false,
+          });
+
+          expect(await twoFingerDrag(page, -150))
+            .withContext(`In ${browserName}`)
+            .toEqual(0);
         })
       );
     });
@@ -1608,6 +1966,10 @@ describe("PDF viewer", () => {
         "tracemonkey_annotation_on_page_8.pdf",
         `.page[data-page-number = "1"] .endOfContent`
       );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
     });
 
     it("Check that the top right corner of the annotation is centered vertically", async () => {
@@ -1782,6 +2144,309 @@ describe("PDF viewer", () => {
           );
         })
       );
+    });
+  });
+
+  describe("PDFPrintService", () => {
+    describe("blob URL revocation (issue #19988)", () => {
+      let pages;
+
+      beforeEach(async () => {
+        pages = await loadAndWait(
+          "basicapi.pdf",
+          ".textLayer .endOfContent",
+          null,
+          {
+            earlySetup: () => {
+              // Track blob URLs created during the print phase (between
+              // beforeprint and afterprint).
+              let trackPrintURLs = false;
+              window._printBlobURLs = [];
+
+              const origCreate = URL.createObjectURL.bind(URL);
+              URL.createObjectURL = blob => {
+                const url = origCreate(blob);
+                if (trackPrintURLs) {
+                  window._printBlobURLs.push(url);
+                }
+                return url;
+              };
+
+              // beforeprint fires before renderPages(); start tracking here.
+              window.addEventListener("beforeprint", () => {
+                trackPrintURLs = true;
+              });
+
+              // window.print() is called by performPrint() after renderPages()
+              // completes and all images are loaded into #printContainer.
+              window.print = () => {
+                const isFirefox = navigator.userAgent.includes("Firefox");
+                if (isFirefox) {
+                  // Firefox re-fetches blob URLs when rendering the print
+                  // preview (especially when a service worker is registered).
+                  // Verify the URLs are still accessible at this point.
+                  window._printImagesAccessible = Promise.all(
+                    window._printBlobURLs.map(url =>
+                      fetch(url).then(
+                        () => true,
+                        () => false
+                      )
+                    )
+                  );
+                } else {
+                  // Chrome uses the cached decoded data already in the <img>
+                  // elements and does not re-fetch blob URLs for printing.
+                  // Just verify the images rendered correctly.
+                  const imgs = document.querySelectorAll("#printContainer img");
+                  window._printImagesAccessible = Promise.resolve(
+                    Array.from(
+                      imgs,
+                      img => img.complete && img.naturalWidth > 0
+                    )
+                  );
+                }
+              };
+            },
+            appSetup: app => {
+              app._testPrintResolver = Promise.withResolvers();
+            },
+            eventBusSetup: eventBus => {
+              eventBus.on(
+                "afterprint",
+                () => {
+                  // Wait for the checks initiated in window.print() before
+                  // resolving, so the test can assert on them.
+                  (window._printImagesAccessible ?? Promise.resolve([])).then(
+                    window.PDFViewerApplication._testPrintResolver.resolve
+                  );
+                },
+                { once: true }
+              );
+            },
+          }
+        );
+      });
+
+      afterEach(async () => {
+        await closePages(pages);
+      });
+
+      it("must keep print image blob URLs accessible until destroy() is called", async () => {
+        await Promise.all(
+          pages.map(async ([browserName, page]) => {
+            await waitAndClick(page, "#printButton");
+
+            // Resolves with an array of booleans, one per print page image.
+            const accessible = await awaitPromise(
+              await page.evaluateHandle(() => [
+                window.PDFViewerApplication._testPrintResolver.promise,
+              ])
+            );
+
+            expect(accessible.length)
+              .withContext(`In ${browserName}: print pages were rendered`)
+              .toBeGreaterThan(0);
+            expect(accessible.every(v => v))
+              .withContext(
+                `In ${browserName}: all print images accessible at print time`
+              )
+              .toBeTrue();
+          })
+        );
+      });
+    });
+
+    describe("@page size stylesheet under CSP", () => {
+      let pages;
+
+      beforeEach(async () => {
+        pages = await loadAndWait(
+          "basicapi.pdf",
+          ".textLayer .endOfContent",
+          null,
+          {
+            earlySetup: () => {
+              // Capture state during window.print(): destroy() removes the
+              // @page stylesheet from adoptedStyleSheets right afterwards.
+              window._pageRuleApplied = null;
+              window.print = () => {
+                window._pageRuleApplied = document.adoptedStyleSheets.some(
+                  s =>
+                    s.cssRules.length > 0 &&
+                    [...s.cssRules].some(r => r.cssText.includes("@page"))
+                );
+              };
+            },
+            appSetup: app => {
+              app._testPrintResolver = Promise.withResolvers();
+            },
+            eventBusSetup: eventBus => {
+              eventBus.on(
+                "afterprint",
+                () => {
+                  window.PDFViewerApplication._testPrintResolver.resolve();
+                },
+                { once: true }
+              );
+            },
+          }
+        );
+      });
+
+      afterEach(async () => {
+        await closePages(pages);
+      });
+
+      // The @page rule is injected via a constructable stylesheet, which is
+      // exempt from CSP, so the strict policy in web/viewer.html applies it.
+      it("must apply the injected @page rule (no CSP block)", async () => {
+        await Promise.all(
+          pages.map(async ([browserName, page]) => {
+            await waitAndClick(page, "#printButton");
+            await awaitPromise(
+              await page.evaluateHandle(() => [
+                window.PDFViewerApplication._testPrintResolver.promise,
+              ])
+            );
+
+            const hasPageRule = await page.evaluate(
+              () => window._pageRuleApplied
+            );
+            expect(hasPageRule)
+              .withContext(
+                `In ${browserName}: injected @page stylesheet was parsed`
+              )
+              .toBeTrue();
+          })
+        );
+      });
+    });
+  });
+
+  describe("Open a new PDF via the file input", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("tracemonkey.pdf", ".textLayer .endOfContent");
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    // The "Open" input wraps the chosen file in a blob URL,
+    // which the worker then fetches. `connect-src` in the production CSP must
+    // therefore allow `blob:` — see web/viewer.html.
+    it("must load a PDF picked through the file input (blob URL)", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const fileInput = await page.$("#fileInput");
+          await fileInput.uploadFile(
+            path.join(__dirname, "../pdfs/basicapi.pdf")
+          );
+
+          await page.waitForFunction(
+            () => window.PDFViewerApplication.pdfDocument?.numPages === 3
+          );
+        })
+      );
+    });
+  });
+
+  describe("Editing stays disabled after opening another PDF (issue 21899)", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "tracemonkey.pdf",
+        ".textLayer .endOfContent",
+        undefined,
+        undefined,
+        { annotationEditorMode: -1 }
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must not enable editing for the new document", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const isEditingDisabled = () =>
+            window.PDFViewerApplication.pdfViewer.annotationEditorMode === -1;
+
+          expect(await page.evaluate(isEditingDisabled))
+            .withContext(`In ${browserName}`)
+            .toBeTrue();
+
+          // Editor manager creation, if enabled, precedes "pagesinit".
+          const handle = await createPromise(page, resolve => {
+            window.PDFViewerApplication.eventBus.on("pagesinit", resolve, {
+              once: true,
+            });
+          });
+          const fileInput = await page.$("#fileInput");
+          await fileInput.uploadFile(
+            path.join(__dirname, "../pdfs/basicapi.pdf")
+          );
+          await awaitPromise(handle);
+
+          expect(await page.evaluate(isEditingDisabled))
+            .withContext(`In ${browserName}`)
+            .toBeTrue();
+        })
+      );
+    });
+  });
+
+  describe("Preferences", () => {
+    describe('handles "updatedPreference" event correctly', () => {
+      let pages;
+
+      beforeEach(async () => {
+        pages = await loadAndWait("empty.pdf", ".textLayer .endOfContent");
+      });
+
+      afterEach(async () => {
+        await closePages(pages);
+      });
+
+      async function getToolbarState(page) {
+        return page.evaluate(() => ({
+          density: document
+            .getElementsByTagName("html")[0]
+            .getAttribute("data-toolbar-density"),
+          height: document.getElementById("toolbarContainer").clientHeight,
+        }));
+      }
+
+      it("changes the toolbar height", async () => {
+        await Promise.all(
+          pages.map(async ([browserName, page]) => {
+            const initial = await getToolbarState(page);
+            expect(initial.density).toEqual("normal");
+            expect(initial.height).toEqual(32);
+
+            // Update the preference to change the toolbar height.
+            await page.evaluate(() => {
+              const event = new CustomEvent("updatedPreference", {
+                bubbles: true,
+                cancelable: true,
+                detail: { name: "toolbarDensity", value: 2 },
+              });
+              window.dispatchEvent(event);
+            });
+            await page.waitForFunction(
+              `document.getElementsByTagName("html")[0].getAttribute("data-toolbar-density") !== "normal"`
+            );
+
+            const changed = await getToolbarState(page);
+            expect(changed.density).toEqual("touch");
+            expect(changed.height).toEqual(44);
+          })
+        );
+      });
     });
   });
 });

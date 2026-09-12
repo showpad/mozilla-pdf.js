@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-import { MathClamp, shadow } from "../../shared/util.js";
+import { MathClamp } from "../../shared/math_clamp.js";
+import { shadow } from "../../shared/util.js";
 
 const dimConverters = {
   pt: x => x,
@@ -139,10 +140,10 @@ function getColor(data, def = [0, 0, 0]) {
   if (!data) {
     return { r, g, b };
   }
-  const color = data
-    .split(",", 3)
-    .map(c => MathClamp(parseInt(c.trim(), 10), 0, 255))
-    .map(c => (isNaN(c) ? 0 : c));
+  const color = data.split(",", 3).map(c => {
+    c = parseInt(c.trim(), 10);
+    return isNaN(c) ? 0 : MathClamp(c, 0, 255);
+  });
 
   if (color.length < 3) {
     return { r, g, b };

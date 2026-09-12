@@ -15,7 +15,7 @@
 
 /** @typedef {import("../src/display/api").PDFPageProxy} PDFPageProxy */
 // eslint-disable-next-line max-len
-/** @typedef {import("../src/display/display_utils").PageViewport} PageViewport */
+/** @typedef {import("../src/display/page_viewport").PageViewport} PageViewport */
 // eslint-disable-next-line max-len
 /** @typedef {import("../src/display/text_layer_images.js").TextLayerImages} TextLayerImages */
 /** @typedef {import("./text_highlighter").TextHighlighter} TextHighlighter */
@@ -26,21 +26,21 @@ import { normalizeUnicode, stopEvent, TextLayer } from "pdfjs-lib";
 import { removeNullCharacters } from "./ui_utils.js";
 
 /**
- * @typedef {Object} TextLayerBuilderOptions
+ * @typedef {object} TextLayerBuilderOptions
  * @property {PDFPageProxy} pdfPage
  * @property {TextHighlighter} [highlighter] - Optional object that will handle
  *   highlighting text from the find controller.
  * @property {TextAccessibilityManager} [accessibilityManager]
  * @property {boolean} [enablePermissions]
- * @property {function} [onAppend]
+ * @property {Function} [onAppend]
  * @property {AbortSignal} [abortSignal]
  */
 
 /**
- * @typedef {Object} TextLayerBuilderRenderOptions
+ * @typedef {object} TextLayerBuilderRenderOptions
  * @property {PageViewport} viewport
  * @property {TextLayerImages} images
- * @property {Object} [textContentParams]
+ * @property {object} [textContentParams]
  */
 
 /**
@@ -61,7 +61,7 @@ class TextLayerBuilder {
 
   static #textLayers = new Map();
 
-  static #selectionChangeAbortController = null;
+  static #selectionChangeAC = null;
 
   /**
    * @param {TextLayerBuilderOptions} options
@@ -155,6 +155,8 @@ class TextLayerBuilder {
   cancel() {
     this.#textLayer?.cancel();
     this.#textLayer = null;
+    this.#renderingDone = false;
+    this.div.replaceChildren();
 
     this.highlighter?.disable();
     this.accessibilityManager?.disable();
@@ -202,23 +204,20 @@ class TextLayerBuilder {
     this.#textLayers.delete(textLayerDiv);
 
     if (this.#textLayers.size === 0) {
-      this.#selectionChangeAbortController?.abort();
-      this.#selectionChangeAbortController = null;
+      this.#selectionChangeAC?.abort();
+      this.#selectionChangeAC = null;
     }
   }
 
   static #enableGlobalSelectionListener(globalAbortSignal) {
-    if (this.#selectionChangeAbortController) {
+    if (this.#selectionChangeAC) {
       // document-level event listeners already installed
       return;
     }
-    this.#selectionChangeAbortController = new AbortController();
+    this.#selectionChangeAC = new AbortController();
     const signal = globalAbortSignal
-      ? AbortSignal.any([
-          this.#selectionChangeAbortController.signal,
-          globalAbortSignal,
-        ])
-      : this.#selectionChangeAbortController.signal;
+      ? AbortSignal.any([this.#selectionChangeAC.signal, globalAbortSignal])
+      : this.#selectionChangeAC.signal;
 
     const reset = (end, textLayer) => {
       if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
@@ -265,7 +264,7 @@ class TextLayerBuilder {
 
     if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
       // eslint-disable-next-line no-var
-      var isFirefox, prevRange;
+      var isFirefoxOrModernChromium, prevRange;
     }
 
     document.addEventListener(
@@ -305,22 +304,38 @@ class TextLayerBuilder {
         if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
           return;
         }
-        if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("CHROME")) {
-          isFirefox ??=
-            getComputedStyle(
-              this.#textLayers.values().next().value
-            ).getPropertyValue("-moz-user-select") === "none";
+        if (isFirefoxOrModernChromium === undefined) {
+          if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("CHROME")) {
+            isFirefoxOrModernChromium =
+              getComputedStyle(
+                this.#textLayers.values().next().value
+              ).getPropertyValue("-moz-user-select") === "none";
+          }
+          if (
+            (typeof PDFJSDev !== "undefined" && PDFJSDev.test("CHROME")) ||
+            !isFirefoxOrModernChromium
+          ) {
+            // navigator.userAgentData is only available in secure contexts
+            const chromiumVersion = navigator.userAgentData
+              ? navigator.userAgentData.brands.find(
+                  ({ brand }) => brand === "Chromium"
+                )?.version
+              : /\bChrome\/(\d+)\b/.exec(navigator.userAgent)?.[1];
 
-          if (isFirefox) {
-            return;
+            isFirefoxOrModernChromium =
+              !!chromiumVersion && parseInt(chromiumVersion, 10) >= 148;
           }
         }
-        // In non-Firefox browsers, when hovering over an empty space (thus,
-        // on .endOfContent), the selection will expand to cover all the
-        // text between the current selection and .endOfContent. By moving
-        // .endOfContent to right after (or before, depending on which side
-        // of the selection the user is moving), we limit the selection jump
-        // to at most cover the enteirety of the <span> where the selection
+        if (isFirefoxOrModernChromium) {
+          return;
+        }
+
+        // In browsers other than Firefox or Chromium 148+, when hovering over
+        // an empty space (thus, on .endOfContent), the selection will expand to
+        // cover all the text between the current selection and .endOfContent.
+        // By moving .endOfContent to right after (or before, depending on which
+        // side of the selection the user is moving), we limit the selection
+        // jump to at most cover the entirety of the <span> where the selection
         // is being modified.
         const range = selection.getRangeAt(0);
         const modifyStart =

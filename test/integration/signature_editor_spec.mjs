@@ -17,6 +17,7 @@ import {
   awaitPromise,
   closePages,
   copy,
+  decodePNG,
   FSI,
   getEditorSelector,
   getRect,
@@ -29,7 +30,6 @@ import {
 } from "./test_utils.mjs";
 import fs from "fs";
 import path from "path";
-import { PNG } from "pngjs";
 
 const __dirname = import.meta.dirname;
 
@@ -624,11 +624,11 @@ describe("Signature Editor", () => {
       contentHeight = y1 - y0;
     }
 
-    beforeAll(() => {
+    beforeAll(async () => {
       const data = fs.readFileSync(
         path.join(__dirname, "../images/samplesignature.png")
       );
-      const png = PNG.sync.read(data);
+      const png = await decodePNG(data);
       getContentAspectRatio(png);
     });
 

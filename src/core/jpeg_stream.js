@@ -16,6 +16,7 @@
 import { FeatureTest, shadow, warn } from "../shared/util.js";
 import { DecodeStream } from "./decode_stream.js";
 import { Dict } from "./primitives.js";
+import { ImageResizer } from "./image_resizer.js";
 import { JpegImage } from "./jpg.js";
 
 /**
@@ -63,30 +64,8 @@ class JpegStream extends DecodeStream {
   }
 
   get jpegOptions() {
-    const jpegOptions = {
-      decodeTransform: undefined,
-      colorTransform: undefined,
-    };
+    const jpegOptions = { colorTransform: undefined };
 
-    // Checking if values need to be transformed before conversion.
-    const decodeArr = this.dict.getArray("D", "Decode");
-    if ((this.forceRGBA || this.forceRGB) && Array.isArray(decodeArr)) {
-      const bitsPerComponent = this.dict.get("BPC", "BitsPerComponent") || 8;
-      const decodeArrLength = decodeArr.length;
-      const transform = new Int32Array(decodeArrLength);
-      let transformNeeded = false;
-      const maxValue = (1 << bitsPerComponent) - 1;
-      for (let i = 0; i < decodeArrLength; i += 2) {
-        transform[i] = ((decodeArr[i + 1] - decodeArr[i]) * 256) | 0;
-        transform[i + 1] = (decodeArr[i] * maxValue) | 0;
-        if (transform[i] !== 256 || transform[i + 1] !== 0) {
-          transformNeeded = true;
-        }
-      }
-      if (transformNeeded) {
-        jpegOptions.decodeTransform = transform;
-      }
-    }
     // Fetching the 'ColorTransform' entry, if it exists.
     if (this.params instanceof Dict) {
       const colorTransform = this.params.get("ColorTransform");
@@ -128,7 +107,6 @@ class JpegStream extends DecodeStream {
       height: this.drawHeight,
       forceRGBA: this.forceRGBA,
       forceRGB: this.forceRGB,
-      isSourcePDF: true,
     });
     this.buffer = data;
     this.bufferLength = data.length;
@@ -141,16 +119,11 @@ class JpegStream extends DecodeStream {
     return this.stream.isAsync;
   }
 
-  async getTransferableImage() {
+  async getTransferableImage(width, height) {
     if (!(await JpegStream.canUseImageDecoder)) {
       return null;
     }
     const jpegOptions = this.jpegOptions;
-    if (jpegOptions.decodeTransform) {
-      // TODO: We could decode the image thanks to ImageDecoder and then
-      // get the pixels with copyTo and apply the decodeTransform.
-      return null;
-    }
     let decoder;
     try {
       // TODO: If the stream is Flate & DCT we could try to just pipe the
@@ -171,6 +144,15 @@ class JpegStream extends DecodeStream {
       if (!useImageDecoder) {
         return null;
       }
+      const { width: frameWidth, height: frameHeight } = useImageDecoder;
+      const reducePower = ImageResizer.getReducePower(frameWidth, frameHeight);
+      if (
+        (frameWidth !== width || frameHeight !== height) &&
+        (reducePower || !frameHeight)
+      ) {
+        // Only downscale when the SOF and image dictionary dimensions match.
+        return null;
+      }
       if (useImageDecoder.exifStart) {
         // Replace the entire EXIF-block with dummy data, to ensure that a
         // non-default EXIF orientation won't cause the image to be rotated
@@ -180,11 +162,18 @@ class JpegStream extends DecodeStream {
         data = data.slice();
         data.fill(0x00, useImageDecoder.exifStart, useImageDecoder.exifEnd);
       }
-      decoder = new ImageDecoder({
+      const init = {
         data,
         type: "image/jpeg",
         preferAnimation: false,
-      });
+      };
+      // Request reduced dimensions; ImageDecoder treats them as best-effort.
+      if (reducePower) {
+        const factor = 2 ** reducePower;
+        init.desiredWidth = Math.ceil(frameWidth / factor);
+        init.desiredHeight = Math.ceil(frameHeight / factor);
+      }
+      decoder = new ImageDecoder(init);
 
       return (await decoder.decode()).image;
     } catch (reason) {

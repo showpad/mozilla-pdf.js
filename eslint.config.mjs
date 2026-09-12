@@ -2,10 +2,13 @@ import globals from "globals";
 
 import import_ from "eslint-plugin-import-x";
 import jasmine from "eslint-plugin-jasmine";
+import jsdoc from "eslint-plugin-jsdoc";
 import json from "@eslint/json";
 import noUnsanitized from "eslint-plugin-no-unsanitized";
 import perfectionist from "eslint-plugin-perfectionist";
+import preferMathClamp from "./external/eslint_plugins/prefer-math-clamp.mjs";
 import prettierRecommended from "eslint-plugin-prettier/recommended";
+import regexpPlugin from "eslint-plugin-regexp";
 import unicorn from "eslint-plugin-unicorn";
 
 const jsFiles = folder => {
@@ -55,6 +58,21 @@ export default [
 
   prettierRecommended,
   {
+    files: jsFiles("."),
+    plugins: regexpPlugin.configs["flat/recommended"].plugins,
+    rules: {
+      ...regexpPlugin.configs["flat/recommended"].rules,
+      "regexp/no-legacy-features": "off",
+      "regexp/no-octal": "error",
+      "regexp/no-potentially-useless-backreference": "error",
+      "regexp/no-standalone-backslash": "error",
+      "regexp/no-super-linear-move": "error",
+      "regexp/optimal-lookaround-quantifier": "error",
+      "regexp/prefer-escape-replacement-dollar-char": "error",
+      "regexp/prefer-regexp-exec": "error",
+    },
+  },
+  {
     files: ["**/*.json", "**/.*.json"],
     language: "json/json",
     ...json.configs.recommended,
@@ -74,6 +92,7 @@ export default [
       json,
       "no-unsanitized": noUnsanitized,
       perfectionist,
+      "prefer-math-clamp": preferMathClamp,
       unicorn,
     },
 
@@ -143,8 +162,10 @@ export default [
       "unicorn/no-abusive-eslint-disable": "error",
       "unicorn/no-array-reduce": ["error", { allowSimpleOperations: true }],
       "unicorn/no-console-spaces": "error",
+      "unicorn/no-incorrect-query-selector": "error",
       "unicorn/no-instanceof-builtins": "error",
       "unicorn/no-invalid-remove-event-listener": "error",
+      "unicorn/no-multiple-promise-resolver-calls": "error",
       "unicorn/no-new-buffer": "error",
       "unicorn/no-single-promise-in-promise-methods": "error",
       "unicorn/no-typeof-undefined": ["error", { checkGlobalVariables: false }],
@@ -167,6 +188,11 @@ export default [
       "unicorn/prefer-dom-node-remove": "error",
       "unicorn/prefer-import-meta-properties": "error",
       "unicorn/prefer-includes": "error",
+      "unicorn/logical-assignment-operators": [
+        "error",
+        "always",
+        { enforceForIfStatements: true },
+      ],
       "unicorn/prefer-logical-operator-over-ternary": "error",
       "unicorn/prefer-modern-dom-apis": "error",
       "unicorn/prefer-modern-math-apis": "error",
@@ -178,6 +204,8 @@ export default [
       "unicorn/prefer-string-starts-ends-with": "error",
       "unicorn/prefer-ternary": ["error", "only-single-line"],
       "unicorn/throw-new-error": "error",
+
+      "prefer-math-clamp/prefer-math-clamp": "error",
 
       // Possible errors
       "for-direction": "error",
@@ -262,8 +290,10 @@ export default [
       "no-useless-concat": "error",
       "no-useless-escape": "error",
       "no-useless-return": "error",
+      "prefer-object-has-own": "error",
       "prefer-promise-reject-errors": "error",
       "prefer-spread": "error",
+      radix: "error",
       "wrap-iife": ["error", "any"],
       yoda: ["error", "never", { exceptRange: true }],
 
@@ -286,7 +316,14 @@ export default [
       // Stylistic Issues
       "lines-between-class-members": ["error", "always"],
       "max-len": ["error", { code: 1000, comments: 80, ignoreUrls: true }],
-      "new-cap": ["error", { newIsCap: true, capIsNew: false }],
+      "new-cap": [
+        "error",
+        {
+          newIsCap: true,
+          newIsCapExceptionPattern: "constructor",
+          capIsNew: false,
+        },
+      ],
       "no-array-constructor": "error",
       "no-multiple-empty-lines": ["error", { max: 1, maxEOF: 0, maxBOF: 1 }],
       "no-nested-ternary": "error",
@@ -297,6 +334,11 @@ export default [
           selector:
             "BinaryExpression[operator='instanceof'][right.name='Object']",
           message: "Use `typeof` rather than `instanceof Object`.",
+        },
+        {
+          selector: "MemberExpression[property.name='hasOwnProperty']",
+          message:
+            "Use `Object.hasOwn` rather than `Object.prototype.hasOwnProperty`.",
         },
         {
           selector: "CallExpression[callee.name='assert'][arguments.length!=2]",
@@ -373,6 +415,61 @@ export default [
     files: jsFiles("src"),
     rules: {
       "no-console": "error",
+    },
+  },
+
+  /* ======================================================================== *\
+                                   JSDoc
+  \* ======================================================================== */
+
+  {
+    files: jsFiles("."),
+
+    plugins: { jsdoc },
+
+    settings: {
+      jsdoc: {
+        tagNamePreference: { return: "returns" },
+      },
+    },
+
+    rules: {
+      "jsdoc/check-access": "error",
+      "jsdoc/check-alignment": "error",
+      "jsdoc/check-param-names": "error",
+      "jsdoc/check-property-names": "error",
+      // `@licstart`/`@licend` are GNU LibreJS tags, used in the license header.
+      "jsdoc/check-tag-names": [
+        "error",
+        { definedTags: ["licend", "licstart"] },
+      ],
+      "jsdoc/check-template-names": "error",
+      "jsdoc/check-types": "error",
+      "jsdoc/check-values": "error",
+      "jsdoc/empty-tags": "error",
+      "jsdoc/escape-inline-tags": "error",
+      "jsdoc/implements-on-classes": "error",
+      "jsdoc/multiline-blocks": "error",
+      "jsdoc/no-bad-blocks": "error",
+      "jsdoc/no-blank-block-descriptions": "error",
+      "jsdoc/no-blank-blocks": "error",
+      "jsdoc/no-multi-asterisks": "error",
+      "jsdoc/normalize-see-links": "error",
+      "jsdoc/require-asterisk-prefix": "error",
+      "jsdoc/require-param-name": "error",
+      "jsdoc/require-param-type": "error",
+      "jsdoc/require-property": "error",
+      "jsdoc/require-property-name": "error",
+      "jsdoc/require-property-type": "error",
+      "jsdoc/require-returns-check": "error",
+      "jsdoc/require-returns-type": "error",
+      "jsdoc/require-throws-description": "error",
+      "jsdoc/require-throws-type": "error",
+      "jsdoc/require-yields-check": "error",
+      "jsdoc/require-yields-description": "error",
+      "jsdoc/require-yields-type": "error",
+      "jsdoc/tag-lines": "error",
+      "jsdoc/valid-types": "error",
     },
   },
 

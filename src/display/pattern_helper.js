@@ -13,14 +13,15 @@
  * limitations under the License.
  */
 
-import { drawMeshWithGPU, isWebGPUMeshReady } from "./webgpu_mesh.js";
 import {
+  BBOX_INIT,
   FormatError,
   info,
-  MeshFigureType,
   unreachable,
   Util,
 } from "../shared/util.js";
+import { drawMeshWithGPU, isGPUReady, loadMeshShader } from "./webgpu.js";
+import { CanvasNestedDependencyTracker } from "./canvas_dependency_tracker.js";
 import { getCurrentTransform } from "./display_utils.js";
 
 const PathType = {
@@ -41,6 +42,8 @@ function applyBoundingBox(ctx, bbox) {
 }
 
 class BaseShadingPattern {
+  matrix = null;
+
   constructor() {
     if (
       (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
@@ -69,7 +72,6 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
     this._p1 = IR[5];
     this._r0 = IR[6];
     this._r1 = IR[7];
-    this.matrix = null;
   }
 
   isOriginBased() {
@@ -84,21 +86,19 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
     return this._type === "radial";
   }
 
-  // Returns true when the smaller circle's center (p0 when r0 ≤ r1) lies
-  // outside the larger circle. In that case the canvas radial gradient picks
-  // t > 1 solutions for points inside the outer circle and maps them to the
-  // transparent stop we append for extendEnd=false, making the gradient
-  // invisible. A two-pass draw (reversed first, normal on top) fixes this
-  // (see #20851).
-  _isCircleCenterOutside() {
-    if (!this.isRadial() || this._r0 > this._r1) {
+  // Return true when the a circle of a radial gradient isn't fully included in
+  // the other circle, which means that the gradient is conic and we need to
+  // draw the reversed gradient first to correctly render the pattern (see
+  // #20851 and #257).
+  areConic() {
+    if (!this.isRadial()) {
       return false;
     }
     const dist = Math.hypot(
       this._p0[0] - this._p1[0],
       this._p0[1] - this._p1[1]
     );
-    return dist > this._r1;
+    return dist + this._r1 > this._r0 && dist + this._r0 > this._r1;
   }
 
   _createGradient(ctx, transform = null) {
@@ -178,10 +178,44 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
     return grad;
   }
 
+  /** Rasterize a shading within its device-space bounding box. */
+  _createRasterPattern(ctx, owner, inverse, bbox, transform, transferMaps) {
+    // Limit the temporary canvas to `bbox` (see bug 1722807).
+    const width = Math.ceil(bbox[2] - bbox[0]) || 1;
+    const height = Math.ceil(bbox[3] - bbox[1]) || 1;
+
+    const tmpCanvas = owner.canvasFactory.create(width, height);
+
+    const tmpCtx = tmpCanvas.context;
+    tmpCtx.clearRect(0, 0, width, height);
+    tmpCtx.beginPath();
+    tmpCtx.rect(0, 0, width, height);
+    // Account for the `bbox` origin.
+    tmpCtx.translate(-bbox[0], -bbox[1]);
+    inverse = Util.transform(inverse, [1, 0, 0, 1, bbox[0], bbox[1]]);
+
+    tmpCtx.transform(...transform);
+    applyBoundingBox(tmpCtx, this._bbox);
+
+    if (this.areConic()) {
+      tmpCtx.fillStyle = this._createReversedGradient(tmpCtx);
+      tmpCtx.fill();
+    }
+    tmpCtx.fillStyle = this._createGradient(tmpCtx);
+    tmpCtx.fill();
+    // Apply maps after interpolation by filtering the raster, not the stops.
+    transferMaps?.applyToCanvas(tmpCtx);
+
+    const pattern = ctx.createPattern(tmpCanvas.canvas, "no-repeat");
+    owner.canvasFactory.destroy(tmpCanvas);
+    pattern.setTransform(new DOMMatrix(inverse));
+    return pattern;
+  }
+
   getPattern(ctx, owner, inverse, pathType) {
-    let pattern;
+    const transferMaps = owner.current.transferMapsFallback;
     if (pathType === PathType.STROKE || pathType === PathType.FILL) {
-      if (this.isOriginBased()) {
+      if (this.isOriginBased() && !transferMaps) {
         let transf = Util.transform(inverse, owner.baseTransform);
         if (this.matrix) {
           transf = Util.transform(transf, this.matrix);
@@ -211,68 +245,42 @@ class RadialAxialShadingPattern extends BaseShadingPattern {
         pathType,
         getCurrentTransform(ctx)
       ) || [0, 0, 0, 0];
-      // Create a canvas that is only as big as the current path. This doesn't
-      // allow us to cache the pattern, but it generally creates much smaller
-      // canvases and saves memory use. See bug 1722807 for an example.
-      const width = Math.ceil(ownerBBox[2] - ownerBBox[0]) || 1;
-      const height = Math.ceil(ownerBBox[3] - ownerBBox[1]) || 1;
-
-      const tmpCanvas = owner.cachedCanvases.getCanvas(
-        "pattern",
-        width,
-        height
+      // Fill and stroke patterns use the owner's base transform.
+      const transform = this.matrix
+        ? Util.transform(owner.baseTransform, this.matrix)
+        : owner.baseTransform;
+      return this._createRasterPattern(
+        ctx,
+        owner,
+        inverse,
+        ownerBBox,
+        transform,
+        transferMaps
       );
-
-      const tmpCtx = tmpCanvas.context;
-      tmpCtx.clearRect(0, 0, tmpCtx.canvas.width, tmpCtx.canvas.height);
-      tmpCtx.beginPath();
-      tmpCtx.rect(0, 0, tmpCtx.canvas.width, tmpCtx.canvas.height);
-      // Non shading fill patterns are positioned relative to the base transform
-      // (usually the page's initial transform), but we may have created a
-      // smaller canvas based on the path, so we must account for the shift.
-      tmpCtx.translate(-ownerBBox[0], -ownerBBox[1]);
-      inverse = Util.transform(inverse, [
-        1,
-        0,
-        0,
-        1,
-        ownerBBox[0],
-        ownerBBox[1],
-      ]);
-
-      tmpCtx.transform(...owner.baseTransform);
-      if (this.matrix) {
-        tmpCtx.transform(...this.matrix);
-      }
-      applyBoundingBox(tmpCtx, this._bbox);
-
-      if (this._isCircleCenterOutside()) {
-        tmpCtx.fillStyle = this._createReversedGradient(tmpCtx);
-        tmpCtx.fill();
-      }
-      tmpCtx.fillStyle = this._createGradient(tmpCtx);
-      tmpCtx.fill();
-
-      pattern = ctx.createPattern(tmpCanvas.canvas, "no-repeat");
-      const domMatrix = new DOMMatrix(inverse);
-      pattern.setTransform(domMatrix);
-    } else {
-      // Shading fills are applied relative to the current matrix which is also
-      // how canvas gradients work, so there's no need to do anything special
-      // here.
-      if (this._isCircleCenterOutside()) {
-        // Draw the reversed gradient first so the normal gradient can
-        // correctly overlay it (see _isCircleCenterOutside for details).
-        ctx.save();
-        applyBoundingBox(ctx, this._bbox);
-        ctx.fillStyle = this._createReversedGradient(ctx);
-        ctx.fillRect(-1e10, -1e10, 2e10, 2e10);
-        ctx.restore();
-      }
-      applyBoundingBox(ctx, this._bbox);
-      pattern = this._createGradient(ctx);
     }
-    return pattern;
+
+    // Direct gradients work unless the maps require a raster.
+    if (transferMaps && inverse) {
+      return this._createRasterPattern(
+        ctx,
+        owner,
+        inverse,
+        owner.current.clipBox,
+        getCurrentTransform(ctx),
+        transferMaps
+      );
+    }
+    if (this.areConic()) {
+      // Draw the reversed gradient first so the normal gradient can
+      // correctly overlay it (see _isCircleCenterOutside for details).
+      ctx.save();
+      applyBoundingBox(ctx, this._bbox);
+      ctx.fillStyle = this._createReversedGradient(ctx);
+      ctx.fillRect(-1e10, -1e10, 2e10, 2e10);
+      ctx.restore();
+    }
+    applyBoundingBox(ctx, this._bbox);
+    return this._createGradient(ctx);
   }
 }
 
@@ -382,73 +390,26 @@ function drawTriangle(data, context, p1, p2, p3, c1, c2, c3) {
   }
 }
 
-function drawFigure(data, figure, context) {
-  const ps = figure.coords;
-  const cs = figure.colors;
-  let i, ii;
-  switch (figure.type) {
-    case MeshFigureType.LATTICE:
-      const verticesPerRow = figure.verticesPerRow;
-      const rows = Math.floor(ps.length / verticesPerRow) - 1;
-      const cols = verticesPerRow - 1;
-      for (i = 0; i < rows; i++) {
-        let q = i * verticesPerRow;
-        for (let j = 0; j < cols; j++, q++) {
-          drawTriangle(
-            data,
-            context,
-            ps[q],
-            ps[q + 1],
-            ps[q + verticesPerRow],
-            cs[q],
-            cs[q + 1],
-            cs[q + verticesPerRow]
-          );
-          drawTriangle(
-            data,
-            context,
-            ps[q + verticesPerRow + 1],
-            ps[q + 1],
-            ps[q + verticesPerRow],
-            cs[q + verticesPerRow + 1],
-            cs[q + 1],
-            cs[q + verticesPerRow]
-          );
-        }
-      }
-      break;
-    case MeshFigureType.TRIANGLES:
-      for (i = 0, ii = ps.length; i < ii; i += 3) {
-        drawTriangle(
-          data,
-          context,
-          ps[i],
-          ps[i + 1],
-          ps[i + 2],
-          cs[i],
-          cs[i + 1],
-          cs[i + 2]
-        );
-      }
-      break;
-    default:
-      throw new Error("illegal figure");
-  }
-}
-
 class MeshShadingPattern extends BaseShadingPattern {
   constructor(IR) {
     super();
-    this._coords = IR[2];
-    this._colors = IR[3];
-    this._figures = IR[4];
+    this._posData = IR[2];
+    this._colData = IR[3];
+    this._vertexCount = IR[4];
     this._bounds = IR[5];
     this._bbox = IR[6];
     this._background = IR[7];
-    this.matrix = null;
+    // Pre-compile the mesh pipeline now that we know GPU-renderable content
+    // is present; no-op if the GPU is not available or already compiled.
+    loadMeshShader();
   }
 
-  _createMeshCanvas(combinedScale, backgroundColor, cachedCanvases) {
+  _createMeshCanvas(
+    combinedScale,
+    backgroundColor,
+    canvasFactory,
+    transferMaps = null
+  ) {
     // we will increase scale on some weird factor to let antialiasing take
     // care of "rough" edges
     const EXPECTED_SCALE = 1.1;
@@ -479,8 +440,8 @@ class MeshShadingPattern extends BaseShadingPattern {
     const scaleY = boundsHeight ? boundsHeight / height : 1;
 
     const context = {
-      coords: this._coords,
-      colors: this._colors,
+      coords: this._posData,
+      colors: this._colData,
       offsetX: -offsetX,
       offsetY: -offsetY,
       scaleX: 1 / scaleX,
@@ -489,17 +450,19 @@ class MeshShadingPattern extends BaseShadingPattern {
 
     const paddedWidth = width + BORDER_SIZE * 2;
     const paddedHeight = height + BORDER_SIZE * 2;
+    const tmpCanvas = canvasFactory.create(paddedWidth, paddedHeight);
 
-    const tmpCanvas = cachedCanvases.getCanvas(
-      "mesh",
-      paddedWidth,
-      paddedHeight
-    );
-
-    if (isWebGPUMeshReady()) {
+    // Use the GPU path when there are more than 16 triangles (> 48 vertices).
+    // With small meshes the GPU overhead is significant and the CPU path is
+    // faster. The texture has to move from the GPU to the main thread and it's
+    // costly. So it's frequent to have a lot of mesh-based shading patterns
+    // when rendering some 3D surfaces (see bug 2030745).
+    if (isGPUReady() && this._vertexCount > 48) {
       tmpCanvas.context.drawImage(
         drawMeshWithGPU(
-          this._figures,
+          this._posData,
+          this._colData,
+          this._vertexCount,
           context,
           backgroundColor,
           paddedWidth,
@@ -520,11 +483,13 @@ class MeshShadingPattern extends BaseShadingPattern {
           bytes[i + 3] = 255;
         }
       }
-      for (const figure of this._figures) {
-        drawFigure(data, figure, context);
+      for (let i = 0, ii = this._vertexCount; i < ii; i += 3) {
+        drawTriangle(data, context, i, i + 1, i + 2, i, i + 1, i + 2);
       }
       tmpCanvas.context.putImageData(data, BORDER_SIZE, BORDER_SIZE);
     }
+    // Filter the raster when using the software fallback.
+    transferMaps?.applyToCanvas(tmpCanvas.context);
 
     return {
       canvas: tmpCanvas.canvas,
@@ -560,7 +525,8 @@ class MeshShadingPattern extends BaseShadingPattern {
     const temporaryPatternCanvas = this._createMeshCanvas(
       scale,
       pathType === PathType.SHADING ? null : this._background,
-      owner.cachedCanvases
+      owner.canvasFactory,
+      owner.current.transferMapsFallback
     );
 
     if (pathType !== PathType.SHADING) {
@@ -576,7 +542,12 @@ class MeshShadingPattern extends BaseShadingPattern {
     );
     ctx.scale(temporaryPatternCanvas.scaleX, temporaryPatternCanvas.scaleY);
 
-    return ctx.createPattern(temporaryPatternCanvas.canvas, "no-repeat");
+    const pattern = ctx.createPattern(
+      temporaryPatternCanvas.canvas,
+      "no-repeat"
+    );
+    owner.canvasFactory.destroy(temporaryPatternCanvas);
+    return pattern;
   }
 }
 
@@ -616,25 +587,166 @@ class TilingPattern {
     this.ystep = IR[6];
     this.paintType = IR[7];
     this.tilingType = IR[8];
+    this.needsIsolation = IR[9] ?? true;
     this.ctx = ctx;
     this.canvasGraphicsFactory = canvasGraphicsFactory;
     this.baseTransform = baseTransform;
+    // baseTransform * patternMatrix.
+    this.patternBaseMatrix = this.matrix
+      ? Util.transform(baseTransform, this.matrix)
+      : baseTransform;
+  }
+
+  // Returns [n, m] tile index if the fill area fits within one tile,
+  // null otherwise.
+  canSkipPatternCanvas([width, height, offsetX, offsetY]) {
+    const [x0, y0, x1, y1] = this.bbox;
+    const absXStep = Math.abs(this.xstep);
+    const absYStep = Math.abs(this.ystep);
+
+    // dims is in pattern space, so compare directly with xstep/ystep.
+    if (width > absXStep + 1e-6 || height > absYStep + 1e-6) {
+      return null;
+    }
+
+    // Tile n covers [x0+n·xstep, x1+n·xstep]; find the range intersecting
+    // [offsetX, offsetX+width].
+    const nXFirst = Math.floor((offsetX - x1) / absXStep) + 1;
+    const nXLast = Math.ceil((offsetX + width - x0) / absXStep) - 1;
+    const nYFirst = Math.floor((offsetY - y1) / absYStep) + 1;
+    const nYLast = Math.ceil((offsetY + height - y0) / absYStep) - 1;
+    return nXLast <= nXFirst && nYLast <= nYFirst ? [nXFirst, nYFirst] : null;
+  }
+
+  // Converts clippedBBox from device space to pattern space and stores it
+  // as [width, height, offsetX, offsetY] in dims.
+  updatePatternDims(clippedBBox, dims) {
+    // Two diagonal corners aren't enough when the pattern matrix is rotated.
+    const bbox = BBOX_INIT.slice();
+    Util.axialAlignedBoundingBox(
+      clippedBBox,
+      Util.inverseTransform(this.patternBaseMatrix),
+      bbox
+    );
+    dims[0] = bbox[2] - bbox[0];
+    dims[1] = bbox[3] - bbox[1];
+    dims[2] = bbox[0];
+    dims[3] = bbox[1];
+  }
+
+  // Renders the tile operators onto a fresh canvas and returns it.
+  _renderTileCanvas(owner, opIdx, dimx, dimy) {
+    const [x0, y0, x1, y1] = this.bbox;
+    const tmpCanvas = owner.canvasFactory.create(dimx.size, dimy.size);
+    const tmpCtx = tmpCanvas.context;
+    const graphics = this.canvasGraphicsFactory.createCanvasGraphics(
+      tmpCtx,
+      opIdx
+    );
+    graphics.groupLevel = owner.groupLevel;
+    // Inherit the owner's fallback while rendering the tile.
+    graphics.current.transferMapsFallback = owner.current.transferMapsFallback;
+
+    this.setFillAndStrokeStyleToContext(graphics, this.paintType, this.color);
+
+    tmpCtx.translate(-dimx.scale * x0, -dimy.scale * y0);
+    // 0: sub-ops are indexed under the top-level opIdx from
+    // createCanvasGraphics.
+    graphics.transform(0, dimx.scale, 0, 0, dimy.scale, 0, 0);
+
+    // Required to balance the save/restore in CanvasGraphics beginDrawing.
+    tmpCtx.save();
+    graphics.dependencyTracker?.save();
+
+    this.clipBbox(graphics, x0, y0, x1, y1);
+    graphics.baseTransform = getCurrentTransform(graphics.ctx);
+    graphics.executeOperatorList(this.operatorList);
+
+    graphics.endDrawing();
+    graphics.dependencyTracker?.restore();
+    tmpCtx.restore();
+
+    return tmpCanvas;
+  }
+
+  _getCombinedScales() {
+    const scale = new Float32Array(2);
+    Util.singularValueDecompose2dScale(this.matrix, scale);
+    const [matrixScaleX, matrixScaleY] = scale;
+    Util.singularValueDecompose2dScale(this.baseTransform, scale);
+    return [matrixScaleX * scale[0], matrixScaleY * scale[1]];
+  }
+
+  // Draws a single tile directly onto owner, clipped to path.
+  drawPattern(owner, path, useEOFill = false, [n, m], opIdx) {
+    const [x0, y0, x1, y1] = this.bbox;
+
+    const dependencyTracker = owner.dependencyTracker;
+    if (dependencyTracker) {
+      owner.dependencyTracker = new CanvasNestedDependencyTracker(
+        dependencyTracker,
+        opIdx
+      );
+    }
+
+    owner.save();
+    if (useEOFill) {
+      owner.ctx.clip(path, "evenodd");
+    } else {
+      owner.ctx.clip(path);
+    }
+    // Position tile (n, m) in device space; the clip above is unaffected
+    // by setTransform.
+    owner.ctx.setTransform(...this.patternBaseMatrix);
+    owner.ctx.translate(n * this.xstep, m * this.ystep);
+    if (
+      this.needsIsolation ||
+      owner.ctx.globalAlpha !== 1 ||
+      owner.ctx.globalCompositeOperation !== "source-over" ||
+      owner.inSMaskMode
+    ) {
+      const bboxWidth = x1 - x0;
+      const bboxHeight = y1 - y0;
+      const [combinedScaleX, combinedScaleY] = this._getCombinedScales();
+      const dimx = this.getSizeAndScale(
+        bboxWidth,
+        this.ctx.canvas.width,
+        combinedScaleX
+      );
+      const dimy = this.getSizeAndScale(
+        bboxHeight,
+        this.ctx.canvas.height,
+        combinedScaleY
+      );
+      // Isolate blend modes from the main canvas.
+      const tmpCanvas = this._renderTileCanvas(owner, opIdx, dimx, dimy);
+      owner.ctx.drawImage(tmpCanvas.canvas, x0, y0, bboxWidth, bboxHeight);
+      owner.canvasFactory.destroy(tmpCanvas);
+    } else {
+      // No blend modes or transparency: render the tile directly onto owner.
+      this.setFillAndStrokeStyleToContext(owner, this.paintType, this.color);
+      this.clipBbox(owner, x0, y0, x1, y1);
+      owner.baseTransformStack.push(owner.baseTransform);
+      owner.baseTransform = getCurrentTransform(owner.ctx);
+      owner.executeOperatorList(this.operatorList);
+      owner.baseTransform = owner.baseTransformStack.pop();
+    }
+
+    owner.restore();
+    if (dependencyTracker) {
+      owner.dependencyTracker = dependencyTracker;
+    }
   }
 
   createPatternCanvas(owner, opIdx) {
-    const {
-      bbox,
-      operatorList,
-      paintType,
-      tilingType,
-      color,
-      canvasGraphicsFactory,
-    } = this;
+    const [x0, y0, x1, y1] = this.bbox;
+    const width = x1 - x0;
+    const height = y1 - y0;
     let { xstep, ystep } = this;
     xstep = Math.abs(xstep);
     ystep = Math.abs(ystep);
 
-    info("TilingType: " + tilingType);
+    info("TilingType: " + this.tilingType);
 
     // A tiling pattern as defined by PDF spec 8.7.2 is a cell whose size is
     // described by bbox, and may repeat regularly by shifting the cell by
@@ -654,45 +766,32 @@ class TilingPattern {
     //   "Figures on adjacent tiles should not overlap" (PDF spec 8.7.3.1),
     //   but overlapping cells without common pixels are still valid.
 
-    const x0 = bbox[0],
-      y0 = bbox[1],
-      x1 = bbox[2],
-      y1 = bbox[3];
-    const width = x1 - x0;
-    const height = y1 - y0;
-
     // Obtain scale from matrix and current transformation matrix.
-    const scale = new Float32Array(2);
-    Util.singularValueDecompose2dScale(this.matrix, scale);
-    const [matrixScaleX, matrixScaleY] = scale;
-    Util.singularValueDecompose2dScale(this.baseTransform, scale);
-    const combinedScaleX = matrixScaleX * scale[0];
-    const combinedScaleY = matrixScaleY * scale[1];
+    const [combinedScaleX, combinedScaleY] = this._getCombinedScales();
 
+    // Use width and height values that are as close as possible to the end
+    // result when the pattern is used. Too low value makes the pattern look
+    // blurry. Too large value makes it look too crispy.
     let canvasWidth = width,
       canvasHeight = height,
       redrawHorizontally = false,
       redrawVertically = false;
 
-    const xScaledStep = Math.ceil(xstep * combinedScaleX);
-    const yScaledStep = Math.ceil(ystep * combinedScaleY);
-    const xScaledWidth = Math.ceil(width * combinedScaleX);
-    const yScaledHeight = Math.ceil(height * combinedScaleY);
-
-    if (xScaledStep >= xScaledWidth) {
+    if (
+      Math.ceil(xstep * combinedScaleX) >= Math.ceil(width * combinedScaleX)
+    ) {
       canvasWidth = xstep;
     } else {
       redrawHorizontally = true;
     }
-    if (yScaledStep >= yScaledHeight) {
+    if (
+      Math.ceil(ystep * combinedScaleY) >= Math.ceil(height * combinedScaleY)
+    ) {
       canvasHeight = ystep;
     } else {
       redrawVertically = true;
     }
 
-    // Use width and height values that are as close as possible to the end
-    // result when the pattern is used. Too low value makes the pattern look
-    // blurry. Too large value makes it look too crispy.
     const dimx = this.getSizeAndScale(
       canvasWidth,
       this.ctx.canvas.width,
@@ -704,47 +803,7 @@ class TilingPattern {
       combinedScaleY
     );
 
-    const tmpCanvas = owner.cachedCanvases.getCanvas(
-      "pattern",
-      dimx.size,
-      dimy.size
-    );
-    const tmpCtx = tmpCanvas.context;
-    const graphics = canvasGraphicsFactory.createCanvasGraphics(tmpCtx, opIdx);
-    graphics.groupLevel = owner.groupLevel;
-
-    this.setFillAndStrokeStyleToContext(graphics, paintType, color);
-
-    tmpCtx.translate(-dimx.scale * x0, -dimy.scale * y0);
-    graphics.transform(
-      // We pass 0 as the 'opIdx' argument, but the value is irrelevant.
-      // We know that we are in a 'CanvasNestedDependencyTracker' that captures
-      // all the sub-operations needed to create this pattern canvas and uses
-      // the top-level operation index as their index.
-      0,
-      dimx.scale,
-      0,
-      0,
-      dimy.scale,
-      0,
-      0
-    );
-
-    // To match CanvasGraphics beginDrawing we must save the context here or
-    // else we end up with unbalanced save/restores.
-    tmpCtx.save();
-    graphics.dependencyTracker?.save();
-
-    this.clipBbox(graphics, x0, y0, x1, y1);
-
-    graphics.baseTransform = getCurrentTransform(graphics.ctx);
-
-    graphics.executeOperatorList(operatorList);
-
-    graphics.endDrawing();
-
-    graphics.dependencyTracker?.restore();
-    tmpCtx.restore();
+    const tmpCanvas = this._renderTileCanvas(owner, opIdx, dimx, dimy);
 
     if (redrawHorizontally || redrawVertically) {
       // The tile is overlapping itself, so we create a new tile with
@@ -775,11 +834,7 @@ class TilingPattern {
 
       const xSize = dimx2.size;
       const ySize = dimy2.size;
-      const tmpCanvas2 = owner.cachedCanvases.getCanvas(
-        "pattern-workaround",
-        xSize,
-        ySize
-      );
+      const tmpCanvas2 = owner.canvasFactory.create(xSize, ySize);
       const tmpCtx2 = tmpCanvas2.context;
       const ii = redrawHorizontally ? Math.floor(width / xstep) : 0;
       const jj = redrawVertically ? Math.floor(height / ystep) : 0;
@@ -800,8 +855,10 @@ class TilingPattern {
           );
         }
       }
+      owner.canvasFactory.destroy(tmpCanvas);
       return {
         canvas: tmpCanvas2.canvas,
+        canvasEntry: tmpCanvas2,
         scaleX: dimx2.scale,
         scaleY: dimy2.scale,
         offsetX: x0,
@@ -811,6 +868,7 @@ class TilingPattern {
 
     return {
       canvas: tmpCanvas.canvas,
+      canvasEntry: tmpCanvas,
       scaleX: dimx.scale,
       scaleY: dimy.scale,
       offsetX: x0,
@@ -836,33 +894,37 @@ class TilingPattern {
   clipBbox(graphics, x0, y0, x1, y1) {
     const bboxWidth = x1 - x0;
     const bboxHeight = y1 - y0;
-    graphics.ctx.rect(x0, y0, bboxWidth, bboxHeight);
+    const clip = new Path2D();
+    clip.rect(x0, y0, bboxWidth, bboxHeight);
     Util.axialAlignedBoundingBox(
       [x0, y0, x1, y1],
       getCurrentTransform(graphics.ctx),
       graphics.current.minMax
     );
-    graphics.clip();
-    graphics.endPath();
+    graphics.ctx.clip(clip);
+    graphics.current.updateClipFromPath();
   }
 
   setFillAndStrokeStyleToContext(graphics, paintType, color) {
-    const context = graphics.ctx,
-      current = graphics.current;
     switch (paintType) {
       case PaintType.COLORED:
-        const { fillStyle, strokeStyle } = this.ctx;
-        context.fillStyle = current.fillColor = fillStyle;
-        context.strokeStyle = current.strokeColor = strokeStyle;
+        // The cell starts from the initial graphics state of its parent
+        // content stream (PDF 32000-1, 8.7.3.1), hence black and not the
+        // colours in effect when the pattern was selected.
+        color = "#000000";
         break;
       case PaintType.UNCOLORED:
-        context.fillStyle = context.strokeStyle = color;
-        // Set color needed by image masks (fixes issues 3226 and 8741).
-        current.fillColor = current.strokeColor = color;
         break;
       default:
         throw new FormatError(`Unsupported paint type: ${paintType}`);
     }
+    const { ctx, current } = graphics;
+    current.patternFill = current.patternStroke = false;
+    // Pre-transfer solid colors in fallback mode.
+    ctx.fillStyle = ctx.strokeStyle =
+      current.transferMapsFallback?.applyToColor(color) ?? color;
+    // Also needed by image masks (fixes issues 3226 and 8741).
+    current.fillColor = current.strokeColor = color;
   }
 
   isModifyingCurrentTransform() {
@@ -870,14 +932,12 @@ class TilingPattern {
   }
 
   getPattern(ctx, owner, inverse, pathType, opIdx) {
-    // PDF spec 8.7.2 NOTE 1: pattern's matrix is relative to initial matrix.
-    let matrix = inverse;
-    if (pathType !== PathType.SHADING) {
-      matrix = Util.transform(matrix, owner.baseTransform);
-      if (this.matrix) {
-        matrix = Util.transform(matrix, this.matrix);
-      }
-    }
+    // PDF spec 8.7.2: prepend inverse CTM to patternBaseMatrix to position
+    // the CSS pattern.
+    const matrix =
+      pathType !== PathType.SHADING
+        ? Util.transform(inverse, this.patternBaseMatrix)
+        : inverse;
 
     const temporaryPatternCanvas = this.createPatternCanvas(owner, opIdx);
 
@@ -894,6 +954,7 @@ class TilingPattern {
     );
 
     const pattern = ctx.createPattern(temporaryPatternCanvas.canvas, "repeat");
+    owner.canvasFactory.destroy(temporaryPatternCanvas.canvasEntry);
     pattern.setTransform(domMatrix);
 
     return pattern;

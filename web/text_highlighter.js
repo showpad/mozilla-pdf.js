@@ -13,12 +13,14 @@
  * limitations under the License.
  */
 
+import { internalOpt } from "./internal_evt.js";
+
 /** @typedef {import("./event_utils").EventBus} EventBus */
 // eslint-disable-next-line max-len
 /** @typedef {import("./pdf_find_controller").PDFFindController} PDFFindController */
 
 /**
- * @typedef {Object} TextHighlighterOptions
+ * @typedef {object} TextHighlighterOptions
  * @property {PDFFindController} findController
  * @property {EventBus} eventBus - The application event bus.
  * @property {number} pageIndex - The page index.
@@ -29,7 +31,7 @@
  * either the text layer or XFA layer depending on the type of document.
  */
 class TextHighlighter {
-  #eventAbortController = null;
+  #eventAC = null;
 
   /**
    * @param {TextHighlighterOptions} options
@@ -49,7 +51,6 @@ class TextHighlighter {
    * The arrays should be of equal length and the array element at each index
    * should correspond to the other. e.g.
    * `items[0] = "<span>Item 0</span>" and texts[0] = "Item 0";
-   *
    * @param {Array<Node>} divs
    * @param {Array<string>} texts
    */
@@ -71,17 +72,17 @@ class TextHighlighter {
     }
     this.enabled = true;
 
-    if (!this.#eventAbortController) {
-      this.#eventAbortController = new AbortController();
+    if (!this.#eventAC) {
+      this.#eventAC = new AbortController();
 
-      this.eventBus._on(
+      this.eventBus.on(
         "updatetextlayermatches",
         evt => {
           if (evt.pageIndex === this.pageIdx || evt.pageIndex === -1) {
             this._updateMatches();
           }
         },
-        { signal: this.#eventAbortController.signal }
+        { signal: this.#eventAC.signal, ...internalOpt }
       );
     }
     this._updateMatches();
@@ -93,8 +94,8 @@ class TextHighlighter {
     }
     this.enabled = false;
 
-    this.#eventAbortController?.abort();
-    this.#eventAbortController = null;
+    this.#eventAC?.abort();
+    this.#eventAC = null;
 
     this._updateMatches(/* reset = */ true);
   }

@@ -141,9 +141,37 @@ describe("cmap", function () {
     });
     expect(cmap).toBeInstanceOf(CMap);
     expect(cmap.useCMap).not.toBeNull();
-    expect(cmap.builtInCMap).toBeFalsy();
+    expect(cmap.builtInCMap).toBeFalse();
     expect(cmap.length).toEqual(0x20a7);
-    expect(cmap.isIdentityCMap).toEqual(false);
+    expect(cmap.isIdentityCMap).toBeFalse();
+  });
+
+  it("prefers its own mappings over those inherited through usecmap", async function () {
+    const cmap = await CMapFactory.create({
+      encoding: Name.get("ETenms-B5-H"),
+      fetchBuiltInCMap,
+      useCMap: null,
+    });
+
+    expect(cmap.lookup(0x41)).toEqual(34);
+    expect(cmap.lookup(0xa140)).toEqual(99);
+  });
+
+  it("prefers embedded mappings over those inherited through usecmap", async function () {
+    // prettier-ignore
+    const str = "/ETen-B5-H usecmap\n" +
+              "1 begincidchar\n" +
+              "<41> 34\n" +
+              "endcidchar\n";
+    const stream = new StringStream(str);
+    const cmap = await CMapFactory.create({
+      encoding: stream,
+      fetchBuiltInCMap,
+      useCMap: null,
+    });
+
+    expect(cmap.lookup(0x41)).toEqual(34);
+    expect(cmap.lookup(0xa140)).toEqual(99);
   });
 
   it("parses cmapname", async function () {
@@ -157,7 +185,7 @@ describe("cmap", function () {
     const str = "/WMode 1 def\n";
     const stream = new StringStream(str);
     const cmap = await CMapFactory.create({ encoding: stream });
-    expect(cmap.vertical).toEqual(true);
+    expect(cmap.vertical).toBeTrue();
   });
 
   it("loads built in cmap", async function () {
@@ -168,9 +196,9 @@ describe("cmap", function () {
     });
     expect(cmap).toBeInstanceOf(CMap);
     expect(cmap.useCMap).toBeNull();
-    expect(cmap.builtInCMap).toBeTruthy();
+    expect(cmap.builtInCMap).toBeTrue();
     expect(cmap.length).toEqual(0x20a7);
-    expect(cmap.isIdentityCMap).toEqual(false);
+    expect(cmap.isIdentityCMap).toBeFalse();
   });
 
   it("loads built in identity cmap", async function () {
@@ -180,11 +208,11 @@ describe("cmap", function () {
       useCMap: null,
     });
     expect(cmap).toBeInstanceOf(IdentityCMap);
-    expect(cmap.vertical).toEqual(false);
+    expect(cmap.vertical).toBeFalse();
     expect(cmap.length).toEqual(0x10000);
     expect(function () {
       return cmap.isIdentityCMap;
-    }).toThrow(new Error("should not access .isIdentityCMap"));
+    }).toThrowError("should not access .isIdentityCMap");
   });
 
   it("attempts to load a non-existent built-in CMap", async function () {
@@ -196,7 +224,7 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       expect(reason.message).toEqual("Unknown CMap name: null");
@@ -221,7 +249,7 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       expect(reason.message).toEqual(
@@ -250,12 +278,12 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       const message = reason.message;
-      expect(message.startsWith("Unable to load CMap data at: ")).toEqual(true);
-      expect(message.endsWith("/external/bcmaps/Adobe-Japan1-1")).toEqual(true);
+      expect(message.startsWith("Unable to load CMap data at: ")).toBeTrue();
+      expect(message.endsWith("/external/bcmaps/Adobe-Japan1-1")).toBeTrue();
     }
   });
 });

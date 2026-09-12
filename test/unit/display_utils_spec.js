@@ -18,6 +18,8 @@ import {
   findContrastColor,
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
+  getRGB,
+  getRGBA,
   isValidFetchUrl,
   PDFDateString,
   renderRichText,
@@ -120,6 +122,30 @@ describe("display_utils", function () {
       expect(
         getPdfFilenameFromUrl("http://www.example.com/pdfs/pdf.html#file2.pdf")
       ).toEqual("file2.pdf");
+      // Only the last ".pdf" of the hash is used.
+      expect(getPdfFilenameFromUrl("/pdfs/pdfs.html#a.pdf/b.pdf")).toEqual(
+        "b.pdf"
+      );
+      // A ".pdf" which isn't preceded by a name is ignored.
+      expect(getPdfFilenameFromUrl("/pdfs/pdfs.html#=.pdf")).toEqual(
+        "document.pdf"
+      );
+      // An invalid last ".pdf" prevents an earlier valid one from being used.
+      expect(getPdfFilenameFromUrl("/pdfs/pdfs.html#a.pdf/=.pdf")).toEqual(
+        "document.pdf"
+      );
+    });
+
+    it("gets PDF filename from a long hash string efficiently", function () {
+      // Scanning the hash for a name is quadratic when it contains no ".pdf".
+      const url = `/pdfs/pdfs.html#${"a".repeat(200000)}`;
+
+      const startTime = performance.now();
+      const filename = getPdfFilenameFromUrl(url);
+      const duration = performance.now() - startTime;
+
+      expect(filename).toEqual("document.pdf");
+      expect(duration).toBeLessThan(1000);
     });
 
     it("gets correct PDF filename when multiple ones are present", function () {
@@ -149,6 +175,9 @@ describe("display_utils", function () {
       expect(getPdfFilenameFromUrl("/pdfs/%AA.pdf")).toEqual("%AA.pdf");
 
       expect(getPdfFilenameFromUrl("/pdfs/%2F.pdf")).toEqual("%2F.pdf");
+
+      // A corrupt relative URL.
+      expect(getPdfFilenameFromUrl("//%%file.pdf")).toEqual("document.pdf");
     });
 
     it("gets PDF filename from (some) standard protocols", function () {
@@ -176,7 +205,7 @@ describe("display_utils", function () {
         new Blob([typedArray], { type: "application/pdf" })
       );
       // Sanity check to ensure that a "blob:" URL was returned.
-      expect(blobUrl.startsWith("blob:")).toEqual(true);
+      expect(blobUrl.startsWith("blob:")).toBeTrue();
 
       expect(getPdfFilenameFromUrl(blobUrl + "?file.pdf")).toEqual("file.pdf");
     });
@@ -212,25 +241,25 @@ describe("display_utils", function () {
 
   describe("isValidFetchUrl", function () {
     it("handles invalid Fetch URLs", function () {
-      expect(isValidFetchUrl(null)).toEqual(false);
-      expect(isValidFetchUrl(100)).toEqual(false);
-      expect(isValidFetchUrl("foo")).toEqual(false);
-      expect(isValidFetchUrl("/foo", 100)).toEqual(false);
+      expect(isValidFetchUrl(null)).toBeFalse();
+      expect(isValidFetchUrl(100)).toBeFalse();
+      expect(isValidFetchUrl("foo")).toBeFalse();
+      expect(isValidFetchUrl("/foo", 100)).toBeFalse();
     });
 
     it("handles relative Fetch URLs", function () {
-      expect(isValidFetchUrl("/foo", "file://www.example.com")).toEqual(false);
-      expect(isValidFetchUrl("/foo", "http://www.example.com")).toEqual(true);
+      expect(isValidFetchUrl("/foo", "file://www.example.com")).toBeFalse();
+      expect(isValidFetchUrl("/foo", "http://www.example.com")).toBeTrue();
     });
 
     it("handles unsupported Fetch protocols", function () {
-      expect(isValidFetchUrl("file://www.example.com")).toEqual(false);
-      expect(isValidFetchUrl("ftp://www.example.com")).toEqual(false);
+      expect(isValidFetchUrl("file://www.example.com")).toBeFalse();
+      expect(isValidFetchUrl("ftp://www.example.com")).toBeFalse();
     });
 
     it("handles supported Fetch protocols", function () {
-      expect(isValidFetchUrl("http://www.example.com")).toEqual(true);
-      expect(isValidFetchUrl("https://www.example.com")).toEqual(true);
+      expect(isValidFetchUrl("http://www.example.com")).toBeTrue();
+      expect(isValidFetchUrl("https://www.example.com")).toBeTrue();
     });
   });
 
@@ -302,6 +331,53 @@ describe("display_utils", function () {
     });
   });
 
+  describe("getRGBA", function () {
+    it("parses a 6-digit hex color as fully opaque", function () {
+      expect(getRGBA("#ff0000")).toEqual([255, 0, 0, 1]);
+      expect(getRGBA("#00ff00")).toEqual([0, 255, 0, 1]);
+      expect(getRGBA("#1a2b3c")).toEqual([26, 43, 60, 1]);
+    });
+
+    it("parses an 8-digit hex color with alpha", function () {
+      expect(getRGBA("#ff000080")).toEqual([255, 0, 0, 128 / 255]);
+      expect(getRGBA("#00ff00ff")).toEqual([0, 255, 0, 1]);
+      expect(getRGBA("#00000000")).toEqual([0, 0, 0, 0]);
+    });
+
+    it("parses an rgb() color as fully opaque", function () {
+      expect(getRGBA("rgb(255, 0, 0)")).toEqual([255, 0, 0, 1]);
+      expect(getRGBA("rgb(0, 128, 64)")).toEqual([0, 128, 64, 1]);
+    });
+
+    it("parses an rgba() color with alpha", function () {
+      expect(getRGBA("rgba(255, 0, 0, 0.5)")).toEqual([255, 0, 0, 0.5]);
+      expect(getRGBA("rgba(0, 0, 0, 0)")).toEqual([0, 0, 0, 0]);
+      expect(getRGBA("rgba(1, 2, 3, 1)")).toEqual([1, 2, 3, 1]);
+    });
+
+    it("parses a color(srgb) value as fully opaque when no alpha", function () {
+      expect(getRGBA("color(srgb 1 0 0)")).toEqual([255, 0, 0, 1]);
+      expect(getRGBA("color(srgb 0 0.5 0.25)")).toEqual([0, 128, 64, 1]);
+    });
+
+    it("parses a color(srgb) value with alpha", function () {
+      expect(getRGBA("color(srgb 1 0 0 / 0.5)")).toEqual([255, 0, 0, 0.5]);
+      expect(getRGBA("color(srgb 0 0 0 / 0)")).toEqual([0, 0, 0, 0]);
+    });
+
+    it("treats 'none' alpha in color(srgb) as fully opaque", function () {
+      expect(getRGBA("color(srgb 1 0 0 / none)")).toEqual([255, 0, 0, 1]);
+    });
+  });
+
+  describe("getRGB", function () {
+    it("returns only the RGB components, dropping alpha", function () {
+      expect(getRGB("#ff000080")).toEqual([255, 0, 0]);
+      expect(getRGB("rgba(0, 128, 64, 0.5)")).toEqual([0, 128, 64]);
+      expect(getRGB("color(srgb 0 0.5 0.25 / 0.8)")).toEqual([0, 128, 64]);
+    });
+  });
+
   describe("findContrastColor", function () {
     it("Check that the lightness is changed correctly", function () {
       expect(findContrastColor([210, 98, 76], [197, 113, 89])).toEqual(
@@ -323,7 +399,7 @@ describe("display_utils", function () {
       ctx.globalAlpha = 0.8;
       ctx.fillRect(0, 0, 1, 1);
       const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-      expect(applyOpacity(123, 45, 67, ctx.globalAlpha)).toEqual([r, g, b]);
+      expect(applyOpacity([123, 45, 67], ctx.globalAlpha)).toEqual([r, g, b]);
     });
   });
 
@@ -331,7 +407,7 @@ describe("display_utils", function () {
     // Unlike other tests we cannot simply compare the HTML-strings since
     // Chrome and Firefox produce different results. Instead we compare sets
     // containing the individual parts of the HTML-strings.
-    const splitParts = s => new Set(s.split(/[<>/ ]+/).filter(x => x));
+    const splitParts = s => new Set(s.split(/[<>/ ]+/).filter(Boolean));
 
     it("should render plain text", function () {
       if (isNodeJS) {
@@ -387,6 +463,83 @@ describe("display_utils", function () {
             '<span style="font-weight: bold;">Hello</span> world!</p></div>'
         )
       );
+    });
+
+    it("should only keep the supported rich text elements", function () {
+      if (isNodeJS) {
+        pending("DOM is not supported in Node.js.");
+      }
+      const container = document.createElement("div");
+      const xfaHtml = {
+        name: "div",
+        children: [
+          { name: "p", value: "kept" },
+          {
+            name: "section",
+            children: [{ name: "span", value: "removed" }],
+          },
+        ],
+      };
+      renderRichText(
+        { html: xfaHtml, dir: "ltr", className: "foo" },
+        container
+      );
+
+      expect(container.querySelector("p")).not.toBeNull();
+      expect(container.querySelector("section")).toBeNull();
+      expect(container.querySelector("span")).toBeNull();
+      expect(container.textContent).toEqual("kept");
+    });
+
+    it("should only keep the supported rich text attributes", function () {
+      if (isNodeJS) {
+        pending("DOM is not supported in Node.js.");
+      }
+      const container = document.createElement("div");
+      const xfaHtml = {
+        name: "div",
+        children: [
+          {
+            name: "p",
+            attributes: { class: ["bar"], dir: "rtl", title: "unsupported" },
+            value: "text",
+          },
+        ],
+      };
+      renderRichText(
+        { html: xfaHtml, dir: "ltr", className: "foo" },
+        container
+      );
+      const p = container.querySelector("p");
+
+      expect(p.getAttribute("class")).toEqual("bar");
+      expect(p.getAttribute("dir")).toEqual("rtl");
+      expect(p.hasAttribute("title")).toEqual(false);
+    });
+
+    it("should only apply the supported rich text style properties", function () {
+      if (isNodeJS) {
+        pending("DOM is not supported in Node.js.");
+      }
+      const container = document.createElement("div");
+      const xfaHtml = {
+        name: "div",
+        children: [
+          {
+            name: "span",
+            attributes: { style: { color: "green", width: "100px" } },
+            value: "text",
+          },
+        ],
+      };
+      renderRichText(
+        { html: xfaHtml, dir: "ltr", className: "foo" },
+        container
+      );
+      const span = container.querySelector("span");
+
+      expect(span.style.color).toEqual("green");
+      expect(span.style.width).toEqual("");
     });
   });
 });

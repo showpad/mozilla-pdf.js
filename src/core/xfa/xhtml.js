@@ -81,11 +81,11 @@ const StyleMapping = new Map([
   ["kerning-mode", value => (value === "none" ? "none" : "normal")],
   [
     "xfa-font-horizontal-scale",
-    value => `scaleX(${Math.max(0, parseInt(value) / 100).toFixed(2)})`,
+    value => `scaleX(${Math.max(0, parseInt(value, 10) / 100).toFixed(2)})`,
   ],
   [
     "xfa-font-vertical-scale",
-    value => `scaleY(${Math.max(0, parseInt(value) / 100).toFixed(2)})`,
+    value => `scaleY(${Math.max(0, parseInt(value, 10) / 100).toFixed(2)})`,
   ],
   ["xfa-spacerun", ""],
   ["xfa-tab-stops", ""],
@@ -134,8 +134,7 @@ function mapStyle(styleStr, node, richText) {
         ? `${style[key]} ${newValue}`
         : newValue;
     } else {
-      style[key.replaceAll(/-([a-zA-Z])/g, (_, x) => x.toUpperCase())] =
-        newValue;
+      style[key.replaceAll(/-([a-z])/gi, (_, x) => x.toUpperCase())] = newValue;
     }
   }
 
@@ -266,7 +265,7 @@ class XhtmlObject extends XmlObject {
           xfaFont.letterSpacing = getMeasurement(value);
           break;
         case "margin":
-          const values = value.split(/ \t/).map(x => getMeasurement(x));
+          const values = value.split(/ \t/).map(getMeasurement);
           switch (values.length) {
             case 1:
               margin.top =
@@ -530,7 +529,7 @@ class Ul extends XhtmlObject {
 
 class XhtmlNamespace {
   static [$buildXFAObject](name, attributes) {
-    if (XhtmlNamespace.hasOwnProperty(name)) {
+    if (Object.hasOwn(XhtmlNamespace, name)) {
       return XhtmlNamespace[name](attributes);
     }
     return undefined;

@@ -14,6 +14,7 @@
  */
 
 import { buildGetDocumentParams } from "./test_utils.js";
+import { FontLoader } from "../../src/display/font_loader.js";
 import { getDocument } from "../../src/display/api.js";
 
 function getTopLeftPixel(canvasContext) {
@@ -91,7 +92,7 @@ describe("custom ownerDocument", function () {
 
   const checkFont = font => /g_d\d+_f1/.test(font.family);
   const checkFontFaceRule = rule =>
-    /^@font-face {font-family:"g_d\d+_f1";src:/.test(rule);
+    /^@font-face \{font-family:"g_d\d+_f1";src:/.test(rule);
 
   beforeEach(() => {
     globalThis.FontFace = function MockFontFace(name) {
@@ -165,7 +166,7 @@ describe("custom ownerDocument", function () {
     }).promise;
 
     const style = elements.find(element => element.tagName === "style");
-    expect(style).toBeFalsy();
+    expect(style).toBeUndefined();
     expect(ownerDocument.fonts.size).toBeGreaterThanOrEqual(1);
     expect(Array.from(ownerDocument.fonts).find(checkFont)).toBeTruthy();
 
@@ -204,6 +205,37 @@ describe("custom ownerDocument", function () {
 
     await loadingTask.destroy();
     canvasFactory.destroy(canvasAndCtx);
-    expect(style.remove.called).toBe(true);
+    expect(style.remove.called).toBeTrue();
+  });
+
+  it("should use a constructable stylesheet for CSS font rules", function () {
+    const rule =
+      '@font-face {font-family:"foo";src:url(data:font/opentype;base64,AA==)}';
+
+    class MockCSSStyleSheet {
+      cssRules = [];
+
+      insertRule(cssRule, index) {
+        this.cssRules.splice(index, 0, cssRule);
+      }
+    }
+
+    const ownerDocument = {
+      adoptedStyleSheets: [],
+      defaultView: {
+        CSSStyleSheet: MockCSSStyleSheet,
+      },
+      fonts: null,
+    };
+    const fontLoader = new FontLoader({ ownerDocument });
+
+    fontLoader.insertRule(rule);
+
+    expect(ownerDocument.adoptedStyleSheets.length).toBe(1);
+    expect(ownerDocument.adoptedStyleSheets[0].cssRules).toEqual([rule]);
+
+    fontLoader.clear();
+
+    expect(ownerDocument.adoptedStyleSheets.length).toBe(0);
   });
 });

@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
+import { FeatureTest, RenderingCancelledException } from "pdfjs-lib";
 import { RenderableView, RenderingStates } from "./renderable_view.js";
-import { RenderingCancelledException } from "pdfjs-lib";
 
 class BasePDFPageView extends RenderableView {
   #loadingId = null;
@@ -35,6 +35,8 @@ class BasePDFPageView extends RenderableView {
   div = null;
 
   enableOptimizedPartialRendering = false;
+
+  enableSelectionRendering = true;
 
   imagesRightClickMinSize = -1;
 
@@ -58,6 +60,9 @@ class BasePDFPageView extends RenderableView {
     this.renderingQueue = options.renderingQueue;
     this.enableOptimizedPartialRendering =
       options.enableOptimizedPartialRendering ?? false;
+    this.enableSelectionRendering =
+      options.enableSelectionRendering !== false &&
+      FeatureTest.isBackdropFilterSupported;
     this.imagesRightClickMinSize = options.imagesRightClickMinSize ?? -1;
     this.minDurationToUpdateCanvas = options.minDurationToUpdateCanvas ?? 500;
   }

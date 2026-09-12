@@ -18,13 +18,13 @@ import {
   FeatureTest,
   FormatError,
   info,
-  MathClamp,
   shadow,
   unreachable,
   Util,
   warn,
 } from "../shared/util.js";
 import { BaseStream } from "./base_stream.js";
+import { MathClamp } from "../shared/math_clamp.js";
 
 /**
  * Resizes an RGB image with 3 components.
@@ -184,12 +184,18 @@ class ColorSpace {
   }
 
   /**
-   * Determines the number of bytes required to store the result of the
-   * conversion done by the getRgbBuffer method. As in getRgbBuffer,
-   * |alpha01| is either 0 (RGB output) or 1 (RGBA output).
+   * Converts `count` unscaled colors to RGB, starting at `destOffset`.
+   * Components use the native color-space ranges expected by `getRgbItem`,
+   * and each output has a `3 + alpha01` byte stride.
+   * Subclasses may override this to batch expensive conversions.
    */
-  getOutputLength(inputLength, alpha01) {
-    unreachable("Should not call ColorSpace.getOutputLength");
+  getRgbItems(src, count, dest, destOffset, alpha01) {
+    const { numComps } = this;
+
+    for (let i = 0, srcOffset = 0; i < count; i++, srcOffset += numComps) {
+      this.getRgbItem(src, srcOffset, dest, destOffset);
+      destOffset += 3 + alpha01;
+    }
   }
 
   /**
@@ -379,6 +385,20 @@ class AlternateCS extends ColorSpace {
     this.base.getRgbItem(tmpBuf, 0, dest, destOffset);
   }
 
+  getRgbItems(src, count, dest, destOffset, alpha01) {
+    const { base, numComps, tintFn } = this;
+    const baseNumComps = base.numComps;
+    // Tint first so the base color space can convert the batch at once.
+    const tinted = new Float32Array(count * baseNumComps);
+
+    for (let i = 0, srcOffset = 0, tintedOffset = 0; i < count; i++) {
+      tintFn(src, srcOffset, tinted, tintedOffset);
+      srcOffset += numComps;
+      tintedOffset += baseNumComps;
+    }
+    base.getRgbItems(tinted, count, dest, destOffset, alpha01);
+  }
+
   getRgbBuffer(src, srcOffset, count, dest, destOffset, bits, alpha01) {
     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
       assert(
@@ -422,13 +442,6 @@ class AlternateCS extends ColorSpace {
       base.getRgbBuffer(baseBuf, 0, count, dest, destOffset, 8, alpha01);
     }
   }
-
-  getOutputLength(inputLength, alpha01) {
-    return this.base.getOutputLength(
-      (inputLength * this.base.numComps) / this.numComps,
-      alpha01
-    );
-  }
 }
 
 class PatternCS extends ColorSpace {
@@ -446,24 +459,36 @@ class PatternCS extends ColorSpace {
  * The default color is `new Uint8Array([0])`.
  */
 class IndexedCS extends ColorSpace {
+  #rgbLookup;
+
   constructor(base, highVal, lookup) {
     super("Indexed", 1);
-    this.base = base;
     this.highVal = highVal;
 
-    const length = base.numComps * (highVal + 1);
-    this.lookup = new Uint8Array(length);
+    const count = highVal + 1;
+    const length = base.numComps * count;
+    const palette = new Uint8Array(length);
 
     if (lookup instanceof BaseStream) {
-      const bytes = lookup.getBytes(length);
-      this.lookup.set(bytes);
+      palette.set(lookup.getBytes(length));
     } else if (typeof lookup === "string") {
       for (let i = 0; i < length; ++i) {
-        this.lookup[i] = lookup.charCodeAt(i) & 0xff;
+        palette[i] = lookup.charCodeAt(i);
       }
     } else {
       throw new FormatError(`IndexedCS - unrecognized lookup table: ${lookup}`);
     }
+
+    this.#rgbLookup = new Uint8ClampedArray(count * 3);
+    base.getRgbBuffer(
+      palette,
+      0,
+      count,
+      this.#rgbLookup,
+      0,
+      /* bits = */ 8,
+      /* alpha01 = */ 0
+    );
   }
 
   getRgbItem(src, srcOffset, dest, destOffset) {
@@ -473,10 +498,12 @@ class IndexedCS extends ColorSpace {
         'IndexedCS.getRgbItem: Unsupported "dest" type.'
       );
     }
-    const { base, highVal, lookup } = this;
-    const start =
-      MathClamp(Math.round(src[srcOffset]), 0, highVal) * base.numComps;
-    base.getRgbBuffer(lookup, start, 1, dest, destOffset, 8, 0);
+    const rgbLookup = this.#rgbLookup;
+    const pos = MathClamp(Math.round(src[srcOffset]), 0, this.highVal) * 3;
+
+    dest[destOffset] = rgbLookup[pos];
+    dest[destOffset + 1] = rgbLookup[pos + 1];
+    dest[destOffset + 2] = rgbLookup[pos + 2];
   }
 
   getRgbBuffer(src, srcOffset, count, dest, destOffset, bits, alpha01) {
@@ -486,20 +513,17 @@ class IndexedCS extends ColorSpace {
         'IndexedCS.getRgbBuffer: Unsupported "dest" type.'
       );
     }
-    const { base, highVal, lookup } = this;
-    const { numComps } = base;
-    const outputDelta = base.getOutputLength(numComps, alpha01);
+    const { highVal } = this;
+    const rgbLookup = this.#rgbLookup;
 
     for (let i = 0; i < count; ++i) {
-      const lookupPos =
-        MathClamp(Math.round(src[srcOffset++]), 0, highVal) * numComps;
-      base.getRgbBuffer(lookup, lookupPos, 1, dest, destOffset, 8, alpha01);
-      destOffset += outputDelta;
-    }
-  }
+      const pos = MathClamp(Math.round(src[srcOffset++]), 0, highVal) * 3;
 
-  getOutputLength(inputLength, alpha01) {
-    return this.base.getOutputLength(inputLength * this.base.numComps, alpha01);
+      dest[destOffset++] = rgbLookup[pos];
+      dest[destOffset++] = rgbLookup[pos + 1];
+      dest[destOffset++] = rgbLookup[pos + 2];
+      destOffset += alpha01;
+    }
   }
 
   isDefaultDecode(decode, bpc) {
@@ -551,10 +575,6 @@ class DeviceGrayCS extends ColorSpace {
       q += alpha01;
     }
   }
-
-  getOutputLength(inputLength, alpha01) {
-    return inputLength * (3 + alpha01);
-  }
 }
 
 /**
@@ -599,10 +619,6 @@ class DeviceRgbCS extends ColorSpace {
     }
   }
 
-  getOutputLength(inputLength, alpha01) {
-    return ((inputLength * (3 + alpha01)) / 3) | 0;
-  }
-
   isPassthrough(bits) {
     return bits === 8;
   }
@@ -614,10 +630,6 @@ class DeviceRgbCS extends ColorSpace {
 class DeviceRgbaCS extends ColorSpace {
   constructor() {
     super("DeviceRGBA", 4);
-  }
-
-  getOutputLength(inputLength, _alpha01) {
-    return inputLength * 4;
   }
 
   isPassthrough(bits) {
@@ -754,10 +766,6 @@ class DeviceCmykCS extends ColorSpace {
       destOffset += 3 + alpha01;
     }
   }
-
-  getOutputLength(inputLength, alpha01) {
-    return ((inputLength / 4) * (3 + alpha01)) | 0;
-  }
 }
 
 /**
@@ -847,10 +855,6 @@ class CalGrayCS extends ColorSpace {
       srcOffset += 1;
       destOffset += 3 + alpha01;
     }
-  }
-
-  getOutputLength(inputLength, alpha01) {
-    return inputLength * (3 + alpha01);
   }
 }
 
@@ -1144,10 +1148,6 @@ class CalRGBCS extends ColorSpace {
       destOffset += 3 + alpha01;
     }
   }
-
-  getOutputLength(inputLength, alpha01) {
-    return ((inputLength * (3 + alpha01)) / 3) | 0;
-  }
 }
 
 /**
@@ -1285,10 +1285,6 @@ class LabCS extends ColorSpace {
       srcOffset += 3;
       destOffset += 3 + alpha01;
     }
-  }
-
-  getOutputLength(inputLength, alpha01) {
-    return ((inputLength * (3 + alpha01)) / 3) | 0;
   }
 
   isDefaultDecode(decode, bpc) {

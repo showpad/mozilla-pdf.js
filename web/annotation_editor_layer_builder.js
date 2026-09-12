@@ -15,7 +15,7 @@
 
 /** @typedef {import("../src/display/api").PDFPageProxy} PDFPageProxy */
 // eslint-disable-next-line max-len
-/** @typedef {import("../src/display/display_utils").PageViewport} PageViewport */
+/** @typedef {import("../src/display/page_viewport").PageViewport} PageViewport */
 // eslint-disable-next-line max-len
 /** @typedef {import("../src/display/editor/tools.js").AnnotationEditorUIManager} AnnotationEditorUIManager */
 // eslint-disable-next-line max-len
@@ -29,7 +29,7 @@ import { AnnotationEditorLayer } from "pdfjs-lib";
 import { GenericL10n } from "web-null_l10n";
 
 /**
- * @typedef {Object} AnnotationEditorLayerBuilderOptions
+ * @typedef {object} AnnotationEditorLayerBuilderOptions
  * @property {AnnotationEditorUIManager} [uiManager]
  * @property {number} pageIndex
  * @property {L10n} [l10n]
@@ -38,11 +38,11 @@ import { GenericL10n } from "web-null_l10n";
  * @property {AnnotationLayer} [annotationLayer]
  * @property {TextLayer} [textLayer]
  * @property {DrawLayer} [drawLayer]
- * @property {function} [onAppend]
+ * @property {Function} [onAppend]
  */
 
 /**
- * @typedef {Object} AnnotationEditorLayerBuilderRenderOptions
+ * @typedef {object} AnnotationEditorLayerBuilderRenderOptions
  * @property {PageViewport} viewport
  * @property {string} [intent] - The default value is "display".
  */
@@ -135,6 +135,15 @@ class AnnotationEditorLayerBuilder {
 
     await this.annotationEditorLayer.render(parameters);
     this.show();
+  }
+
+  /** @param {PageViewport} viewport */
+  update(viewport) {
+    if (this.div) {
+      this.annotationEditorLayer.update({
+        viewport: viewport.clone({ dontFlip: true }),
+      });
+    }
   }
 
   cancel() {

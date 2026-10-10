@@ -20,7 +20,7 @@ import {
   info,
   warn,
 } from "../shared/util.js";
-import { Cmd, Dict, EOF, isCmd, Name, Ref } from "./primitives.js";
+import { Cmd, Dict, EOF, isCmd, isName, Name, Ref } from "./primitives.js";
 import {
   isWhiteSpace,
   MissingDataException,
@@ -38,6 +38,17 @@ import { JpxStream } from "./jpx_stream.js";
 import { LZWStream } from "./lzw_stream.js";
 import { PredictorStream } from "./predictor_stream.js";
 import { RunLengthStream } from "./run_length_stream.js";
+
+/**
+ * @import { BaseStream } from "./base_stream.js"
+ * @import { CipherTransform } from "./crypto.js"
+ */
+
+/**
+ * @typedef {Ascii85Stream | AsciiHexStream | BaseStream | BrotliStream
+ * | CCITTFaxStream | FlateStream | Jbig2Stream | JpegStream | JpxStream
+ * | LZWStream | NullStream | PredictorStream | RunLengthStream} Streams
+ */
 
 const MAX_LENGTH_TO_CACHE = 1000;
 
@@ -60,14 +71,16 @@ function getInlineImageCacheKey(bytes) {
 }
 
 class Parser {
+  #imageCache = null;
+
+  #imageId = 0;
+
   constructor({ lexer, xref, allowStreams = false, recoveryMode = false }) {
     this.lexer = lexer;
     this.xref = xref;
     this.allowStreams = allowStreams;
     this.recoveryMode = recoveryMode;
 
-    this.imageCache = Object.create(null);
-    this._imageId = 0;
     this.refill();
   }
 
@@ -100,6 +113,11 @@ class Parser {
     }
   }
 
+  /**
+   * @param {CipherTransform | null} cipherTransform
+   *   Cipher transform for decryption.
+   * @returns {unknown}
+   */
   getObj(cipherTransform = null) {
     const buf1 = this.buf1;
     this.shift();
@@ -170,10 +188,7 @@ class Parser {
     }
 
     if (typeof buf1 === "string") {
-      if (cipherTransform) {
-        return cipherTransform.decryptString(buf1);
-      }
-      return buf1;
+      return cipherTransform ? cipherTransform.decryptString(buf1) : buf1;
     }
 
     // simple object
@@ -515,13 +530,15 @@ class Parser {
     }
   }
 
+  /**
+   * @param {CipherTransform | null} cipherTransform
+   * @returns {Streams}
+   */
   makeInlineImage(cipherTransform) {
     const lexer = this.lexer;
     const stream = lexer.stream;
 
-    // Parse dictionary, but initialize it lazily to improve performance with
-    // cached inline images (see issue 2618).
-    const dictMap = Object.create(null);
+    const dict = new Dict(this.xref);
     let dictLength;
     while (!isCmd(this.buf1, "ID") && this.buf1 !== EOF) {
       if (!(this.buf1 instanceof Name)) {
@@ -532,19 +549,19 @@ class Parser {
       if (this.buf1 === EOF) {
         break;
       }
-      dictMap[key] = this.getObj(cipherTransform);
+      dict.set(key, this.getObj(cipherTransform));
     }
     if (lexer.beginInlineImagePos !== -1) {
       dictLength = stream.pos - lexer.beginInlineImagePos;
     }
 
     // Extract the name of the first (i.e. the current) image filter.
-    const filter = this.xref.fetchIfRef(dictMap.F || dictMap.Filter);
+    const filter = dict.get("F", "Filter");
     let filterName;
     if (filter instanceof Name) {
       filterName = filter.name;
     } else if (Array.isArray(filter)) {
-      const filterZero = this.xref.fetchIfRef(filter[0]);
+      const filterZero = this.#fetchIfRef(filter[0]);
       if (filterZero instanceof Name) {
         filterName = filterZero.name;
       }
@@ -582,8 +599,8 @@ class Parser {
       // Finally, don't forget to reset the stream position.
       stream.pos = initialStreamPos;
 
-      const cacheEntry = this.imageCache[cacheKey];
-      if (cacheEntry !== undefined) {
+      const cacheEntry = this.#imageCache?.get(cacheKey);
+      if (cacheEntry) {
         this.buf2 = Cmd.get("EI");
         this.shift();
 
@@ -592,26 +609,44 @@ class Parser {
       }
     }
 
-    const dict = new Dict(this.xref);
-    for (const key in dictMap) {
-      dict.set(key, dictMap[key]);
-    }
     let imageStream = stream.makeSubStream(startPos, length, dict);
-    if (cipherTransform) {
+    if (cipherTransform && !this.#hasCryptFilter(filter)) {
       imageStream = cipherTransform.createStream(imageStream, length);
     }
 
-    imageStream = this.filter(imageStream, dict, length);
+    imageStream = this.filter(imageStream, dict, length, cipherTransform);
     imageStream.dict = dict;
-    if (cacheKey !== undefined) {
-      imageStream.cacheKey = `inline_img_${++this._imageId}`;
-      this.imageCache[cacheKey] = imageStream;
+    if (cacheKey) {
+      imageStream.cacheKey = `inline_img_${++this.#imageId}`;
+      (this.#imageCache ??= new Map()).set(cacheKey, imageStream);
     }
 
     this.buf2 = Cmd.get("EI");
     this.shift();
 
     return imageStream;
+  }
+
+  /**
+   * Resolve indirect objects when `xref` is available.
+   * @param {unknown} obj
+   * @returns {unknown}
+   */
+  #fetchIfRef(obj) {
+    return this.xref ? this.xref.fetchIfRef(obj) : obj;
+  }
+
+  /**
+   * Check if a stream filter chain contains `/Crypt`.
+   * @param {unknown} [filter]
+   *   Object, probably a name or an array of names.
+   * @returns {boolean}
+   *   Whether the filter chain contains `/Crypt`.
+   */
+  #hasCryptFilter(filter) {
+    return Array.isArray(filter)
+      ? filter.some(f => isName(this.#fetchIfRef(f), "Crypt"))
+      : isName(filter, "Crypt");
   }
 
   #findStreamLength(startPos) {
@@ -727,15 +762,25 @@ class Parser {
     this.shift(); // 'endstream'
 
     stream = stream.makeSubStream(startPos, length, dict);
-    if (cipherTransform) {
+    const filter = dict.get("F", "Filter");
+    // Streams that explicitly use `/Crypt` are decrypted in the filter chain,
+    // so avoid applying the default stream cipher up-front.
+    if (cipherTransform && !this.#hasCryptFilter(filter)) {
       stream = cipherTransform.createStream(stream, length);
     }
-    stream = this.filter(stream, dict, length);
+    stream = this.filter(stream, dict, length, cipherTransform);
     stream.dict = dict;
     return stream;
   }
 
-  filter(stream, dict, length) {
+  /**
+   * @param {Streams} stream
+   * @param {Dict} dict
+   * @param {number | null} length
+   * @param {CipherTransform | null} cipherTransform
+   * @returns {Streams}
+   */
+  filter(stream, dict, length, cipherTransform = null) {
     let filter = dict.get("F", "Filter");
     let params = dict.get("DP", "DecodeParms");
 
@@ -743,7 +788,13 @@ class Parser {
       if (Array.isArray(params)) {
         warn("/DecodeParms should not be an Array, when /Filter is a Name.");
       }
-      return this.makeFilter(stream, filter.name, length, params);
+      return this.makeFilter(
+        stream,
+        filter.name,
+        length,
+        params,
+        cipherTransform
+      );
     }
 
     let maybeLength = length;
@@ -751,16 +802,22 @@ class Parser {
       const filterArray = filter;
       const paramsArray = params;
       for (let i = 0, ii = filterArray.length; i < ii; ++i) {
-        filter = this.xref.fetchIfRef(filterArray[i]);
+        filter = this.#fetchIfRef(filterArray[i]);
         if (!(filter instanceof Name)) {
           throw new FormatError(`Bad filter name "${filter}"`);
         }
 
         params = null;
         if (Array.isArray(paramsArray) && i in paramsArray) {
-          params = this.xref.fetchIfRef(paramsArray[i]);
+          params = this.#fetchIfRef(paramsArray[i]);
         }
-        stream = this.makeFilter(stream, filter.name, maybeLength, params);
+        stream = this.makeFilter(
+          stream,
+          filter.name,
+          maybeLength,
+          params,
+          cipherTransform
+        );
         // After the first stream the `length` variable is invalid.
         maybeLength = null;
       }
@@ -768,7 +825,15 @@ class Parser {
     return stream;
   }
 
-  makeFilter(stream, name, maybeLength, params) {
+  /**
+   * @param {Streams} stream
+   * @param {string} name
+   * @param {number | null} maybeLength
+   * @param {Dict | null} params
+   * @param {CipherTransform | null | undefined} [cipherTransform]
+   * @returns {Streams}
+   */
+  makeFilter(stream, name, maybeLength, params, cipherTransform = null) {
     // Since the 'Length' entry in the stream dictionary can be completely
     // wrong, e.g. zero for non-empty streams, only skip parsing the stream
     // when we can be absolutely certain that it actually is empty.
@@ -808,7 +873,7 @@ class Parser {
           return new JpegStream(stream, maybeLength, params);
         case "JPX":
         case "JPXDecode":
-          return new JpxStream(stream, maybeLength, params);
+          return new JpxStream(stream, maybeLength);
         case "A85":
         case "ASCII85Decode":
           return new Ascii85Stream(stream, maybeLength);
@@ -825,6 +890,17 @@ class Parser {
           return new Jbig2Stream(stream, maybeLength, params);
         case "BrotliDecode":
           return new BrotliStream(stream, maybeLength);
+        case "Crypt": {
+          if (!cipherTransform) {
+            warn('Filter "Crypt" is missing a cipher transform.');
+            return stream;
+          }
+          const param = params instanceof Dict ? params.get("Name") : null;
+          // Default to "Identity" (PDF 7.4.10).
+          const cryptName =
+            param instanceof Name ? param : Name.get("Identity");
+          return cipherTransform.createStream(stream, maybeLength, cryptName);
+        }
       }
       warn(`Filter "${name}" is not supported.`);
       return stream;
@@ -1374,16 +1450,14 @@ class Linearization {
     const obj3 = parser.getObj();
     const linDict = parser.getObj();
     let obj, length;
-    if (
-      !(
-        Number.isInteger(obj1) &&
-        Number.isInteger(obj2) &&
-        isCmd(obj3, "obj") &&
-        linDict instanceof Dict &&
-        typeof (obj = linDict.get("Linearized")) === "number" &&
-        obj > 0
-      )
-    ) {
+    if (!(
+      Number.isInteger(obj1) &&
+      Number.isInteger(obj2) &&
+      isCmd(obj3, "obj") &&
+      linDict instanceof Dict &&
+      typeof (obj = linDict.get("Linearized")) === "number" &&
+      obj > 0
+    )) {
       return null; // No valid linearization dictionary found.
     } else if ((length = getInt(linDict, "L")) !== stream.length) {
       throw new Error(

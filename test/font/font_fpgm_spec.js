@@ -1,4 +1,5 @@
 import { ttx, verifyTtxOutput } from "./fontutils.js";
+import { CharCodeMap } from "../../src/core/char_code_map.js";
 import { CMapFactory } from "../../src/core/cmap.js";
 import { Font } from "../../src/core/fonts.js";
 import { Name } from "../../src/core/primitives.js";
@@ -25,7 +26,7 @@ describe("font_fpgm", function () {
           differences: [],
           defaultEncoding: [],
           cMap,
-          toUnicode: new ToUnicodeMap([]),
+          toUnicode: new ToUnicodeMap(new CharCodeMap()),
           xHeight: 0,
           capHeight: 0,
           italicAngle: 0,
@@ -36,10 +37,10 @@ describe("font_fpgm", function () {
 
       verifyTtxOutput(output);
       expect(
-        /(ENDF\[ \]|SVTCA\[0\])\s*\/\*.*\*\/\s*<\/assembly>\s*<\/fpgm>/.test(
+        /(?:ENDF\[ \]|SVTCA\[0\])\s*\/\*.*\*\/\s*<\/assembly>\s*<\/fpgm>/.test(
           output
         )
-      ).toEqual(true);
+      ).toBeTrue();
     });
   });
 });

@@ -386,7 +386,7 @@ function writeNumber(n) {
     if (buffer > 0) {
       s = writeByte((buffer & 0x7f) | (s.length > 0 ? 0x80 : 0)) + s;
     }
-    while (s.indexOf("80") === 0) {
+    while (s.startsWith("80")) {
       s = s.substring(2);
     }
     return s;
@@ -470,10 +470,10 @@ function incHex(a) {
 }
 
 function compressCmaps(src, dest, verify) {
-  const files = fs.readdirSync(src).filter(function (fn) {
-    return !fn.includes("."); // skipping files with the extension
-  });
-  files.forEach(function (fn) {
+  const files = fs.readdirSync(src).filter(
+    fn => !fn.includes(".") // skipping files with the extension
+  );
+  files.forEach(fn => {
     const srcPath = path.join(src, fn);
     const destPath = path.join(dest, fn + ".bcmap");
     const stats = compressCmap(srcPath, destPath, verify);

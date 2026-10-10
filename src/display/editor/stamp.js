@@ -15,12 +15,12 @@
 
 import { AnnotationEditorType, AnnotationPrefix } from "../../shared/util.js";
 import {
-  ColorScheme,
   OutputScale,
   PixelsPerInch,
   SupportedImageMimeTypes,
 } from "../display_utils.js";
 import { AnnotationEditor } from "./editor.js";
+import { ColorScheme } from "../dom_utils.js";
 import { StampAnnotationElement } from "../annotation_layer.js";
 
 /**
@@ -67,7 +67,7 @@ class StampEditor extends AnnotationEditor {
 
   /** @inheritdoc */
   static isHandlingMimeForPasting(mime) {
-    return SupportedImageMimeTypes.includes(mime);
+    return SupportedImageMimeTypes.has(mime);
   }
 
   /** @inheritdoc */
@@ -238,7 +238,7 @@ class StampEditor extends AnnotationEditor {
       document.body.append(input);
     }
     input.type = "file";
-    input.accept = SupportedImageMimeTypes.join(",");
+    input.accept = SupportedImageMimeTypes.keys().join(",");
     const signal = this._uiManager._signal;
     this.#bitmapPromise = new Promise(resolve => {
       input.addEventListener(
@@ -483,17 +483,15 @@ class StampEditor extends AnnotationEditor {
       this.div.setAttribute("aria-description", this.#bitmapFileName);
     }
     if (!this.annotationElementId) {
-      this._uiManager.a11yAlert("pdfjs-editor-stamp-added-alert");
+      this._uiManager.a11yAlert(AnnotationEditor._l10nAlert.stamp);
     }
   }
 
   copyCanvas(maxDataDimension, maxPreviewDimension, createImageData = false) {
-    if (!maxDataDimension) {
-      // TODO: get this value from Firefox
-      //   (https://bugzilla.mozilla.org/show_bug.cgi?id=1908184)
-      // It's the maximum dimension that the AI can handle.
-      maxDataDimension = 224;
-    }
+    // TODO: get this value from Firefox
+    //   (https://bugzilla.mozilla.org/show_bug.cgi?id=1908184)
+    // It's the maximum dimension that the AI can handle.
+    maxDataDimension ||= 224;
 
     const { width: bitmapWidth, height: bitmapHeight } = this.#bitmap;
     const outputScale = new OutputScale();
@@ -624,19 +622,10 @@ class StampEditor extends AnnotationEditor {
       const prevHeight = newHeight;
 
       if (newWidth > 2 * width) {
-        // See bug 1820511 (Windows specific bug).
-        // TODO: once the above bug is fixed we could revert to:
-        // newWidth = Math.ceil(newWidth / 2);
-        newWidth =
-          newWidth >= 16384
-            ? Math.floor(newWidth / 2) - 1
-            : Math.ceil(newWidth / 2);
+        newWidth = Math.ceil(newWidth / 2);
       }
       if (newHeight > 2 * height) {
-        newHeight =
-          newHeight >= 16384
-            ? Math.floor(newHeight / 2) - 1
-            : Math.ceil(newHeight / 2);
+        newHeight = Math.ceil(newHeight / 2);
       }
 
       const offscreen = new OffscreenCanvas(newWidth, newHeight);

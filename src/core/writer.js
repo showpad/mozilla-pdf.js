@@ -67,11 +67,27 @@ async function writeStream(stream, buffer, transform) {
     : filter;
   const isFilterZeroFlateDecode = isName(filterZero, "FlateDecode");
 
+  // These filters already compress the data, so we shouldn't try to compress it
+  // again.
+  const isFilterZeroImageDecode =
+    isName(filterZero, "DCTDecode") ||
+    isName(filterZero, "JPXDecode") ||
+    isName(filterZero, "JBIG2Decode") ||
+    isName(filterZero, "CCITTFaxDecode") ||
+    isName(filterZero, "LZWDecode");
+  const isFilterZeroCompressedObject =
+    isFilterZeroFlateDecode ||
+    isFilterZeroImageDecode ||
+    isName(filterZero, "BrotliDecode");
+
   // If the string is too small there is no real benefit in compressing it.
   // The number 256 is arbitrary, but it should be reasonable.
   const MIN_LENGTH_FOR_COMPRESSING = 256;
 
-  if (bytes.length >= MIN_LENGTH_FOR_COMPRESSING && !isFilterZeroFlateDecode) {
+  if (
+    !isFilterZeroCompressedObject &&
+    bytes.length >= MIN_LENGTH_FOR_COMPRESSING
+  ) {
     try {
       const cs = new CompressionStream("deflate");
       const writer = cs.writable.getWriter();
@@ -132,6 +148,31 @@ async function writeArray(array, buffer, transform) {
   buffer.push("]");
 }
 
+// The exponential notation isn't valid in a PDF, hence a number is always
+// written with all its digits.
+function numberToPDFString(value) {
+  // `toFixed` uses the exponential notation from 1e21 on, so such a number is
+  // written thanks to BigInt: it's necessarily an integer, and `isInteger` also
+  // rules out NaN and ±Infinity for which BigInt would throw.
+  if (Number.isInteger(value) && Math.abs(value) >= 1e21) {
+    return BigInt(value).toString();
+  }
+
+  // Below that limit `toFixed(10)` never uses the exponential notation (unlike
+  // `toString` which uses it under 1e-6) and it rounds the value: it always
+  // adds 10 decimals, hence scan them backwards to remove the trailing zeros,
+  // and then the dot itself when none of the decimals is left.
+  const str = value.toFixed(10);
+  let end = str.length;
+  while (str[end - 1] === "0") {
+    end--;
+  }
+  if (str[end - 1] === ".") {
+    end--;
+  }
+  return str.slice(0, end);
+}
+
 async function writeValue(value, buffer, transform) {
   if (value instanceof Name) {
     buffer.push(`/${escapePDFName(value.name)}`);
@@ -149,7 +190,7 @@ async function writeValue(value, buffer, transform) {
     // matrices (e.g. [0.000008 0 0 0.000008 0 0]).
     // The numbers must be "rounded" only when pdf.js is producing them and the
     // current transformation matrix is well known.
-    buffer.push(value.toString());
+    buffer.push(numberToPDFString(value));
   } else if (typeof value === "boolean") {
     buffer.push(value.toString());
   } else if (value instanceof Dict) {
@@ -206,7 +247,7 @@ function writeXFADataForAcroform(str, changes) {
       continue;
     }
     const { path, value } = xfa;
-    if (!path) {
+    if (!path || value === null) {
       continue;
     }
     const nodePath = parseXFAPath(path);
@@ -273,8 +314,7 @@ function updateXFA({ xfaData, xfaDatasetsRef, changes, xref }) {
     const datasets = xref.fetchIfRef(xfaDatasetsRef);
     xfaData = writeXFADataForAcroform(datasets.getString(), changes);
   }
-  const xfaDataStream = new StringStream(xfaData);
-  xfaDataStream.dict = new Dict(xref);
+  const xfaDataStream = new StringStream(xfaData, new Dict(xref));
   xfaDataStream.dict.setIfName("Type", "EmbeddedFile");
 
   changes.put(xfaDatasetsRef, {

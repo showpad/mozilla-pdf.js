@@ -120,7 +120,7 @@ describe("parser", function () {
                 "work-around rounding bugs in Chromium browsers."
             );
 
-            expect(true).toEqual(true);
+            expect(true).toBeTrue();
             continue;
           }
           expect(result).toEqual(expected);
@@ -270,7 +270,7 @@ describe("parser", function () {
         ">>\n" +
         "endobj"
       );
-      expect(Linearization.create(stream1)).toEqual(null);
+      expect(Linearization.create(stream1)).toBeNull();
 
       // Linearization dictionary with invalid version number.
       // prettier-ignore
@@ -281,7 +281,7 @@ describe("parser", function () {
         ">>\n" +
         "endobj"
       );
-      expect(Linearization.create(stream2)).toEqual(null);
+      expect(Linearization.create(stream2)).toBeNull();
     });
 
     it("should accept a valid linearization dictionary", function () {
@@ -332,11 +332,8 @@ describe("parser", function () {
       );
         expect(function () {
           return Linearization.create(stream1);
-        }).toThrow(
-          new Error(
-            'The "L" parameter in the linearization ' +
-              "dictionary does not equal the stream length."
-          )
+        }).toThrowError(
+          'The "L" parameter in the linearization dictionary does not equal the stream length.'
         );
 
         // The /E parameter should not be zero.
@@ -356,10 +353,8 @@ describe("parser", function () {
       );
         expect(function () {
           return Linearization.create(stream2);
-        }).toThrow(
-          new Error(
-            'The "E" parameter in the linearization dictionary is invalid.'
-          )
+        }).toThrowError(
+          'The "E" parameter in the linearization dictionary is invalid.'
         );
 
         // The /O parameter should be an integer.
@@ -379,10 +374,8 @@ describe("parser", function () {
       );
         expect(function () {
           return Linearization.create(stream3);
-        }).toThrow(
-          new Error(
-            'The "O" parameter in the linearization dictionary is invalid.'
-          )
+        }).toThrowError(
+          'The "O" parameter in the linearization dictionary is invalid.'
         );
       }
     );
@@ -405,9 +398,7 @@ describe("parser", function () {
       );
       expect(function () {
         return Linearization.create(stream1);
-      }).toThrow(
-        new Error("Hint array in the linearization dictionary is invalid.")
-      );
+      }).toThrowError("Hint array in the linearization dictionary is invalid.");
 
       // The hint array should contain two, or four, elements.
       // prettier-ignore
@@ -426,9 +417,7 @@ describe("parser", function () {
       );
       expect(function () {
         return Linearization.create(stream2);
-      }).toThrow(
-        new Error("Hint array in the linearization dictionary is invalid.")
-      );
+      }).toThrowError("Hint array in the linearization dictionary is invalid.");
 
       // The hint array should not contain zero.
       // prettier-ignore
@@ -447,9 +436,7 @@ describe("parser", function () {
       );
       expect(function () {
         return Linearization.create(stream3);
-      }).toThrow(
-        new Error("Hint (2) in the linearization dictionary is invalid.")
-      );
+      }).toThrowError("Hint (2) in the linearization dictionary is invalid.");
     });
   });
 });

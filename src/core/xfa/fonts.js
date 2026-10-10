@@ -31,9 +31,7 @@ class FontFinder {
       this.addPdfFont(pdfFont);
     }
     for (const pdfFont of this.fonts.values()) {
-      if (!pdfFont.regular) {
-        pdfFont.regular = pdfFont.italic || pdfFont.bold || pdfFont.bolditalic;
-      }
+      pdfFont.regular ||= pdfFont.italic || pdfFont.bold || pdfFont.bolditalic;
     }
 
     if (!reallyMissingFonts || reallyMissingFonts.size === 0) {
@@ -72,10 +70,7 @@ class FontFinder {
         property += "italic";
       }
     }
-
-    if (!property) {
-      property = "regular";
-    }
+    property ||= "regular";
 
     font[property] = pdfFont;
   }
@@ -90,7 +85,7 @@ class FontFinder {
       return font;
     }
 
-    const pattern = /,|-|_| |bolditalic|bold|italic|regular|it/gi;
+    const pattern = /[,\-_ ]|bolditalic|bold|italic|regular|it/gi;
     let name = fontName.replaceAll(pattern, "");
     font = this.fonts.get(name);
     if (font) {
@@ -159,10 +154,7 @@ class FontFinder {
 
 function selectFont(xfaFont, typeface) {
   if (xfaFont.posture === "italic") {
-    if (xfaFont.weight === "bold") {
-      return typeface.bolditalic;
-    }
-    return typeface.italic;
+    return xfaFont.weight === "bold" ? typeface.bolditalic : typeface.italic;
   } else if (xfaFont.weight === "bold") {
     return typeface.bold;
   }

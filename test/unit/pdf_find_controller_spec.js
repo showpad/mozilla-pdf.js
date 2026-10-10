@@ -72,14 +72,19 @@ async function initPdfFindController(
     FindControllerClass.prototype.match = matcher;
   }
 
+  // Note that in the unit tests we dispatch the `find` event with the complete
+  // query ourselves, so we can safely disable the delay option as there is no
+  // user interaction involved for typing the query (for which the delay option
+  // is intended), which provides a significant reduction in unit test runtime.
   const pdfFindController = new FindControllerClass({
     linkService,
     eventBus,
     updateMatchesCountOnProgress,
+    delay: 0,
   });
   pdfFindController.setDocument(pdfDocument); // Enable searching.
 
-  return { eventBus, pdfFindController };
+  return { eventBus, loadingTask, pdfFindController };
 }
 
 function testSearch({
@@ -209,7 +214,8 @@ function testEmptySearch({ eventBus, pdfFindController, state }) {
 
 describe("pdf_find_controller", function () {
   it("performs a normal search", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
     const updateFindMatchesCount = [0];
 
     await testSearch({
@@ -227,13 +233,14 @@ describe("pdf_find_controller", function () {
     });
 
     expect(updateFindMatchesCount[0]).toBe(9);
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a normal search but the total counts is only updated one time", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController(
-      null,
-      false
-    );
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController(null, false);
     const updateFindMatchesCount = [0];
     const updateFindControlState = [0];
 
@@ -254,13 +261,17 @@ describe("pdf_find_controller", function () {
 
     expect(updateFindMatchesCount[0]).toBe(1);
     expect(updateFindControlState[0]).toBe(0);
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a normal search and finds the previous result", async function () {
     // Page 14 (with page index 13) contains five results. By default, the
     // first result (match index 0) is selected, so the previous result
     // should be the fifth result (match index 4).
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -275,10 +286,14 @@ describe("pdf_find_controller", function () {
         matchIndex: 4,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a case sensitive search", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -293,12 +308,16 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs an entire word search", async function () {
     // Page 13 contains both 'Government' and 'Governmental', so the latter
     // should not be found with entire word search.
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -313,12 +332,16 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a multiple term (no phrase) search", async function () {
     // Page 9 contains 'alternate' and pages 6 and 9 contain 'solution'.
     // Both should be found for multiple term (no phrase) search.
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -332,12 +355,16 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a multiple term (phrase) search", async function () {
     // Page 9 contains 'alternate solution' and pages 6 and 9 contain
     // 'solution'. Both should be found for multiple term (phrase) search.
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -351,12 +378,14 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a normal search, where the text is normalized", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController(
-      "fraction-highlight.pdf"
-    );
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController("fraction-highlight.pdf");
 
     await testSearch({
       eventBus,
@@ -462,12 +491,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[54]],
       pageMatchesLength: [[2]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a normal search, where the text with diacritics is normalized", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController(
-      "french_diacritics.pdf"
-    );
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController("french_diacritics.pdf");
 
     await testSearch({
       eventBus,
@@ -514,10 +545,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[28, 30]],
       pageMatchesLength: [[1, 1]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search where one of the results contains an hyphen", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -531,10 +566,14 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search where the result is on two lines", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -550,10 +589,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[2734]],
       pageMatchesLength: [[14]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search where the result is on two lines with a punctuation at eol", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -569,10 +612,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[], [1486]],
       pageMatchesLength: [[], [11]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a minus sign in the query", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -618,10 +665,14 @@ describe("pdf_find_controller", function () {
         [24],
       ],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with square brackets in the query", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -637,10 +688,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[1498]],
       pageMatchesLength: [[24]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with parenthesis in the query", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -656,10 +711,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[], [201]],
       pageMatchesLength: [[], [9]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a final dot in the query", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     // The whitespace after the dot mustn't be matched.
     const query = "complex applications.";
@@ -678,10 +737,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[1941]],
       pageMatchesLength: [[21]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a dot in the query and a missing whitespace", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     // The whitespace after the dot must be matched.
     const query = "complex applications.J";
@@ -700,10 +763,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[1941]],
       pageMatchesLength: [[23]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a dot followed by a whitespace in the query", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
     const query = "complex applications. j";
 
     await testSearch({
@@ -720,14 +787,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[1941]],
       pageMatchesLength: [[23]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text containing diacritics before -\\n", async function () {
-    if (isNodeJS) {
-      pending("Linked test-cases are not supported in Node.js.");
-    }
-
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue14562.pdf");
 
     await testSearch({
@@ -763,10 +829,13 @@ describe("pdf_find_controller", function () {
         ],
       ],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text containing some Hangul syllables", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("bug1771477.pdf");
 
     await testSearch({
@@ -783,10 +852,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[139]],
       pageMatchesLength: [[8]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text containing an ideographic at the end of a line", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue15340.pdf");
 
     await testSearch({
@@ -803,10 +875,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[29]],
       pageMatchesLength: [[4]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text containing fullwidth chars", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue15690.pdf");
 
     await testSearch({
@@ -823,10 +898,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[0, 10, 13, 30, 39, 41, 55, 60, 66, 84, 102, 117, 134]],
       pageMatchesLength: [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some Katakana at the end of a line", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue15759.pdf");
 
     await testSearch({
@@ -843,10 +921,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[6]],
       pageMatchesLength: [[5]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a single diacritic", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testEmptySearch({
       eventBus,
@@ -855,14 +937,13 @@ describe("pdf_find_controller", function () {
         query: "\u064E",
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text containing combining diacritics", async function () {
-    if (isNodeJS) {
-      pending("Linked test-cases are not supported in Node.js.");
-    }
-
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue12909.pdf");
 
     await testSearch({
@@ -892,10 +973,13 @@ describe("pdf_find_controller", function () {
         matchIndex: 0,
       },
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some Hiragana diacritics at the end of a line", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue16063.pdf");
 
     await testSearch({
@@ -927,14 +1011,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[205]],
       pageMatchesLength: [[7]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some UTF-32 chars", async function () {
-    if (isNodeJS) {
-      pending("Linked test-cases are not supported in Node.js.");
-    }
-
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("bug1820909.pdf");
 
     await testSearch({
@@ -951,10 +1034,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[41], [131, 1359]],
       pageMatchesLength: [[5], [5, 5]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some UTF-32 chars followed by a dash at the end of a line", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("bug1820909.1.pdf");
 
     await testSearch({
@@ -971,12 +1057,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[42, 95]],
       pageMatchesLength: [[5, 5]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some arabic chars in different unicode ranges but with same normalized form", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController(
-      "ArabicCIDTrueType.pdf"
-    );
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController("ArabicCIDTrueType.pdf");
 
     await testSearch({
       eventBus,
@@ -1007,12 +1095,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[6, 25, 44, 63]],
       pageMatchesLength: [[1, 1, 1, 1]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with some f ligatures", async function () {
-    const { eventBus, pdfFindController } = await initPdfFindController(
-      "copy_paste_ligatures.pdf"
-    );
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController("copy_paste_ligatures.pdf");
 
     await testSearch({
       eventBus,
@@ -1028,6 +1118,9 @@ describe("pdf_find_controller", function () {
       pageMatches: [[5, 6, 6, 7, 8, 9, 9, 10, 10]],
       pageMatchesLength: [[1, 1, 1, 1, 1, 1, 1, 1, 1]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("dispatches updatefindcontrolstate with correct properties", async function () {
@@ -1058,12 +1151,16 @@ describe("pdf_find_controller", function () {
         });
       });
 
-    const { eventBus } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
     await testOnFind({ eventBus });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search in a text with a compound word on two lines", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue18693.pdf");
 
     const query = "hel-Lo";
@@ -1081,10 +1178,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[6]],
       pageMatchesLength: [[query.length]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search after a compound word on two lines", async function () {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue19120.pdf");
 
     const query = "a";
@@ -1102,10 +1202,14 @@ describe("pdf_find_controller", function () {
       pageMatches: [[0, 4, 15]],
       pageMatchesLength: [[query.length, query.length, query.length]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a dash between two digits", async () => {
-    const { eventBus, pdfFindController } = await initPdfFindController();
+    const { eventBus, loadingTask, pdfFindController } =
+      await initPdfFindController();
 
     await testSearch({
       eventBus,
@@ -1136,10 +1240,13 @@ describe("pdf_find_controller", function () {
         [7],
       ],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a group of punctuation signs", async () => {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue20225.pdf");
 
     await testSearch({
@@ -1156,10 +1263,13 @@ describe("pdf_find_controller", function () {
       pageMatches: [[8]],
       pageMatchesLength: [[4]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   it("performs a search with a group of punctuation signs to escape", async () => {
-    const { eventBus, pdfFindController } =
+    const { eventBus, loadingTask, pdfFindController } =
       await initPdfFindController("issue20516.pdf");
 
     await testSearch({
@@ -1176,6 +1286,9 @@ describe("pdf_find_controller", function () {
       pageMatches: [[6]],
       pageMatchesLength: [[10]],
     });
+
+    pdfFindController.setDocument(null);
+    await loadingTask.destroy();
   });
 
   describe("custom matcher", () => {
@@ -1186,11 +1299,8 @@ describe("pdf_find_controller", function () {
         .createSpy("custom find matcher")
         .and.callFake(() => [{ index: 0, length: 1 }]);
 
-      const { eventBus, pdfFindController } = await initPdfFindController(
-        null,
-        false,
-        spy
-      );
+      const { eventBus, loadingTask, pdfFindController } =
+        await initPdfFindController(null, false, spy);
 
       const PAGES_COUNT = 14;
 
@@ -1214,6 +1324,9 @@ describe("pdf_find_controller", function () {
       expect(spy.calls.argsFor(1)[1]).toMatch(/^Hence, recording and /);
       expect(spy.calls.argsFor(12)[1]).toMatch(/Figure 12. Fraction of time /);
       expect(spy.calls.argsFor(13)[1]).toMatch(/^not be interpreted as /);
+
+      pdfFindController.setDocument(null);
+      await loadingTask.destroy();
     });
 
     it("uses the results returned by the custom matcher", async () => {
@@ -1238,11 +1351,8 @@ describe("pdf_find_controller", function () {
             { index: 80, length: 4 },
           ]);
 
-      const { eventBus, pdfFindController } = await initPdfFindController(
-        null,
-        false,
-        spy
-      );
+      const { eventBus, loadingTask, pdfFindController } =
+        await initPdfFindController(null, false, spy);
 
       await testSearch({
         eventBus,
@@ -1251,6 +1361,9 @@ describe("pdf_find_controller", function () {
         selectedMatch: { pageIndex: 0, matchIndex: 0 },
         matchesPerPage: [2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3],
       });
+
+      pdfFindController.setDocument(null);
+      await loadingTask.destroy();
     });
   });
 });

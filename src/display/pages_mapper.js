@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-import { makeArr, MathClamp } from "../shared/util.js";
+import { makeArr } from "../shared/util.js";
+import { MathClamp } from "../shared/math_clamp.js";
 
 /**
  * Maps between page IDs and page numbers, allowing bidirectional conversion
@@ -102,7 +103,6 @@ class PagesMapper {
 
   /**
    * Move a set of pages to a new position.
-   *
    * @param {Set<number>} selectedPages - Page numbers being moved (1-indexed).
    * @param {number[]} pagesToMove - Ordered list of page numbers to move.
    * @param {number} index - Zero-based insertion index in the page-number list.
@@ -110,7 +110,6 @@ class PagesMapper {
   movePages(selectedPages, pagesToMove, index) {
     this.#ensureInit();
     const pageNumberToId = this.#pageNumberToId;
-    const prevIdToPageNumber = this.#buildIdToPageNumber();
     const movedCount = pagesToMove.length;
     const mappedPagesToMove = new Uint32Array(movedCount);
     let removedBeforeTarget = 0;
@@ -125,6 +124,7 @@ class PagesMapper {
 
     const pagesNumber = this.#pagesNumber;
     const remainingLen = pagesNumber - movedCount;
+    const prevPageNumbers = new Int32Array(pagesNumber);
     const adjustedTarget = MathClamp(
       index - removedBeforeTarget,
       0,
@@ -134,7 +134,8 @@ class PagesMapper {
     // Compact: keep only non-moved pages.
     for (let i = 0, r = 0; i < pagesNumber; i++) {
       if (!selectedPages.has(i + 1)) {
-        pageNumberToId[r++] = pageNumberToId[i];
+        pageNumberToId[r] = pageNumberToId[i];
+        prevPageNumbers[r++] = i + 1;
       }
     }
 
@@ -145,8 +146,13 @@ class PagesMapper {
       remainingLen
     );
     pageNumberToId.set(mappedPagesToMove, adjustedTarget);
-
-    this.#updatePrevPageNumbers(prevIdToPageNumber);
+    prevPageNumbers.copyWithin(
+      adjustedTarget + movedCount,
+      adjustedTarget,
+      remainingLen
+    );
+    prevPageNumbers.set(pagesToMove, adjustedTarget);
+    this.#prevPageNumbers = prevPageNumbers;
 
     if (pageNumberToId.every((id, i) => id === i + 1)) {
       this.#pageNumberToId = null;
@@ -258,7 +264,6 @@ class PagesMapper {
   /**
    * Recomputes #prevPageNumbers after a mutation, using the pre-mutation
    * id to pageNumbers map to track where each page came from.
-   *
    * @param {Map<number, Array<number>>} prevIdToPageNumber - Id to pageNumbers
    *   before the mutation.
    * @param {Set<number>|null} [deletedPageNumbers] - Page numbers that were
@@ -310,11 +315,47 @@ class PagesMapper {
   }
 
   /**
+   * Builds the copy level of every page. Extracted pages are ranked, in page
+   * order, among the extracted pages sharing their page ID. Pages which aren't
+   * extracted get -1.
+   * @param {Array<number>} [extractedPageNumbers] - Sorted 1-based page
+   *  numbers to extract, or null to extract everything.
+   * @returns {Int32Array|null} null when the page mapping is the identity.
+   */
+  #buildCopyLevels(extractedPageNumbers = null) {
+    if (!this.#pageNumberToId) {
+      return null;
+    }
+    const copyLevels = new Int32Array(this.#pagesNumber).fill(-1);
+    const counts = new Map();
+    if (extractedPageNumbers) {
+      for (const pageNumber of extractedPageNumbers) {
+        const id = this.getPageId(pageNumber);
+        const level = counts.get(id) ?? 0;
+        counts.set(id, level + 1);
+        copyLevels[pageNumber - 1] = level;
+      }
+    } else {
+      for (let i = 0, ii = this.#pagesNumber; i < ii; i++) {
+        const id = this.#pageNumberToId[i];
+        const level = counts.get(id) ?? 0;
+        counts.set(id, level + 1);
+        copyLevels[i] = level;
+      }
+    }
+    return copyLevels;
+  }
+
+  /**
    * Gets the current page mapping suitable for saving.
    * @param {Map<number, Array<number>>} [idToPageNumber]
-   * @returns {Array<Object>}
+   * @param {Int32Array} [copyLevels]
+   * @returns {{pageInfos: Array<object>, copyLevels: Int32Array | null}}
    */
-  getPageMappingForSaving(idToPageNumber = null) {
+  getPageMappingForSaving(
+    idToPageNumber = null,
+    copyLevels = this.#buildCopyLevels()
+  ) {
     idToPageNumber ??= this.#buildIdToPageNumber();
     // idToPageNumber maps used 1-based IDs to 1-based page numbers.
     // For example if the final pdf contains page 3 twice and they are moved at
@@ -363,7 +404,7 @@ class PagesMapper {
       }
     }
 
-    return extractParams;
+    return { pageInfos: extractParams, copyLevels };
   }
 
   extractPages(extractedPageNumbers) {
@@ -376,7 +417,10 @@ class PagesMapper {
       const usedPageNumbers = usedIds.getOrInsertComputed(id, makeArr);
       usedPageNumbers.push(i + 1);
     }
-    return this.getPageMappingForSaving(usedIds);
+    return this.getPageMappingForSaving(
+      usedIds,
+      this.#buildCopyLevels(extractedPageNumbers)
+    );
   }
 
   /**

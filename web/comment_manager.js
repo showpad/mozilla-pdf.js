@@ -132,7 +132,7 @@ class CommentManager {
     return this.#hasForcedColors
       ? null
       : findContrastColor(
-          applyOpacity(...color, opacity ?? 1),
+          applyOpacity(color, opacity ?? 1),
           CSSConstants.commentForegroundColor
         );
   }
@@ -270,9 +270,7 @@ class CommentSidebar extends Sidebar {
     if (ids.length === 0 || !this.#idsToElements) {
       return;
     }
-    if (
-      new Set(this.#idsToElements.keys()).difference(new Set(ids)).size === 0
-    ) {
+    if (new Set(this.#idsToElements.keys()).isSubsetOf(new Set(ids))) {
       this.#removeAll();
       return;
     }
@@ -588,10 +586,9 @@ class CommentSidebar extends Sidebar {
     if (a.rect[1] !== b.rect[1]) {
       return b.rect[1] - a.rect[1];
     }
-    if (a.rect[2] !== b.rect[2]) {
-      return a.rect[2] - b.rect[2];
-    }
-    return a.id.localeCompare(b.id);
+    return a.rect[2] !== b.rect[2]
+      ? a.rect[2] - b.rect[2]
+      : a.id.localeCompare(b.id);
   }
 }
 
@@ -611,6 +608,8 @@ class CommentDialog {
   #title;
 
   #saveButton;
+
+  #saveButtonLabel;
 
   #uiManager;
 
@@ -637,6 +636,7 @@ class CommentDialog {
     this.#overlayManager = overlayManager;
     this.#eventBus = eventBus;
     this.#saveButton = saveButton;
+    this.#saveButtonLabel = saveButton.firstElementChild;
     this.#title = title;
     this.#isLTR = ltr;
 
@@ -744,7 +744,7 @@ class CommentDialog {
         "data-l10n-id",
         "pdfjs-editor-edit-comment-dialog-title-when-editing"
       );
-      this.#saveButton.setAttribute(
+      this.#saveButtonLabel.setAttribute(
         "data-l10n-id",
         "pdfjs-editor-edit-comment-dialog-save-button-when-editing"
       );
@@ -753,7 +753,7 @@ class CommentDialog {
         "data-l10n-id",
         "pdfjs-editor-edit-comment-dialog-title-when-adding"
       );
-      this.#saveButton.setAttribute(
+      this.#saveButtonLabel.setAttribute(
         "data-l10n-id",
         "pdfjs-editor-edit-comment-dialog-save-button-when-adding"
       );
@@ -1098,6 +1098,7 @@ class CommentPopup {
 
     if (isSelected) {
       visibility ??=
+        // eslint-disable-next-line unicorn/prefer-logical-operator-over-ternary
         this.#editor === editor ? !this.#selected || !this.#visible : true;
     } else {
       if (this.#selected) {

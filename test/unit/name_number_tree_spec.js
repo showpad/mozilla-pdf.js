@@ -15,12 +15,13 @@
 
 import { Dict, Ref } from "../../src/core/primitives.js";
 import { NameTree, NumberTree } from "../../src/core/name_number_tree.js";
+import { FormatError } from "../../src/shared/util.js";
 import { XRefMock } from "./test_utils.js";
 
 describe("NameOrNumberTree", function () {
   describe("NameTree", function () {
     it("should return an empty map when root is null", function () {
-      const xref = new XRefMock([]);
+      const xref = new XRefMock();
       const tree = new NameTree(null, xref);
       expect(tree.getAll().size).toEqual(0);
     });
@@ -29,7 +30,7 @@ describe("NameOrNumberTree", function () {
       const root = new Dict();
       root.set("Names", ["alpha", "value_a", "beta", "value_b"]);
 
-      const xref = new XRefMock([]);
+      const xref = new XRefMock();
       const tree = new NameTree(root, xref);
       const map = tree.getAll();
 
@@ -65,7 +66,7 @@ describe("NameOrNumberTree", function () {
       const root = new Dict();
       root.set("Kids", [inlineLeaf]);
 
-      const xref = new XRefMock([]);
+      const xref = new XRefMock();
       const tree = new NameTree(root, xref);
 
       // Should not throw even though the kid is an inline Dict (not a Ref).
@@ -86,8 +87,9 @@ describe("NameOrNumberTree", function () {
       const xref = new XRefMock([{ ref: leafRef, data: leaf }]);
       const tree = new NameTree(root, xref);
 
-      expect(() => tree.getAll()).toThrow(
-        new Error('Duplicate entry in "Names" tree.')
+      expect(() => tree.getAll()).toThrowError(
+        FormatError,
+        'Duplicate entry in "Names" tree.'
       );
     });
 
@@ -124,7 +126,7 @@ describe("NameOrNumberTree", function () {
       const root = new Dict();
       root.set("Nums", [1, "one", 2, "two"]);
 
-      const xref = new XRefMock([]);
+      const xref = new XRefMock();
       const tree = new NumberTree(root, xref);
       const map = tree.getAll();
 
@@ -142,7 +144,7 @@ describe("NameOrNumberTree", function () {
       const root = new Dict();
       root.set("Kids", [inlineLeaf]);
 
-      const xref = new XRefMock([]);
+      const xref = new XRefMock();
       const tree = new NumberTree(root, xref);
 
       const map = tree.getAll();
@@ -162,8 +164,9 @@ describe("NameOrNumberTree", function () {
       const xref = new XRefMock([{ ref: leafRef, data: leaf }]);
       const tree = new NumberTree(root, xref);
 
-      expect(() => tree.getAll()).toThrow(
-        new Error('Duplicate entry in "Nums" tree.')
+      expect(() => tree.getAll()).toThrowError(
+        FormatError,
+        'Duplicate entry in "Nums" tree.'
       );
     });
   });

@@ -46,8 +46,8 @@ class NameOrNumberTree {
       processed.put(this.root);
     }
     const queue = [this.root];
-    while (queue.length > 0) {
-      const obj = xref.fetchIfRef(queue.shift());
+    for (const node of queue) {
+      const obj = xref.fetchIfRef(node);
       if (!(obj instanceof Dict)) {
         continue;
       }
@@ -73,7 +73,7 @@ class NameOrNumberTree {
       }
       for (let i = 0, ii = entries.length; i < ii; i += 2) {
         map.set(
-          xref.fetchIfRef(entries[i]),
+          isRaw ? entries[i] : xref.fetchIfRef(entries[i]),
           isRaw ? entries[i + 1] : xref.fetchIfRef(entries[i + 1])
         );
       }

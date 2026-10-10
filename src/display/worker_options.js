@@ -16,7 +16,31 @@
 class GlobalWorkerOptions {
   static #port = null;
 
+  static #rendererSrc = "";
+
   static #src = "";
+
+  /**
+   * @type {string}
+   */
+  static get rendererSrc() {
+    return this.#rendererSrc;
+  }
+
+  /**
+   * @param {string} val - A string containing the path and
+   *   filename of the renderer worker file.
+   *
+   *   NOTE: The `rendererSrc` option must be set in order to render pages in a
+   *         worker thread; when it's unset, rendering falls back to the
+   *         main-thread.
+   */
+  static set rendererSrc(val) {
+    if (typeof val !== "string") {
+      throw new Error("Invalid `rendererSrc` type.");
+    }
+    this.#rendererSrc = val;
+  }
 
   /**
    * @type {Worker | null}
@@ -26,7 +50,7 @@ class GlobalWorkerOptions {
   }
 
   /**
-   * @param {Worker | null} workerPort - Defines global port for worker process.
+   * @param {Worker | null} val - Defines global port for worker process.
    *   Overrides the `workerSrc` option.
    */
   static set workerPort(val) {
@@ -47,7 +71,7 @@ class GlobalWorkerOptions {
   }
 
   /**
-   * @param {string} workerSrc - A string containing the path and filename of
+   * @param {string} val - A string containing the path and filename of
    *   the worker file.
    *
    *   NOTE: The `workerSrc` option should always be set, in order to prevent

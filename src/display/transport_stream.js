@@ -19,7 +19,7 @@ import {
   BasePDFStreamReader,
 } from "../shared/base_pdf_stream.js";
 import { assert } from "../shared/util.js";
-import { isPdfFile } from "./display_utils.js";
+import { isPdfFile } from "./dom_utils.js";
 
 function getArrayBuffer(val) {
   // Prevent any possible issues by only transferring a Uint8Array that
@@ -56,20 +56,19 @@ class PDFDataTransportStream extends BasePDFStream {
     }
     this._progressiveDone = progressiveDone;
 
-    pdfDataRangeTransport.addRangeListener((begin, chunk) => {
-      this.#onReceiveData(begin, chunk);
-    });
-
-    pdfDataRangeTransport.addProgressiveReadListener(chunk => {
-      this.#onReceiveData(/* begin = */ undefined, chunk);
-    });
-
-    pdfDataRangeTransport.addProgressiveDoneListener(() => {
-      this._fullReader?.progressiveDone();
-      this._progressiveDone = true;
-    });
-
-    pdfDataRangeTransport.transportReady();
+    const listener = args => {
+      switch (args.type) {
+        case "range":
+        case "progressiveRead":
+          this.#onReceiveData(args.begin, args.chunk);
+          break;
+        case "progressiveDone":
+          this._fullReader?.progressiveDone();
+          this._progressiveDone = true;
+          break;
+      }
+    };
+    pdfDataRangeTransport.transportReady(listener);
   }
 
   #onReceiveData(begin, chunk) {

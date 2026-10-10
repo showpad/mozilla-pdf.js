@@ -35,17 +35,19 @@ class PDFObjects {
    * If called *with* a callback, the callback is called with the data of the
    * object once the object is resolved. That means, if you call this method
    * and the object is already resolved, the callback gets called right away.
-   *
    * @param {string} objId
-   * @param {function} [callback]
+   * @param {Function} [callback]
+   * @param {Function} [errorCallback] - Called with the rejection reason if the
+   *   object fails to resolve (e.g. it could never be delivered). Only used
+   *   together with `callback`.
    * @returns {any}
    */
-  get(objId, callback = null) {
+  get(objId, callback = null, errorCallback = null) {
     // If there is a callback, then the get can be async and the object is
     // not required to be resolved right now.
     if (callback) {
       const obj = this.#objs.getOrInsertComputed(objId, dataObj);
-      obj.promise.then(() => callback(obj.data));
+      obj.promise.then(() => callback(obj.data), errorCallback);
       return null;
     }
     // If there isn't a callback, the user expects to get the resolved data
@@ -84,7 +86,6 @@ class PDFObjects {
 
   /**
    * Resolves the object `objId` with optional `data`.
-   *
    * @param {string} objId
    * @param {any} [data]
    */
@@ -95,6 +96,22 @@ class PDFObjects {
     }
     obj.data = data;
     obj.resolve();
+  }
+
+  /**
+   * Rejects the object `objId`, signalling that it will never be resolved.
+   * @param {string} objId
+   * @param {Error} reason
+   */
+  reject(objId, reason) {
+    const obj = this.#objs.getOrInsertComputed(objId, dataObj);
+    if (obj.data !== INITIAL_DATA) {
+      return;
+    }
+    // Make sure a rejection that lands before a consumer calls
+    // `get` doesn't surface as an unhandled rejection
+    obj.promise.catch(() => {});
+    obj.reject(reason);
   }
 
   clear() {

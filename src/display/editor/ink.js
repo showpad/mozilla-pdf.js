@@ -106,12 +106,12 @@ class InkEditor extends DrawingEditor {
   }
 
   /** @inheritdoc */
-  static createDrawerInstance(x, y, parentWidth, parentHeight, rotation) {
+  static createDrawerInstance({ x, y, box: [, , width, height], rotation }) {
     return new InkDrawOutliner(
       x,
       y,
-      parentWidth,
-      parentHeight,
+      width,
+      height,
       rotation,
       this._defaultDrawingOptions["stroke-width"]
     );
@@ -197,6 +197,39 @@ class InkEditor extends DrawingEditor {
 
   get colorType() {
     return AnnotationEditorParamsType.INK_COLOR;
+  }
+
+  get colorAndOpacityType() {
+    return AnnotationEditorParamsType.INK_COLOR_AND_OPACITY;
+  }
+
+  get opacityType() {
+    return AnnotationEditorParamsType.INK_OPACITY;
+  }
+
+  /** @inheritdoc */
+  updateParams(type, value) {
+    if (type === AnnotationEditorParamsType.INK_COLOR_AND_OPACITY) {
+      this._updateColorAndOpacity(value.color, value.opacity);
+      return;
+    }
+    super.updateParams(type, value);
+  }
+
+  /** @inheritdoc */
+  static updateDefaultParams(type, value) {
+    if (type === AnnotationEditorParamsType.INK_COLOR_AND_OPACITY) {
+      super.updateDefaultParams(
+        AnnotationEditorParamsType.INK_COLOR,
+        value.color
+      );
+      super.updateDefaultParams(
+        AnnotationEditorParamsType.INK_OPACITY,
+        value.opacity
+      );
+      return;
+    }
+    super.updateDefaultParams(type, value);
   }
 
   get color() {

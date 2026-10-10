@@ -13,8 +13,12 @@
  * limitations under the License.
  */
 
-import { Dict, Name, Ref, RefSetCache } from "../../src/core/primitives.js";
-import { incrementalUpdate, writeDict } from "../../src/core/writer.js";
+import { Dict, Name, Ref, RefMap } from "../../src/core/primitives.js";
+import {
+  incrementalUpdate,
+  writeDict,
+  writeValue,
+} from "../../src/core/writer.js";
 import { bytesToString } from "../../src/shared/util.js";
 import { StringStream } from "../../src/core/stream.js";
 
@@ -31,7 +35,7 @@ describe("Writer", function () {
   describe("Incremental update", function () {
     it("should update a file with new objects", async function () {
       const originalData = new Uint8Array();
-      const changes = new RefSetCache();
+      const changes = new RefMap();
       changes.put(Ref.get(123, 0x2d), { data: "abc\n" });
       changes.put(Ref.get(456, 0x4e), { data: "defg\n" });
       const xrefInfo = {
@@ -101,7 +105,7 @@ describe("Writer", function () {
 
     it("should update a file, missing the /ID-entry, with new objects", async function () {
       const originalData = new Uint8Array();
-      const changes = new RefSetCache();
+      const changes = new RefMap();
       changes.put(Ref.get(123, 0x2d), { data: "abc\n" });
       const xrefInfo = {
         newRef: Ref.get(789, 0),
@@ -153,8 +157,7 @@ describe("Writer", function () {
       const gdict = new Dict(null);
       gdict.set("H", 123.00001);
       const string = "a stream";
-      const stream = new StringStream(string);
-      stream.dict = new Dict(null);
+      const stream = new StringStream(string, new Dict());
       stream.dict.set("Length", string.length);
       gdict.set("I", stream);
 
@@ -197,7 +200,7 @@ describe("Writer", function () {
   describe("XFA", function () {
     it("should update AcroForm when no datasets in XFA array", async function () {
       const originalData = new Uint8Array();
-      const changes = new RefSetCache();
+      const changes = new RefMap();
 
       const acroForm = new Dict(null);
       acroForm.set("XFA", [
@@ -259,9 +262,71 @@ describe("Writer", function () {
     });
   });
 
+  describe("writeValue numbers", function () {
+    async function serialize(value) {
+      const buffer = [];
+      await writeValue(value, buffer, null);
+      return buffer.join("");
+    }
+
+    it("should write integers unchanged", async function () {
+      expect(await serialize(0)).toEqual("0");
+      expect(await serialize(1)).toEqual("1");
+      expect(await serialize(-42)).toEqual("-42");
+      expect(await serialize(123456789)).toEqual("123456789");
+    });
+
+    it("should write normal floats without trailing zeros", async function () {
+      expect(await serialize(1.5)).toEqual("1.5");
+      expect(await serialize(-3.14)).toEqual("-3.14");
+      expect(await serialize(1.23001)).toEqual("1.23001");
+      // Trailing zeros must be stripped.
+      expect(await serialize(1.1)).toEqual("1.1");
+      expect(await serialize(2.0)).toEqual("2");
+    });
+
+    it("should not use scientific notation for very small numbers", async function () {
+      // JavaScript's toString() would produce e.g. "8e-6", which is invalid
+      // PDF.
+      expect(await serialize(0.000008)).toEqual("0.000008");
+      expect(await serialize(0.000001)).toEqual("0.000001");
+      expect(await serialize(0.0000001)).toEqual("0.0000001");
+      expect(await serialize(-0.000008)).toEqual("-0.000008");
+    });
+
+    it("should not use scientific notation for very large numbers", async function () {
+      // JavaScript's toString() and toFixed() produce scientific notation from
+      // 1e21 on, which is invalid PDF: such a number must be written with all
+      // its digits, which are the exact ones of the underlying double.
+      expect(await serialize(1e10)).toEqual("10000000000");
+      expect(await serialize(1.5e6)).toEqual("1500000");
+      expect(await serialize(1e20)).toEqual("100000000000000000000");
+      expect(await serialize(1e21)).toEqual("1000000000000000000000");
+      // Removing the trailing zeros of the exponent used to change the value:
+      // "1e+30" was written "1e+3" and "1e+100" was written "1e+1".
+      expect(await serialize(1e30)).toEqual("1000000000000000019884624838656");
+      expect(await serialize(-1e30)).toEqual(
+        "-1000000000000000019884624838656"
+      );
+      expect((await serialize(1e100)).length).toEqual(101);
+    });
+
+    it("should round to at most 10 decimal places", async function () {
+      // 1/3 has infinite decimals; must be capped at 10 places.
+      const result = await serialize(1 / 3);
+      expect(result).toMatch(/^0\.\d{1,10}$/);
+      expect(result.replace("0.", "").length).toBeLessThanOrEqual(10);
+    });
+
+    it("should handle zero and negative zero", async function () {
+      expect(await serialize(0)).toEqual("0");
+      expect(await serialize(-0)).toEqual("0");
+    });
+  });
+
   it("should update a file with a deleted object", async function () {
     const originalData = new Uint8Array();
-    const changes = new RefSetCache();
+    const changes = new RefMap();
     changes.put(Ref.get(123, 0x2d), { data: null });
     changes.put(Ref.get(456, 0x4e), { data: "abc\n" });
     const xrefInfo = {

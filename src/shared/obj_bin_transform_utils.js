@@ -13,6 +13,8 @@
  * limitations under the License.
  */
 
+import { shadow } from "./util.js";
+
 class CSS_FONT_INFO {
   static strings = ["fontFamily", "fontWeight", "italicAngle"];
 }
@@ -35,19 +37,13 @@ class FONT_INFO {
     "vertical",
   ];
 
-  static numbers = ["ascent", "defaultWidth", "descent"];
+  static strings = ["fallbackName", "loadedName"];
 
-  static strings = ["fallbackName", "loadedName", "mimetype", "name"];
-
-  static OFFSET_NUMBERS = Math.ceil((this.bools.length * 2) / 8);
-
-  static OFFSET_BBOX = this.OFFSET_NUMBERS + this.numbers.length * 8;
+  static OFFSET_BBOX = Math.ceil((this.bools.length * 2) / 8);
 
   static OFFSET_FONT_MATRIX = this.OFFSET_BBOX + 1 + 2 * 4;
 
-  static OFFSET_DEFAULT_VMETRICS = this.OFFSET_FONT_MATRIX + 1 + 8 * 6;
-
-  static OFFSET_STRINGS = this.OFFSET_DEFAULT_VMETRICS + 1 + 2 * 3;
+  static OFFSET_STRINGS = this.OFFSET_FONT_MATRIX + 1 + 8 * 6;
 }
 
 class PATTERN_INFO {
@@ -61,11 +57,21 @@ class PATTERN_INFO {
 
   static N_COORD = 4; // number of coordinate pairs
 
-  static N_COLOR = 8; // number of rgb triplets
+  static N_COLOR = 8; // number of RGBA-stride color entries
 
   static N_STOP = 12; // number of gradient stops
 
   static N_FIGURES = 16; // number of figures
 }
 
-export { CSS_FONT_INFO, FONT_INFO, PATTERN_INFO, SYSTEM_FONT_INFO };
+class InfoUtils {
+  static get decoder() {
+    return shadow(this, "decoder", new TextDecoder());
+  }
+
+  static get encoder() {
+    return shadow(this, "encoder", new TextEncoder());
+  }
+}
+
+export { CSS_FONT_INFO, FONT_INFO, InfoUtils, PATTERN_INFO, SYSTEM_FONT_INFO };

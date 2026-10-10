@@ -41,25 +41,25 @@ class BaseCanvasFactory {
     };
   }
 
-  reset(canvasAndContext, width, height) {
-    if (!canvasAndContext.canvas) {
+  reset({ canvas }, width, height) {
+    if (!canvas) {
       throw new Error("Canvas is not specified");
     }
     if (width <= 0 || height <= 0) {
       throw new Error("Invalid canvas size");
     }
-    canvasAndContext.canvas.width = width;
-    canvasAndContext.canvas.height = height;
+    canvas.width = width;
+    canvas.height = height;
   }
 
   destroy(canvasAndContext) {
-    if (!canvasAndContext.canvas) {
+    const { canvas } = canvasAndContext;
+    if (!canvas) {
       throw new Error("Canvas is not specified");
     }
     // Zeroing the width and height cause Firefox to release graphics
     // resources immediately, which can greatly reduce memory consumption.
-    canvasAndContext.canvas.width = 0;
-    canvasAndContext.canvas.height = 0;
+    canvas.width = canvas.height = 0;
     canvasAndContext.canvas = null;
     canvasAndContext.context = null;
   }
@@ -72,21 +72,4 @@ class BaseCanvasFactory {
   }
 }
 
-class DOMCanvasFactory extends BaseCanvasFactory {
-  constructor({ ownerDocument = globalThis.document, enableHWA = false }) {
-    super({ enableHWA });
-    this._document = ownerDocument;
-  }
-
-  /**
-   * @ignore
-   */
-  _createCanvas(width, height) {
-    const canvas = this._document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    return canvas;
-  }
-}
-
-export { BaseCanvasFactory, DOMCanvasFactory };
+export { BaseCanvasFactory };

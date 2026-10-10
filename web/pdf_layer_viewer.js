@@ -20,15 +20,16 @@
 /** @typedef {import("../src/display/api.js").PDFDocumentProxy} PDFDocumentProxy */
 
 import { BaseTreeViewer } from "./base_tree_viewer.js";
+import { internalOpt } from "./internal_evt.js";
 
 /**
- * @typedef {Object} PDFLayerViewerOptions
+ * @typedef {object} PDFLayerViewerOptions
  * @property {HTMLDivElement} container - The viewer element.
  * @property {EventBus} eventBus - The application event bus.
  */
 
 /**
- * @typedef {Object} PDFLayerViewerRenderParameters
+ * @typedef {object} PDFLayerViewerRenderParameters
  * @property {OptionalContentConfig|null} optionalContentConfig - An
  *   {OptionalContentConfig} instance.
  * @property {PDFDocumentProxy} pdfDocument - A {PDFDocument} instance.
@@ -38,13 +39,26 @@ class PDFLayerViewer extends BaseTreeViewer {
   constructor(options) {
     super(options);
 
-    this.eventBus._on("optionalcontentconfigchanged", evt => {
-      this.#updateLayers(evt.promise);
-    });
-    this.eventBus._on("resetlayers", () => {
-      this.#updateLayers();
-    });
-    this.eventBus._on("togglelayerstree", this._toggleAllTreeItems.bind(this));
+    const { eventBus } = this;
+    eventBus.on(
+      "optionalcontentconfigchanged",
+      evt => {
+        this.#updateLayers(evt.promise);
+      },
+      internalOpt
+    );
+    eventBus.on(
+      "resetlayers",
+      () => {
+        this.#updateLayers();
+      },
+      internalOpt
+    );
+    eventBus.on(
+      "togglelayerstree",
+      this._toggleAllTreeItems.bind(this),
+      internalOpt
+    );
   }
 
   reset() {

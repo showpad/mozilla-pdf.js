@@ -15,19 +15,20 @@
 
 /** @typedef {import("./event_utils").EventBus} EventBus */
 
+import { makeArr, shadow } from "pdfjs-lib";
 import { apiPageLayoutToViewerModes } from "./ui_utils.js";
+import { internalOpt } from "./internal_evt.js";
 import { RenderingStates } from "./renderable_view.js";
-import { shadow } from "pdfjs-lib";
 
 /**
- * @typedef {Object} PDFScriptingManagerOptions
+ * @typedef {object} PDFScriptingManagerOptions
  * @property {EventBus} eventBus - The application event bus.
  * @property {string} [sandboxBundleSrc] - The path and filename of the
  *   scripting bundle.
- * @property {Object} [externalServices] - The factory that is used when
+ * @property {object} [externalServices] - The factory that is used when
  *   initializing scripting; must contain a `createScripting` method.
  *   PLEASE NOTE: Primarily intended for the default viewer use-case.
- * @property {function} [docProperties] - The function that is used to lookup
+ * @property {Function} [docProperties] - The function that is used to lookup
  *   the necessary document properties.
  */
 
@@ -38,11 +39,13 @@ class PDFScriptingManager {
 
   #docProperties = null;
 
-  #eventAbortController = null;
+  #eventAC = null;
 
   #eventBus = null;
 
   #externalServices = null;
+
+  #objectIds = null;
 
   #pdfDocument = null;
 
@@ -50,9 +53,13 @@ class PDFScriptingManager {
 
   #ready = false;
 
+  // OpenAction can print before #ready is set.
+  #sandboxCreated = false;
+
   #scripting = null;
 
-  #willPrintCapability = null;
+  // Pending requests per event name, resolved in order by "...Finished".
+  #pendingDocEvents = new Map();
 
   /**
    * @param {PDFScriptingManagerOptions} options
@@ -103,6 +110,18 @@ class PDFScriptingManager {
     if (pdfDocument !== this.#pdfDocument) {
       return; // The document was closed while the data resolved.
     }
+
+    // Collect the ids of every field annotation, so that any sandbox message
+    // targeting an unknown id can be ignored.
+    if (objects) {
+      this.#objectIds = new Set();
+      for (const fields of objects.values()) {
+        for (const { id } of fields) {
+          this.#objectIds.add(id);
+        }
+      }
+    }
+
     try {
       this.#scripting = this.#initScripting();
     } catch (error) {
@@ -113,27 +132,45 @@ class PDFScriptingManager {
     }
     const eventBus = this.#eventBus;
 
-    this.#eventAbortController = new AbortController();
-    const { signal } = this.#eventAbortController;
+    this.#eventAC = new AbortController();
+    const evtOpts = { signal: this.#eventAC.signal, ...internalOpt };
 
-    eventBus._on(
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("COMPONENTS")) &&
+      this.#externalServices.addScriptingWindowListener
+    ) {
+      // The default viewer already handles adding/removing of DOM events,
+      // hence limit this to only the viewer components.
+      window.addEventListener(
+        "updatefromsandbox",
+        event => {
+          eventBus.dispatch("updatefromsandbox", {
+            source: window,
+            detail: event.detail,
+          });
+        },
+        { signal: this.#eventAC.signal }
+      );
+    }
+
+    eventBus.on(
       "updatefromsandbox",
       event => {
         if (event?.source === window) {
           this.#updateFromSandbox(event.detail);
         }
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "dispatcheventinsandbox",
       event => {
         this.#scripting?.dispatchEventInSandbox(event.detail);
       },
-      { signal }
+      evtOpts
     );
 
-    eventBus._on(
+    eventBus.on(
       "pagechanging",
       ({ pageNumber, previous }) => {
         if (pageNumber === previous) {
@@ -142,9 +179,9 @@ class PDFScriptingManager {
         this.#dispatchPageClose(previous);
         this.#dispatchPageOpen(pageNumber);
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "pagerendered",
       ({ pageNumber }) => {
         if (!this._pageOpenPending.has(pageNumber)) {
@@ -155,9 +192,9 @@ class PDFScriptingManager {
         }
         this.#dispatchPageOpen(pageNumber);
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "pagesdestroy",
       async () => {
         await this.#dispatchPageClose(this.#pdfViewer.currentPageNumber);
@@ -169,7 +206,7 @@ class PDFScriptingManager {
 
         this.#closeCapability?.resolve();
       },
-      { signal }
+      evtOpts
     );
 
     try {
@@ -190,6 +227,9 @@ class PDFScriptingManager {
           actions: docActions,
         },
       });
+      if (pdfDocument === this.#pdfDocument) {
+        this.#sandboxCreated = true;
+      }
 
       eventBus.dispatch("sandboxcreated", { source: this });
     } catch (error) {
@@ -217,10 +257,7 @@ class PDFScriptingManager {
   }
 
   async dispatchWillSave() {
-    return this.#scripting?.dispatchEventInSandbox({
-      id: "doc",
-      name: "WillSave",
-    });
+    return this.#dispatchDocEventAndWait("WillSave");
   }
 
   async dispatchDidSave() {
@@ -231,23 +268,32 @@ class PDFScriptingManager {
   }
 
   async dispatchWillPrint() {
-    if (!this.#scripting) {
+    return this.#dispatchDocEventAndWait("WillPrint");
+  }
+
+  async #dispatchDocEventAndWait(name) {
+    if (!this.#scripting || !this.#sandboxCreated) {
+      // Don't wait for a reply before sandbox creation.
       return;
     }
-    await this.#willPrintCapability?.promise;
-    this.#willPrintCapability = Promise.withResolvers();
+    // Queue before dispatch to handle synchronous replies and overlaps.
+    const capability = Promise.withResolvers();
+    const pendingEvents = this.#pendingDocEvents.getOrInsertComputed(
+      name,
+      makeArr
+    );
+    pendingEvents.push(capability);
     try {
-      await this.#scripting.dispatchEventInSandbox({
-        id: "doc",
-        name: "WillPrint",
-      });
+      await this.#scripting.dispatchEventInSandbox({ id: "doc", name });
     } catch (ex) {
-      this.#willPrintCapability.resolve();
-      this.#willPrintCapability = null;
+      const index = pendingEvents.indexOf(capability);
+      if (index >= 0) {
+        pendingEvents.splice(index, 1);
+      }
       throw ex;
     }
 
-    await this.#willPrintCapability.promise;
+    await capability.promise;
   }
 
   async dispatchDidPrint() {
@@ -352,9 +398,11 @@ class PDFScriptingManager {
           }
           break;
         case "WillPrintFinished":
-          this.#willPrintCapability?.resolve();
-          this.#willPrintCapability = null;
+        case "WillSaveFinished": {
+          const name = command.slice(0, -"Finished".length);
+          this.#pendingDocEvents.get(name)?.shift()?.resolve();
           break;
+        }
       }
       return;
     }
@@ -367,6 +415,9 @@ class PDFScriptingManager {
 
     const ids = siblings ? [id, ...siblings] : [id];
     for (const elementId of ids) {
+      if (!this.#objectIds?.has(elementId)) {
+        continue;
+      }
       const element = document.querySelector(
         `[data-element-id="${elementId}"]`
       );
@@ -455,6 +506,9 @@ class PDFScriptingManager {
   }
 
   async #destroyScripting() {
+    this.#objectIds = null;
+    this.#sandboxCreated = false;
+
     if (!this.#scripting) {
       this.#pdfDocument = null;
 
@@ -479,11 +533,15 @@ class PDFScriptingManager {
       await this.#scripting.destroySandbox();
     } catch {}
 
-    this.#willPrintCapability?.reject(new Error("Scripting destroyed."));
-    this.#willPrintCapability = null;
+    for (const pendingEvents of this.#pendingDocEvents.values()) {
+      for (const capability of pendingEvents) {
+        capability.reject(new Error("Scripting destroyed."));
+      }
+    }
+    this.#pendingDocEvents.clear();
 
-    this.#eventAbortController?.abort();
-    this.#eventAbortController = null;
+    this.#eventAC?.abort();
+    this.#eventAC = null;
 
     this._pageOpenPending.clear();
     this._visitedPages.clear();

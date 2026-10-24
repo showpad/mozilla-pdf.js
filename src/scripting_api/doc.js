@@ -14,7 +14,7 @@
  */
 
 import { makeArr, makeMap, serializeError } from "./app_utils.js";
-import { createActionsMap } from "./common.js";
+import { createMap } from "./common.js";
 import { PDFObject } from "./pdf_object.js";
 import { PrintParams } from "./print_params.js";
 import { ZoomType } from "./constants.js";
@@ -98,7 +98,7 @@ class Doc extends PDFObject {
 
     this._zoomType = ZoomType.none;
     this._zoom = data.zoom || 100;
-    this._actions = createActionsMap(data.actions);
+    this._actions = createMap(data.actions);
     this._globalEval = data.globalEval;
     this._userActivation = false;
     this._disablePrinting = false;
@@ -139,7 +139,6 @@ class Doc extends PDFObject {
         this._runActions(actionName);
       }
     }
-    this._runActions("OpenAction");
     this._disableSaving = false;
   }
 
@@ -162,7 +161,13 @@ class Doc extends PDFObject {
         break;
       case "WillSave":
         this._disableSaving = true;
-        this._runActions(name);
+        try {
+          this._runActions(name);
+        } catch (error) {
+          this._send(serializeError(error));
+        }
+        // Let the viewer save the updated field values.
+        this._send({ command: "WillSaveFinished" });
         this._disableSaving = false;
         break;
       default:
@@ -173,9 +178,9 @@ class Doc extends PDFObject {
   _dispatchPageEvent(name, actions, pageNumber) {
     if (name === "PageOpen") {
       this.#pageActions ??= new Map();
-      if (!this.#pageActions.has(pageNumber)) {
-        this.#pageActions.set(pageNumber, createActionsMap(actions));
-      }
+      this.#pageActions.getOrInsertComputed(pageNumber, () =>
+        createMap(actions)
+      );
       this._pageNum = pageNumber - 1;
     }
 
@@ -198,9 +203,9 @@ class Doc extends PDFObject {
       try {
         this._globalEval(action);
       } catch (error) {
-        const serializedError = serializeError(error);
-        serializedError.value = `Error when executing "${name}" for document\n${serializedError.value}`;
-        this._send(serializedError);
+        this._send(
+          serializeError(error, `Error when executing "${name}" for document\n`)
+        );
       }
     }
   }
@@ -210,21 +215,13 @@ class Doc extends PDFObject {
     this._fieldNames.push(name);
     this._numFields++;
 
-    // Fields on a page can have PageOpen/PageClose actions.
-    const po = field.obj._actions.get("PageOpen");
-    const pc = field.obj._actions.get("PageClose");
-    if (po || pc) {
+    // Register field and widget page actions.
+    for (const [page, eventName, scripts] of field.obj._getPageActions()) {
       this.#otherPageActions ??= new Map();
-      const actions = this.#otherPageActions.getOrInsertComputed(
-        field.obj._page + 1,
-        makeMap
-      );
-      if (po) {
-        actions.getOrInsertComputed("PageOpen", makeArr).push(...po);
-      }
-      if (pc) {
-        actions.getOrInsertComputed("PageClose", makeArr).push(...pc);
-      }
+      this.#otherPageActions
+        .getOrInsertComputed(page + 1, makeMap)
+        .getOrInsertComputed(eventName, makeArr)
+        .push(...scripts);
     }
   }
 
@@ -964,10 +961,7 @@ class Doc extends PDFObject {
 
   getField(cName) {
     const field = this._getField(cName);
-    if (!field) {
-      return null;
-    }
-    return field.wrapped;
+    return !field ? null : field.wrapped;
   }
 
   _getChildren(fieldName) {
@@ -1024,10 +1018,9 @@ class Doc extends PDFObject {
     if (typeof nIndex !== "number") {
       throw new TypeError("Invalid field index: must be a number");
     }
-    if (0 <= nIndex && nIndex < this.numFields) {
-      return this._fieldNames[Math.trunc(nIndex)];
-    }
-    return null;
+    return nIndex >= 0 && nIndex < this.numFields
+      ? this._fieldNames[Math.trunc(nIndex)]
+      : null;
   }
 
   getNthTemplate() {
@@ -1240,7 +1233,7 @@ class Doc extends PDFObject {
     let mustCalculate = false;
     let fieldsToReset;
     if (aFields) {
-      fieldsToReset = [];
+      fieldsToReset = new Set();
       for (const fieldName of aFields) {
         if (!fieldName) {
           continue;
@@ -1254,12 +1247,23 @@ class Doc extends PDFObject {
         if (!field) {
           continue;
         }
-        fieldsToReset.push(field);
+        fieldsToReset.add(field);
         mustCalculate = true;
       }
     }
 
-    if (!fieldsToReset) {
+    if (fieldsToReset) {
+      // A non-terminal field stands for all its descendants, hence add the
+      // kids (the Set iterator also visits the newly added fields).
+      for (const { obj } of fieldsToReset) {
+        for (const id of obj._kidIds || []) {
+          const kid = obj._appObjects[id];
+          if (kid) {
+            fieldsToReset.add(kid);
+          }
+        }
+      }
+    } else {
       fieldsToReset = this._fields.values();
       mustCalculate = this._fields.size !== 0;
     }

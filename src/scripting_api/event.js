@@ -43,6 +43,23 @@ class Event {
   }
 }
 
+function mergeChange(event) {
+  let value = event.value;
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    value = value.toString();
+  }
+  const prefix = event.selStart >= 0 ? value.substring(0, event.selStart) : "";
+  const postfix =
+    event.selEnd >= 0 && event.selEnd <= value.length
+      ? value.substring(event.selEnd)
+      : "";
+
+  return `${prefix}${event.change}${postfix}`;
+}
+
 class EventDispatcher {
   constructor(document, calculationOrder, objects, externalCall) {
     this._document = document;
@@ -52,24 +69,6 @@ class EventDispatcher {
 
     this._document.obj._eventDispatcher = this;
     this._isCalculating = false;
-  }
-
-  mergeChange(event) {
-    let value = event.value;
-    if (Array.isArray(value)) {
-      return value;
-    }
-    if (typeof value !== "string") {
-      value = value.toString();
-    }
-    const prefix =
-      event.selStart >= 0 ? value.substring(0, event.selStart) : "";
-    const postfix =
-      event.selEnd >= 0 && event.selEnd <= value.length
-        ? value.substring(event.selEnd)
-        : "";
-
-    return `${prefix}${event.change}${postfix}`;
   }
 
   userActivation() {
@@ -199,7 +198,7 @@ class EventDispatcher {
           return;
         }
 
-        const value = (source.obj.value = this.mergeChange(event));
+        const value = (source.obj.value = mergeChange(event));
         let selStart, selEnd;
         if (
           event.selStart !== savedChange.selStart ||
@@ -255,11 +254,9 @@ class EventDispatcher {
       this.runCalculate(source, event);
 
       const savedValue = (event.value = source.obj._getValue());
-      let formattedValue = null;
-
-      if (this.runActions(source, source, event, "Format")) {
-        formattedValue = event.value?.toString?.();
-      }
+      const formattedValue = this.runActions(source, source, event, "Format")
+        ? event.value?.toString?.()
+        : null;
 
       source.obj._send({
         id: source.obj._id,
@@ -365,10 +362,9 @@ class EventDispatcher {
       }
 
       savedValue = target.obj._getValue();
-      let formattedValue = null;
-      if (this.runActions(target, target, event, "Format")) {
-        formattedValue = event.value?.toString?.();
-      }
+      const formattedValue = this.runActions(target, target, event, "Format")
+        ? event.value?.toString?.()
+        : null;
 
       target.obj._send({
         id: target.obj._id,
@@ -380,4 +376,4 @@ class EventDispatcher {
   }
 }
 
-export { Event, EventDispatcher };
+export { Event, EventDispatcher, mergeChange };

@@ -13,10 +13,10 @@
  * limitations under the License.
  */
 
-import { createActionsMap, FieldType, getFieldType } from "./common.js";
-import { Color } from "./color.js";
+import { createMap, FieldType, getFieldType } from "./common.js";
+import { makeArr, serializeError } from "./app_utils.js";
+import { isValidColor } from "./color.js";
 import { PDFObject } from "./pdf_object.js";
-import { serializeError } from "./app_utils.js";
 
 class Field extends PDFObject {
   constructor(data) {
@@ -65,7 +65,7 @@ class Field extends PDFObject {
     this.userName = data.userName;
 
     // Private
-    this._actions = createActionsMap(data.actions);
+    this._actions = createMap(data.actions);
     this._browseForFileToSubmit = data.browseForFileToSubmit || null;
     this._buttonCaption = null;
     this._buttonIcon = null;
@@ -77,7 +77,7 @@ class Field extends PDFObject {
     this._fillColor = data.fillColor || ["T"];
     this._isChoice = Array.isArray(data.items);
     this._items = data.items || [];
-    this._hasValue = data.hasOwnProperty("value");
+    this._hasValue = Object.hasOwn(data, "value");
     this._page = data.page || 0;
     this._strokeColor = data.strokeColor || ["G", 0];
     this._textColor = data.textColor || ["G", 0];
@@ -98,10 +98,7 @@ class Field extends PDFObject {
   }
 
   get currentValueIndices() {
-    if (!this._isChoice) {
-      return 0;
-    }
-    return this._currentValueIndices;
+    return !this._isChoice ? 0 : this._currentValueIndices;
   }
 
   set currentValueIndices(indices) {
@@ -112,29 +109,20 @@ class Field extends PDFObject {
       indices = [indices];
     }
     if (
-      !indices.every(
-        i =>
-          typeof i === "number" &&
-          Number.isInteger(i) &&
-          i >= 0 &&
-          i < this.numItems
-      )
+      !indices.every(i => Number.isInteger(i) && i >= 0 && i < this.numItems)
     ) {
       return;
     }
 
-    indices.sort();
+    indices.sort((a, b) => a - b);
 
     if (this.multipleSelection) {
       this._currentValueIndices = indices;
-      this._value = [];
-      indices.forEach(i => {
-        this._value.push(this._items[i].displayValue);
-      });
+      this._value = indices.map(i => this._items[i].exportValue);
     } else if (indices.length > 0) {
-      indices = indices.splice(1, indices.length - 1);
+      indices = [indices[0]];
       this._currentValueIndices = indices[0];
-      this._value = this._items[this._currentValueIndices];
+      this._value = this._items[indices[0]].exportValue;
     }
     this._send({ id: this._id, indices });
   }
@@ -144,7 +132,7 @@ class Field extends PDFObject {
   }
 
   set fillColor(color) {
-    if (Color._isValidColor(color)) {
+    if (isValidColor(color)) {
       this._fillColor = color;
     }
   }
@@ -184,7 +172,7 @@ class Field extends PDFObject {
   }
 
   set strokeColor(color) {
-    if (Color._isValidColor(color)) {
+    if (isValidColor(color)) {
       this._strokeColor = color;
     }
   }
@@ -226,7 +214,7 @@ class Field extends PDFObject {
   }
 
   set textColor(color) {
-    if (Color._isValidColor(color)) {
+    if (isValidColor(color)) {
       this._textColor = color;
     }
   }
@@ -334,17 +322,11 @@ class Field extends PDFObject {
   }
 
   buttonGetCaption(nFace = 0) {
-    if (this._buttonCaption) {
-      return this._buttonCaption[nFace];
-    }
-    return "";
+    return this._buttonCaption ? this._buttonCaption[nFace] : "";
   }
 
   buttonGetIcon(nFace = 0) {
-    if (this._buttonIcon) {
-      return this._buttonIcon[nFace];
-    }
-    return null;
+    return this._buttonIcon ? this._buttonIcon[nFace] : null;
   }
 
   buttonImportIcon(cPath = null, nPave = 0) {
@@ -352,9 +334,7 @@ class Field extends PDFObject {
   }
 
   buttonSetCaption(cCaption, nFace = 0) {
-    if (!this._buttonCaption) {
-      this._buttonCaption = ["", "", ""];
-    }
+    this._buttonCaption ??= ["", "", ""];
     this._buttonCaption[nFace] = cCaption;
     // TODO: send to the annotation layer
     // Right now the button is drawn on the canvas using its appearance so
@@ -363,9 +343,7 @@ class Field extends PDFObject {
   }
 
   buttonSetIcon(oIcon, nFace = 0) {
-    if (!this._buttonIcon) {
-      this._buttonIcon = [null, null, null];
-    }
+    this._buttonIcon ??= [null, null, null];
     this._buttonIcon[nFace] = oIcon;
   }
 
@@ -509,10 +487,7 @@ class Field extends PDFObject {
     if (typeof cTrigger !== "string" || typeof cScript !== "string") {
       return;
     }
-    if (!(cTrigger in this._actions)) {
-      this._actions[cTrigger] = [];
-    }
-    this._actions[cTrigger].push(cScript);
+    this._actions.getOrInsertComputed(cTrigger, makeArr).push(cScript);
   }
 
   setFocus() {
@@ -557,6 +532,21 @@ class Field extends PDFObject {
     return false;
   }
 
+  /**
+   * @returns {Array<[number, string, Array<string>]>} Page index, event name,
+   *   and scripts for each PageOpen/PageClose chain.
+   */
+  _getPageActions() {
+    const pageActions = [];
+    for (const eventName of ["PageOpen", "PageClose"]) {
+      const scripts = this._actions.get(eventName);
+      if (scripts) {
+        pageActions.push([this._page, eventName, scripts]);
+      }
+    }
+    return pageActions;
+  }
+
   _reset() {
     this.value = this.defaultValue;
   }
@@ -570,12 +560,16 @@ class Field extends PDFObject {
     const actions = this._actions.get(eventName);
     for (const action of actions) {
       try {
-        // Action evaluation must happen in the global scope
+        // Evaluate actions in the global scope.
         this._globalEval(action);
       } catch (error) {
-        const serializedError = serializeError(error);
-        serializedError.value = `Error when executing "${eventName}" for field "${this._id}"\n${serializedError.value}`;
-        this._send(serializedError);
+        // Fields without widgets have no send callback.
+        this._document.obj._send(
+          serializeError(
+            error,
+            `Error when executing "${eventName}" for field "${this._id}"\n`
+          )
+        );
       }
     }
 
@@ -590,12 +584,14 @@ class RadioButtonField extends Field {
     this.exportValues = [this.exportValues];
     this._radioIds = [this._id];
     this._radioActions = [this._actions];
+    this._radioPages = [this._page];
 
     for (const radioData of otherButtons) {
       this.exportValues.push(radioData.exportValues);
       this._radioIds.push(radioData.id);
-      this._radioActions.push(createActionsMap(radioData.actions));
-      if (this._value === radioData.exportValues) {
+      this._radioActions.push(createMap(radioData.actions));
+      this._radioPages.push(radioData.page || 0);
+      if (data.value === radioData.exportValues) {
         this._id = radioData.id;
       }
     }
@@ -634,29 +630,54 @@ class RadioButtonField extends Field {
   }
 
   checkThisBox(nWidget, bCheckIt = true) {
-    if (nWidget < 0 || nWidget >= this._radioIds.length || !bCheckIt) {
+    const index = this._getWidgetIndex(nWidget);
+    if (index === -1 || !bCheckIt) {
       return;
     }
 
-    this._id = this._radioIds[nWidget];
-    this._value = this.exportValues[nWidget];
+    this._id = this._radioIds[index];
+    this._value = this.exportValues[index];
     this._send({ id: this._id, value: this._value });
   }
 
   isBoxChecked(nWidget) {
+    const index = this._getWidgetIndex(nWidget);
+    // A current widget ID does not imply that it is checked.
     return (
-      nWidget >= 0 &&
-      nWidget < this._radioIds.length &&
-      this._id === this._radioIds[nWidget]
+      index !== -1 &&
+      this._id === this._radioIds[index] &&
+      this._value === this.exportValues[index]
     );
   }
 
   isDefaultChecked(nWidget) {
-    return (
-      nWidget >= 0 &&
-      nWidget < this.exportValues.length &&
-      this.defaultValue === this.exportValues[nWidget]
-    );
+    const index = this._getWidgetIndex(nWidget);
+    return index !== -1 && this.defaultValue === this.exportValues[index];
+  }
+
+  _getWidgetIndex(nWidget) {
+    // Accept integer indices and their canonical string forms.
+    const index = Number(nWidget);
+    return Number.isInteger(index) &&
+      index >= 0 &&
+      index < this._radioIds.length &&
+      `${index}` === `${nWidget}`
+      ? index
+      : -1;
+  }
+
+  _getPageActions() {
+    // Run each widget's chain, including inherited actions.
+    const pageActions = [];
+    for (let i = 0, ii = this._radioIds.length; i < ii; i++) {
+      for (const eventName of ["PageOpen", "PageClose"]) {
+        const scripts = this._radioActions[i].get(eventName);
+        if (scripts) {
+          pageActions.push([this._radioPages[i], eventName, scripts]);
+        }
+      }
+    }
+    return pageActions;
   }
 
   _getExportValue(state) {
@@ -681,7 +702,12 @@ class CheckboxField extends RadioButtonField {
   }
 
   set value(value) {
-    if (!value || value === "Off") {
+    // After initialization, non-export values uncheck the field.
+    if (
+      !value ||
+      value === "Off" ||
+      (this._hasBeenInitialized && !this.exportValues.includes(value))
+    ) {
       this._value = "Off";
     } else {
       super.value = value;
@@ -692,26 +718,13 @@ class CheckboxField extends RadioButtonField {
     return state ? super._getExportValue(state) : "Off";
   }
 
-  isBoxChecked(nWidget) {
-    if (this._value === "Off") {
-      return false;
-    }
-    return super.isBoxChecked(nWidget);
-  }
-
-  isDefaultChecked(nWidget) {
-    if (this.defaultValue === "Off") {
-      return this._value === "Off";
-    }
-    return super.isDefaultChecked(nWidget);
-  }
-
   checkThisBox(nWidget, bCheckIt = true) {
-    if (nWidget < 0 || nWidget >= this._radioIds.length) {
+    const index = this._getWidgetIndex(nWidget);
+    if (index === -1) {
       return;
     }
-    this._id = this._radioIds[nWidget];
-    this._value = bCheckIt ? this.exportValues[nWidget] : "Off";
+    this._id = this._radioIds[index];
+    this._value = bCheckIt ? this.exportValues[index] : "Off";
     this._send({ id: this._id, value: this._value });
   }
 }

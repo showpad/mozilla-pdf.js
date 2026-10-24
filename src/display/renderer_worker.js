@@ -1,0 +1,587 @@
+/* Copyright 2026 Mozilla Foundation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { CanvasGraphics, getAnnotationCanvasName } from "./canvas.js";
+import { isNodeJS, makeMap, setVerbosityLevel, warn } from "../shared/util.js";
+import { createCanvasTrackers } from "./canvas_dependency_tracker.js";
+import { FontLoader } from "./font_loader.js";
+import { initGPU } from "./webgpu.js";
+import { MessageHandler } from "../shared/message_handler.js";
+import { ObjectHandler } from "./object_handler.js";
+import { OffscreenCanvasFactory } from "./offscreen_canvas_factory.js";
+import { OptionalContentConfig } from "./optional_content_config.js";
+import { PDFObjects } from "./pdf_objects.js";
+import { WorkerFilterFactory } from "./worker_filter_factory.js";
+
+const PARTIAL_FRAME_TIME = 500; // ms
+
+class RendererMessageHandler {
+  static #canvasFactory;
+
+  static #commonObjs = new PDFObjects();
+
+  static #connection = null;
+
+  static #enableHWA = false;
+
+  static #enableWebGPU = false;
+
+  static #filterFactory;
+
+  static #fontLoader = new FontLoader({
+    ownerDocument: globalThis,
+  });
+
+  static #objsMap = new Map();
+
+  // Shared operator lists, keyed by page and list ids.
+  static #operatorLists = new Map();
+
+  static #renderTaskStates = new Map();
+
+  static #yieldChannel = null;
+
+  static #yieldResolvers = [];
+
+  static {
+    // Worker thread (and not Node.js)?
+    if (
+      typeof window === "undefined" &&
+      !isNodeJS &&
+      typeof self !== "undefined" &&
+      /* isMessagePort = */
+      typeof self.postMessage === "function" &&
+      "onmessage" in self
+    ) {
+      this.#initializeFromPort(self);
+    }
+  }
+
+  static #getPageObjs(pageProxyId) {
+    return this.#objsMap.getOrInsertComputed(
+      pageProxyId,
+      () => new PDFObjects()
+    );
+  }
+
+  static #getOperatorList(pageProxyId, operatorListId) {
+    return this.#operatorLists
+      .getOrInsertComputed(pageProxyId, makeMap)
+      .getOrInsertComputed(operatorListId, () => ({
+        fnArray: [],
+        argsArray: [],
+        pathCache: new Map(),
+      }));
+  }
+
+  // Flatten the annotation canvases into `[id, canvasName, bitmap]` tuples so
+  // the main thread can rebuild the map with DOM canvases of its own.
+  static #collectAnnotationBitmaps(renderTaskState, transfers) {
+    const map = renderTaskState.gfx?.annotationCanvasMap;
+    if (!map?.size) {
+      return null;
+    }
+    const tuples = [];
+    for (const [id, value] of map) {
+      for (const canvas of Array.isArray(value) ? value : [value]) {
+        const bitmap = canvas.transferToImageBitmap();
+        tuples.push([id, getAnnotationCanvasName(canvas), bitmap]);
+        transfers.push(bitmap);
+      }
+    }
+    return tuples;
+  }
+
+  static async #sendFrame(handler, renderTaskState, isFinal) {
+    const { canvas, renderTaskId } = renderTaskState;
+    let bitmap = null;
+    if (canvas.width === 0 || canvas.height === 0) {
+      // transferToImageBitmap() fails for zero-sized canvases.
+      if (!isFinal) {
+        return;
+      }
+    } else if (isFinal) {
+      bitmap = canvas.transferToImageBitmap();
+    } else {
+      // We need to use createImageBitmap for interim frames because
+      // `transferToImageBitmap` would clear the canvas that is still
+      // being drawn into
+      const { transparentCanvas } = renderTaskState.gfx;
+      if (transparentCanvas) {
+        const composite = new OffscreenCanvas(canvas.width, canvas.height);
+        const ctx = composite.getContext("2d");
+        ctx.drawImage(canvas, 0, 0);
+        ctx.drawImage(transparentCanvas, 0, 0);
+        bitmap = composite.transferToImageBitmap();
+        composite.width = composite.height = 0;
+      } else {
+        bitmap = await createImageBitmap(canvas);
+        if (renderTaskState.aborted) {
+          bitmap.close();
+          return;
+        }
+      }
+    }
+    const transfers = bitmap ? [bitmap] : [];
+    const annotationBitmaps = isFinal
+      ? this.#collectAnnotationBitmaps(renderTaskState, transfers)
+      : null;
+    handler.send(
+      "RenderFrame",
+      { renderTaskId, bitmap, annotationBitmaps },
+      transfers
+    );
+  }
+
+  // We try sending the interim frame at pauses: at each operator list chunk
+  // and when a chunk is paused mid-way.
+  static async #maybeSendInterimFrame(handler, renderTaskState) {
+    if (
+      !renderTaskState.partialFrames ||
+      renderTaskState.aborted ||
+      Date.now() - renderTaskState.lastFrameTime < PARTIAL_FRAME_TIME ||
+      renderTaskState.operatorListIdx === renderTaskState.lastFrameIdx
+    ) {
+      return;
+    }
+    try {
+      await this.#sendFrame(handler, renderTaskState, /* isFinal = */ false);
+    } catch (ex) {
+      // An interim frame failure must not abort rendering.
+      warn(`Failed to send an interim frame: ${ex.message}`);
+    }
+    renderTaskState.lastFrameTime = Date.now();
+    renderTaskState.lastFrameIdx = renderTaskState.operatorListIdx;
+  }
+
+  static #cleanupPage(pageProxyId) {
+    this.#objsMap.get(pageProxyId)?.clear();
+    this.#objsMap.delete(pageProxyId);
+    this.#operatorLists.delete(pageProxyId);
+    for (const [renderTaskId, renderTaskState] of this.#renderTaskStates) {
+      if (renderTaskState.pageProxyId === pageProxyId) {
+        this.#cleanupRenderTask(renderTaskId);
+      }
+    }
+  }
+
+  static #cleanupRenderTask(renderTaskId, keepCanvas = false) {
+    const renderTaskState = this.#renderTaskStates.get(renderTaskId);
+    if (!renderTaskState) {
+      return;
+    }
+    renderTaskState.aborted = true;
+    renderTaskState.continueResolve?.();
+
+    renderTaskState.gfx?.endDrawing();
+    if (!keepCanvas) {
+      this.#releaseCanvases(renderTaskState);
+    }
+    this.#renderTaskStates.delete(renderTaskId);
+  }
+
+  static #releaseCanvases({ canvas, gfx }) {
+    canvas.width = canvas.height = 0;
+    const map = gfx?.annotationCanvasMap;
+    if (!map) {
+      return;
+    }
+    for (const value of map.values()) {
+      for (const annotationCanvas of Array.isArray(value) ? value : [value]) {
+        annotationCanvas.width = annotationCanvas.height = 0;
+      }
+    }
+    map.clear();
+  }
+
+  // Limit this task to its requested length; another task may have sent more.
+  static #appendFromSharedOperatorList(
+    renderTaskState,
+    length,
+    operationsFilterMask,
+    lastChunk
+  ) {
+    const { operatorList, sharedOperatorList } = renderTaskState;
+    const { fnArray, argsArray } = sharedOperatorList;
+    for (let i = operatorList.fnArray.length; i < length; i++) {
+      operatorList.fnArray.push(fnArray[i]);
+      operatorList.argsArray.push(argsArray[i]);
+    }
+    if (operationsFilterMask) {
+      const mask = (renderTaskState.operationsFilterMask ||= []);
+      for (let i = 0, ii = operationsFilterMask.length; i < ii; i++) {
+        mask.push(operationsFilterMask[i]);
+      }
+    }
+    operatorList.lastChunk = lastChunk;
+    renderTaskState.dependencyTracker?.growOperationsCount(
+      operatorList.fnArray.length
+    );
+  }
+
+  // `renderTaskState.gfx` is always non-null here: the main thread awaits the
+  // `InitializeGraphics` reply, which assigns it, before sending
+  // `ExecuteOperatorList`.
+  static async #executeOperatorList(handler, renderTaskState) {
+    const { operatorList, gfx, operationsFilterMask } = renderTaskState;
+    const operationsFilter = operationsFilterMask
+      ? i => operationsFilterMask[i]
+      : null;
+    while (!renderTaskState.aborted) {
+      const { promise, resolve, reject } = Promise.withResolvers();
+      renderTaskState.continueResolve = resolve;
+
+      renderTaskState.operatorListIdx = gfx.executeOperatorList(
+        operatorList,
+        renderTaskState.operatorListIdx,
+        resolve,
+        reject,
+        undefined, // Renderer does not support stepper yet.
+        operationsFilter
+      );
+
+      if (renderTaskState.operatorListIdx === operatorList.argsArray.length) {
+        return renderTaskState.operatorListIdx;
+      }
+      // Send pending painted content, if eligible, before waiting for a
+      // dependency such as a font or image that has not been forwarded yet.
+      await this.#maybeSendInterimFrame(handler, renderTaskState);
+      await promise;
+      if (renderTaskState.aborted) {
+        break;
+      }
+      // The continuation may resolve synchronously; yield so cancellation
+      // messages can be processed between slices.
+      await this.#yield();
+    }
+    return renderTaskState.operatorListIdx;
+  }
+
+  // Use messages to avoid the 4 ms minimum delay on nested timers.
+  static #yield() {
+    if (!this.#yieldChannel) {
+      this.#yieldChannel = new MessageChannel();
+      this.#yieldChannel.port1.onmessage = () => {
+        this.#yieldResolvers.shift()();
+      };
+    }
+    const { promise, resolve } = Promise.withResolvers();
+    this.#yieldResolvers.push(resolve);
+    this.#yieldChannel.port2.postMessage(null);
+    return promise;
+  }
+
+  static #setupObjectHandler(handler) {
+    const objectHandler = new ObjectHandler({
+      messageHandler: handler,
+      commonObjs: this.#commonObjs,
+      fontLoader: this.#fontLoader,
+      pageCache: this.#objsMap,
+      shouldCreatePageObjs: true,
+    });
+
+    handler.on("commonobj", ([id, type, exportedData]) =>
+      this.#commonObjs.has(id)
+        ? null
+        : objectHandler.resolveCommonObject(id, type, exportedData)
+    );
+
+    // The main thread drops objects for cleaned pages. This channel preserves
+    // message order.
+    handler.on("obj", ([id, pageProxyId, type, imageData]) => {
+      objectHandler.resolveObject(id, pageProxyId, type, imageData);
+    });
+
+    handler.on("objFailed", ({ id, pageProxyId, reason }) => {
+      const error = new Error(reason);
+      if (pageProxyId === null) {
+        this.#commonObjs.reject(id, error);
+        return;
+      }
+      this.#getPageObjs(pageProxyId).reject(id, error);
+    });
+  }
+
+  static #setup(handler) {
+    handler.on("configure", data => {
+      setVerbosityLevel(data.verbosity);
+
+      this.#enableHWA = data.enableHWA;
+      this.#enableWebGPU = data.enableWebGPU;
+
+      if (this.#enableWebGPU) {
+        initGPU(); // Start early, so it overlaps with page loading.
+      }
+    });
+
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+      handler.on("GetWorkerCoverage", function () {
+        return globalThis.__coverage__ ?? {};
+      });
+    }
+
+    this.#setupObjectHandler(handler);
+
+    handler.on("cleanupPage", ({ pageProxyId }) => {
+      this.#cleanupPage(pageProxyId);
+    });
+
+    // Mirrors the document-level cleanup the main thread performs in
+    // `WorkerTransport.startCleanup`; without this the worker's copies of
+    // `commonObjs`/`fontLoader` would outlive their main-thread counterparts.
+    handler.on("Cleanup", ({ keepLoadedFonts }) => {
+      this.#commonObjs.clear();
+      if (!keepLoadedFonts) {
+        this.#fontLoader.clear();
+      }
+      this.#filterFactory?.destroy(/* keepHCM = */ true);
+    });
+
+    handler.on("CleanupRenderTask", ({ renderTaskId }) => {
+      this.#cleanupRenderTask(renderTaskId);
+    });
+
+    handler.on(
+      "AppendOperatorList",
+      ({ pageProxyId, operatorListId, fnArray, argsArray }) => {
+        const operatorList = this.#getOperatorList(pageProxyId, operatorListId);
+        for (let i = 0, ii = fnArray.length; i < ii; i++) {
+          operatorList.fnArray.push(fnArray[i]);
+          operatorList.argsArray.push(argsArray[i]);
+        }
+      }
+    );
+
+    handler.on("InitializeGraphics", async data => {
+      const {
+        width,
+        height,
+        pageProxyId,
+        operatorListId,
+        renderTaskId,
+        hasAnnotationCanvasMap = false,
+        transform,
+        viewport,
+        transparency,
+        background,
+        pixelRatio,
+        recordOperations = false,
+        recordImages = false,
+        partialFrames = false,
+      } = data;
+      const canvas = new OffscreenCanvas(width, height);
+      const sharedOperatorList = this.#getOperatorList(
+        pageProxyId,
+        operatorListId
+      );
+      const renderTaskState = {
+        pageProxyId,
+        renderTaskId,
+        canvas,
+        partialFrames,
+        lastFrameTime: Date.now(),
+        gfx: null,
+        sharedOperatorList,
+        dependencyTracker: null,
+        imagesTracker: null,
+        operatorList: {
+          fnArray: [],
+          argsArray: [],
+          lastChunk: false,
+          pathCache: sharedOperatorList.pathCache,
+        },
+        operatorListIdx: 0,
+        lastFrameIdx: 0,
+        operationsFilterMask: null,
+        continueResolve: null,
+        aborted: false,
+      };
+      this.#renderTaskStates.set(renderTaskId, renderTaskState);
+
+      try {
+        if (this.#enableWebGPU) {
+          await initGPU();
+          if (renderTaskState.aborted) {
+            return;
+          }
+        }
+        const objs = this.#getPageObjs(pageProxyId);
+        const optionalContentConfig = OptionalContentConfig.fromSerializable(
+          data.optionalContentConfig
+        );
+
+        const canvasFactory = (this.#canvasFactory ??=
+          new OffscreenCanvasFactory({ enableHWA: this.#enableHWA }));
+        const filterFactory = (this.#filterFactory ??=
+          new WorkerFilterFactory());
+        const annotationCanvases = hasAnnotationCanvasMap ? new Map() : null;
+        const { dependencyTracker, imagesTracker } = createCanvasTrackers(
+          canvas,
+          /* operationsCount = */ 0,
+          { recordOperations, recordImages }
+        );
+
+        // `pageColors` requires DOM-based SVG filters, so pages that need it
+        // never render in the worker.
+        const gfx = new CanvasGraphics(
+          /* ctx = */ canvasFactory.getNoAlphaContext(canvas),
+          this.#commonObjs,
+          objs,
+          canvasFactory,
+          filterFactory,
+          { optionalContentConfig, pixelRatio },
+          annotationCanvases,
+          /* pageColors = */ null,
+          dependencyTracker,
+          imagesTracker
+        );
+
+        gfx.beginDrawing({
+          transform,
+          viewport,
+          transparency,
+          background,
+        });
+
+        renderTaskState.gfx = gfx;
+        renderTaskState.dependencyTracker = dependencyTracker;
+        renderTaskState.imagesTracker = imagesTracker;
+      } catch (ex) {
+        this.#cleanupRenderTask(renderTaskId);
+        throw ex;
+      }
+    });
+
+    handler.on("ExecuteOperatorList", async data => {
+      const {
+        renderTaskId,
+        operatorListIdx,
+        operatorListLength,
+        operationsFilterMask,
+        lastChunk,
+      } = data;
+      const renderTaskState = this.#renderTaskStates.get(renderTaskId);
+      if (!renderTaskState) {
+        // A render task can be cleaned up before queued
+        // ExecuteOperatorList messages for that task are processed.
+        return { operatorListIdx, aborted: true };
+      }
+
+      renderTaskState.operatorListIdx = operatorListIdx;
+      this.#appendFromSharedOperatorList(
+        renderTaskState,
+        operatorListLength,
+        operationsFilterMask,
+        lastChunk
+      );
+
+      const currentOperatorListIdx = await this.#executeOperatorList(
+        handler,
+        renderTaskState
+      );
+
+      let recordedBBoxesBuffer = null;
+      let imageCoordinates = null;
+      if (
+        renderTaskState.operatorList.lastChunk &&
+        currentOperatorListIdx === renderTaskState.operatorList.argsArray.length
+      ) {
+        recordedBBoxesBuffer =
+          renderTaskState.dependencyTracker?.take().buffer ?? null;
+        imageCoordinates = renderTaskState.imagesTracker?.take() ?? null;
+        const aborted = renderTaskState.aborted;
+
+        // Finish drawing, but keep canvases for the final frame.
+        this.#cleanupRenderTask(renderTaskId, /* keepCanvas = */ !aborted);
+        if (!aborted) {
+          try {
+            await this.#sendFrame(
+              handler,
+              renderTaskState,
+              /* isFinal = */ true
+            );
+          } finally {
+            this.#releaseCanvases(renderTaskState);
+          }
+        }
+      } else {
+        await this.#maybeSendInterimFrame(handler, renderTaskState);
+      }
+      return {
+        operatorListIdx: currentOperatorListIdx,
+        recordedBBoxesBuffer,
+        imageCoordinates,
+      };
+    });
+  }
+
+  static #initializeFromPort(port) {
+    const handler = new MessageHandler("renderer", "main", port);
+    this.#setup(handler);
+
+    handler.on("Connect", ({ sourceName, targetName }) => {
+      // Reset even if no "Disconnect" was received.
+      this.#disconnect();
+      const connection = new MessageHandler(sourceName, targetName, port);
+      this.#connection = connection;
+      this.#setup(connection);
+      connection.on("Disconnect", () => {
+        this.#disconnect();
+      });
+      this.#sendReady(connection);
+    });
+
+    this.#sendReady(handler);
+  }
+
+  static #disconnect() {
+    if (!this.#connection) {
+      return;
+    }
+    for (const renderTaskId of this.#renderTaskStates.keys()) {
+      this.#cleanupRenderTask(renderTaskId);
+    }
+    for (const objs of this.#objsMap.values()) {
+      objs.clear();
+    }
+    this.#objsMap.clear();
+    this.#operatorLists.clear();
+    this.#commonObjs.clear();
+    this.#fontLoader.clear();
+    // Isolate pending font loads from the next connection.
+    this.#commonObjs = new PDFObjects();
+    this.#fontLoader = new FontLoader({ ownerDocument: globalThis });
+    // Recreate the factories with the next connection's options.
+    this.#canvasFactory = null;
+    this.#filterFactory?.destroy();
+    this.#filterFactory = null;
+
+    this.#connection.send("Disconnected", null);
+    this.#connection.destroy();
+    this.#connection = null;
+  }
+
+  static #sendReady(handler) {
+    const workerVersion =
+      typeof PDFJSDev !== "undefined" && !PDFJSDev.test("TESTING")
+        ? PDFJSDev.eval("BUNDLE_VERSION")
+        : null;
+    const testObj = new Uint8Array();
+    // Ensure that we can use `postMessage` transfers.
+    handler.send("ready", { testObj, workerVersion }, [testObj.buffer]);
+  }
+}
+
+export { RendererMessageHandler };

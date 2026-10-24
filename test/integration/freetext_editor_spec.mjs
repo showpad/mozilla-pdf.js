@@ -22,6 +22,7 @@ import {
   countSerialized,
   countStorageEntries,
   createPromise,
+  decodePNG,
   dragAndDrop,
   firstPageOnTop,
   getAnnotationSelector,
@@ -58,10 +59,32 @@ import {
   waitForSelectedEditor,
   waitForSerialized,
   waitForStorageEntries,
+  waitForTextToBe,
   waitForTimeout,
   waitForUnselectedEditor,
 } from "./test_utils.mjs";
-import { PNG } from "pngjs";
+
+// The glyphs are antialiased (possibly with subpixel rendering), so a thin
+// stem can be spread over several light pixels and thresholding the pixels
+// isn't reliable: the centroid of the ink is used to locate a glyph instead.
+function getInkCentroid({ data, width, height }) {
+  let total = 0,
+    sumX = 0,
+    sumY = 0;
+  for (let i = 0; i < height; i++) {
+    for (let j = 0; j < width; j++) {
+      const idx = (width * i + j) << 2;
+      const ink =
+        1 -
+        (0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]) /
+          255;
+      total += ink;
+      sumX += ink * j;
+      sumY += ink * i;
+    }
+  }
+  return [sumX / total, sumY / total];
+}
 
 const selectAll = selectEditors.bind(null, "freeText");
 
@@ -141,10 +164,7 @@ describe("FreeText Editor", () => {
             y: rect.y + 100,
             data,
           });
-
-          await page.waitForFunction(
-            `document.getElementById("viewer-alert").textContent === "Text added"`
-          );
+          await waitForTextToBe(page, "#viewer-alert", "Text added");
 
           let content = await page.$eval(editorSelector, el =>
             el.innerText.trimEnd()
@@ -266,7 +286,7 @@ describe("FreeText Editor", () => {
           await switchToFreeText(page);
 
           const rect = await getRect(page, ".annotationEditorLayer");
-          for (const n of [0, 1, 2]) {
+          for (const n of [1, 2, 3]) {
             const editorSelector = await createFreeTextEditor({
               page,
               x: rect.x + 100 * n,
@@ -278,7 +298,7 @@ describe("FreeText Editor", () => {
               sel => !!document.querySelector(sel),
               editorSelector
             );
-            expect(hasEditor).withContext(`In ${browserName}`).toEqual(true);
+            expect(hasEditor).withContext(`In ${browserName}`).toBeTrue();
           }
 
           await waitForStorageEntries(page, 3);
@@ -290,7 +310,7 @@ describe("FreeText Editor", () => {
               sel => !!document.querySelector(sel),
               getEditorSelector(n)
             );
-            expect(hasEditor).withContext(`In ${browserName}`).toEqual(false);
+            expect(hasEditor).withContext(`In ${browserName}`).toBeFalse();
           }
         })
       );
@@ -652,7 +672,7 @@ describe("FreeText Editor", () => {
           const oldAriaOwns = await page.$eval(`span[pdfjs="true"]`, el =>
             el.getAttribute("aria-owns")
           );
-          expect(oldAriaOwns).withContext(`In ${browserName}`).toEqual(null);
+          expect(oldAriaOwns).withContext(`In ${browserName}`).toBeNull();
 
           const rect = await getRect(page, `span[pdfjs="true"]`);
           await createFreeTextEditor({
@@ -667,7 +687,7 @@ describe("FreeText Editor", () => {
           );
           expect(newAriaOwns.endsWith("_0-editor"))
             .withContext(`In ${browserName}`)
-            .toEqual(true);
+            .toBeTrue();
         })
       );
     });
@@ -867,7 +887,7 @@ describe("FreeText Editor", () => {
             }, proprName);
 
           const rects = (await serialize("rect")).map(rect =>
-            rect.slice(0, 2).map(x => Math.floor(x))
+            rect.slice(0, 2).map(Math.floor)
           );
           const expected = [
             [-28, 695],
@@ -1389,7 +1409,7 @@ describe("FreeText Editor", () => {
           let height = bbox[3] - bbox[1];
           expect(width < height)
             .withContext(`In ${browserName}`)
-            .toEqual(true);
+            .toBeTrue();
 
           await page.evaluate(() => {
             window.PDFViewerApplication.rotatePages(270);
@@ -1439,7 +1459,7 @@ describe("FreeText Editor", () => {
           height = bbox[3] - bbox[1];
           expect(width < height)
             .withContext(`In ${browserName}`)
-            .toEqual(true);
+            .toBeTrue();
         })
       );
     });
@@ -1520,59 +1540,7 @@ describe("FreeText Editor", () => {
     it("must open an existing annotation and check that the position are good", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          const toBinary = buf => {
-            for (let i = 0; i < buf.length; i += 4) {
-              const gray =
-                (0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]) /
-                255;
-              buf[i] = buf[i + 1] = buf[i + 2] = gray <= 0.5 ? 0 : 255;
-            }
-          };
-
-          // We want to detect the first non-white pixel in the image.
-          // But we can have some antialiasing...
-          // The idea to just try to detect the beginning of the vertical bar
-          // of the "H" letter.
-          // Hence we just take the first non-white pixel in the image which is
-          // the most repeated one.
-          const getFirstPixel = (buf, width, height) => {
-            toBinary(buf);
-            const firsts = [];
-            const stats = {};
-            // Get the position of the first pixels.
-            // The position of char depends on a lot of different parameters,
-            // hence it's possible to not have a pixel where we expect to have
-            // it. So we just collect the positions of the first black pixel and
-            // take the first one where its abscissa is the most frequent.
-            for (let i = height - 1; i >= 0; i--) {
-              for (let j = 0; j < width; j++) {
-                const idx = (width * i + j) << 2;
-                if (buf[idx] === 0) {
-                  firsts.push([j, i]);
-                  stats[j] = (stats[j] || 0) + 1;
-                  break;
-                }
-              }
-            }
-
-            let maxValue = -Infinity;
-            let maxJ = 0;
-            for (const [j, count] of Object.entries(stats)) {
-              if (count > maxValue) {
-                maxValue = count;
-                maxJ = j;
-              }
-            }
-            maxJ = parseInt(maxJ, 10);
-            for (const [j, i] of firsts) {
-              if (j === maxJ) {
-                return [j, i];
-              }
-            }
-            return null;
-          };
-
-          const firstPixelsAnnotations = new Map();
+          const centroidAnnotations = new Map();
 
           // [26, 32, ...] are the annotation ids
           for (const n of [26, 32, 42, 57, 35, 1]) {
@@ -1582,13 +1550,9 @@ describe("FreeText Editor", () => {
               clip: rect,
               type: "png",
             });
-            const editorImage = PNG.sync.read(Buffer.from(editorPng));
-            const editorFirstPix = getFirstPixel(
-              editorImage.data,
-              editorImage.width,
-              editorImage.height
-            );
-            firstPixelsAnnotations.set(id, { editorFirstPix, rect });
+            const editorImage = await decodePNG(editorPng);
+            const annotationCentroid = getInkCentroid(editorImage);
+            centroidAnnotations.set(id, { annotationCentroid, rect });
           }
 
           await switchToFreeText(page);
@@ -1604,27 +1568,23 @@ describe("FreeText Editor", () => {
               );
               return editor.getAttribute("annotation-id");
             }, n);
-            const { editorFirstPix: annotationFirstPix, rect } =
-              firstPixelsAnnotations.get(annotationId);
+            const { annotationCentroid, rect } =
+              centroidAnnotations.get(annotationId);
             const editorPng = await page.screenshot({
               clip: rect,
               type: "png",
             });
-            const editorImage = PNG.sync.read(Buffer.from(editorPng));
-            const editorFirstPix = getFirstPixel(
-              editorImage.data,
-              editorImage.width,
-              editorImage.height
-            );
+            const editorImage = await decodePNG(editorPng);
+            const editorCentroid = getInkCentroid(editorImage);
 
             expect(
-              Math.abs(editorFirstPix[0] - annotationFirstPix[0]) <= 3 &&
-                Math.abs(editorFirstPix[1] - annotationFirstPix[1]) <= 3
+              Math.abs(editorCentroid[0] - annotationCentroid[0]) <= 3 &&
+                Math.abs(editorCentroid[1] - annotationCentroid[1]) <= 3
             )
               .withContext(
-                `In ${browserName}, first pix coords in editor: ${editorFirstPix} and in annotation: ${annotationFirstPix}`
+                `In ${browserName}, ink centroid in editor: ${editorCentroid} and in annotation: ${annotationCentroid}`
               )
-              .toEqual(true);
+              .toBeTrue();
           }
         })
       );
@@ -1649,108 +1609,17 @@ describe("FreeText Editor", () => {
     it("must open an existing rotated annotation and check that the position are good", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          const toBinary = buf => {
-            for (let i = 0; i < buf.length; i += 4) {
-              const gray =
-                (0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]) /
-                255;
-              buf[i] = buf[i + 1] = buf[i + 2] = gray >= 0.5 ? 255 : 0;
-            }
-          };
-
-          const getFirstPixel = (buf, width, height, start) => {
-            toBinary(buf);
-            const firsts = [];
-            const stats = {};
-            switch (start) {
-              case "TL":
-                for (let j = 0; j < width; j++) {
-                  for (let i = 0; i < height; i++) {
-                    const idx = (width * i + j) << 2;
-                    if (buf[idx] === 0) {
-                      firsts.push([j, i]);
-                      stats[j] = (stats[j] || 0) + 1;
-                      break;
-                    }
-                  }
-                }
-                break;
-              case "TR":
-                for (let i = 0; i < height; i++) {
-                  for (let j = width - 1; j >= 0; j--) {
-                    const idx = (width * i + j) << 2;
-                    if (buf[idx] === 0) {
-                      firsts.push([j, i]);
-                      stats[j] = (stats[j] || 0) + 1;
-                      break;
-                    }
-                  }
-                }
-                break;
-              case "BR":
-                for (let j = width - 1; j >= 0; j--) {
-                  for (let i = height - 1; i >= 0; i--) {
-                    const idx = (width * i + j) << 2;
-                    if (buf[idx] === 0) {
-                      firsts.push([j, i]);
-                      stats[j] = (stats[j] || 0) + 1;
-                      break;
-                    }
-                  }
-                }
-                break;
-              case "BL":
-                for (let i = height - 1; i >= 0; i--) {
-                  for (let j = 0; j < width; j++) {
-                    const idx = (width * i + j) << 2;
-                    if (buf[idx] === 0) {
-                      firsts.push([j, i]);
-                      stats[j] = (stats[j] || 0) + 1;
-                      break;
-                    }
-                  }
-                }
-                break;
-            }
-
-            let maxValue = -Infinity;
-            let maxJ = 0;
-            for (const [j, count] of Object.entries(stats)) {
-              if (count > maxValue) {
-                maxValue = count;
-                maxJ = j;
-              }
-            }
-            maxJ = parseInt(maxJ, 10);
-            for (const [j, i] of firsts) {
-              if (j === maxJ) {
-                return [j, i];
-              }
-            }
-            return null;
-          };
-
-          const firstPixelsAnnotations = new Map();
-          for (const [n, start] of [
-            [17, "BL"],
-            [18, "BR"],
-            [19, "TR"],
-            [20, "TL"],
-          ]) {
+          const centroidAnnotations = new Map();
+          for (const n of [17, 18, 19, 20]) {
             const id = `${n}R`;
             const rect = await getRect(page, getAnnotationSelector(id));
             const editorPng = await page.screenshot({
               clip: rect,
               type: "png",
             });
-            const editorImage = PNG.sync.read(Buffer.from(editorPng));
-            const editorFirstPix = getFirstPixel(
-              editorImage.data,
-              editorImage.width,
-              editorImage.height,
-              start
-            );
-            firstPixelsAnnotations.set(id, { editorFirstPix, rect });
+            const editorImage = await decodePNG(editorPng);
+            const annotationCentroid = getInkCentroid(editorImage);
+            centroidAnnotations.set(id, { annotationCentroid, rect });
           }
 
           await switchToFreeText(page);
@@ -1759,41 +1628,151 @@ describe("FreeText Editor", () => {
             document.getElementById("editorFreeTextParamsToolbar").remove();
           });
 
-          for (const [n, start] of [
-            [0, "BL"],
-            [1, "BR"],
-            [2, "TR"],
-            [3, "TL"],
-          ]) {
+          for (const n of [0, 1, 2, 3]) {
             const annotationId = await page.evaluate(N => {
               const editor = document.getElementById(
                 `pdfjs_internal_editor_${N}`
               );
               return editor.getAttribute("annotation-id");
             }, n);
-            const { editorFirstPix: annotationFirstPix, rect } =
-              firstPixelsAnnotations.get(annotationId);
+            const { annotationCentroid, rect } =
+              centroidAnnotations.get(annotationId);
             const editorPng = await page.screenshot({
               clip: rect,
               type: "png",
             });
-            const editorImage = PNG.sync.read(Buffer.from(editorPng));
-            const editorFirstPix = getFirstPixel(
-              editorImage.data,
-              editorImage.width,
-              editorImage.height,
-              start
-            );
+            const editorImage = await decodePNG(editorPng);
+            const editorCentroid = getInkCentroid(editorImage);
 
             expect(
-              Math.abs(editorFirstPix[0] - annotationFirstPix[0]) <= 3 &&
-                Math.abs(editorFirstPix[1] - annotationFirstPix[1]) <= 3
+              Math.abs(editorCentroid[0] - annotationCentroid[0]) <= 3 &&
+                Math.abs(editorCentroid[1] - annotationCentroid[1]) <= 3
             )
               .withContext(
-                `In ${browserName}, first pix coords in editor: ${editorFirstPix} and in annotation: ${annotationFirstPix}`
+                `In ${browserName}, ink centroid in editor: ${editorCentroid} and in annotation: ${annotationCentroid}`
               )
-              .toEqual(true);
+              .toBeTrue();
           }
+        })
+      );
+    });
+  });
+
+  describe("FreeText (open existing generated with Cairo)", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "issue20504.pdf",
+        ".annotationEditorLayer",
+        100
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must open some existing annotations", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const boxes = [];
+          for (const num of [48, 49, 50, 51, 52]) {
+            const id = `${num}R`;
+            await page.waitForSelector(getAnnotationSelector(id), {
+              visible: true,
+            });
+            const rect = await getRect(page, getAnnotationSelector(id));
+            boxes.push(rect);
+          }
+
+          await switchToFreeText(page);
+
+          // The font sizes extracted from the Cairo appearance streams.
+          const expectedFontSizes = [61, 38, 38, 38, 56];
+          const PRECISION = 0.3;
+          // The width tracks the rendered text length, which depends heavily on
+          // the substitute font used to display the annotation (the original
+          // font isn't embedded). It can vary a lot from a platform to another,
+          // so we only check that it has the same order of magnitude as the
+          // annotation rect.
+          const WIDTH_PRECISION = 0.6;
+
+          for (let i = 0; i < boxes.length; i++) {
+            const rect = await getRect(page, `#pdfjs_internal_editor_${i}`);
+
+            // The default used font can be different from a platform to another
+            // hence we just check that the dimensions have the some order of
+            // magnitude as the annotation rect.
+            expect(Math.abs(rect.width / boxes[i].width - 1))
+              .withContext(`In ${browserName}, editor ${i} width`)
+              .toBeLessThan(WIDTH_PRECISION);
+            expect(Math.abs(rect.height / boxes[i].height - 1))
+              .withContext(`In ${browserName}, editor ${i} height`)
+              .toBeLessThan(PRECISION);
+            expect(Math.abs(rect.x / boxes[i].x - 1))
+              .withContext(`In ${browserName}, editor ${i} x`)
+              .toBeLessThan(PRECISION);
+            expect(Math.abs(rect.y / boxes[i].y - 1))
+              .withContext(`In ${browserName}, editor ${i} y`)
+              .toBeLessThan(PRECISION);
+
+            // Verify that the font size is correctly extracted from the Cairo
+            // appearance stream (font size is encoded in the cm operator).
+            const fontSize = await page.evaluate(N => {
+              const editorDiv = document.getElementById(
+                `pdfjs_internal_editor_${N}-editor`
+              );
+              const match = editorDiv?.style.fontSize.match(/calc\((\d+)px/);
+              return match ? parseInt(match[1], 10) : 0;
+            }, i);
+            expect(fontSize)
+              .withContext(`In ${browserName}, editor ${i} fontSize`)
+              .toEqual(expectedFontSizes[i]);
+          }
+        })
+      );
+    });
+  });
+
+  describe("FreeText (open existing generated with Skia)", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "issue20504_skia.pdf",
+        ".annotationEditorLayer",
+        100
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must extract the font size when Tf comes before Tm", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const id = "24R";
+          await page.waitForSelector(getAnnotationSelector(id), {
+            visible: true,
+          });
+
+          await switchToFreeText(page);
+
+          // The Skia appearance stream sets the font (Tf) before the text
+          // matrix (Tm), and the text matrix is scaled by 0.5 through a cm
+          // operator: 20 * 0.5 = 10.
+          const fontSize = await page.evaluate(() => {
+            const editorDiv = document.getElementById(
+              `pdfjs_internal_editor_0-editor`
+            );
+            const match = editorDiv?.style.fontSize.match(/calc\((\d+)px/);
+            return match ? parseInt(match[1], 10) : 0;
+          });
+          expect(fontSize)
+            .withContext(`In ${browserName}, editor 0 fontSize`)
+            .toEqual(10);
         })
       );
     });
@@ -3204,16 +3183,13 @@ describe("FreeText Editor", () => {
             .toEqual("Hello World and edited in Firefox");
 
           // Check that the canvas has nothing drawn at the annotation position.
-          await page.$eval(selector, el => (el.hidden = true));
-          let editorPng = await page.screenshot({
-            clip: editorRect,
-            type: "png",
-          });
-          await page.$eval(selector, el => (el.hidden = false));
-          let editorImage = PNG.sync.read(Buffer.from(editorPng));
-          expect(editorImage.data.every(x => x === 0xff))
-            .withContext(`In ${browserName}`)
-            .toBeTrue();
+          let isWhite = await isCanvasMonochrome(
+            page,
+            1,
+            editorRect,
+            0xffffffff
+          );
+          expect(isWhite).withContext(`In ${browserName}`).toBeTrue();
 
           const oneToThirteen = Array.from(new Array(13).keys(), n => n + 2);
           for (const pageNumber of oneToThirteen) {
@@ -3253,14 +3229,8 @@ describe("FreeText Editor", () => {
 
           await awaitPromise(handlePromise);
 
-          editorPng = await page.screenshot({
-            clip: editorRect,
-            type: "png",
-          });
-          editorImage = PNG.sync.read(Buffer.from(editorPng));
-          expect(editorImage.data.every(x => x === 0xff))
-            .withContext(`In ${browserName}`)
-            .toBeFalse();
+          isWhite = await isCanvasMonochrome(page, 1, editorRect, 0xffffffff);
+          expect(isWhite).withContext(`In ${browserName}`).toBeFalse();
         })
       );
     });
@@ -3359,19 +3329,7 @@ describe("FreeText Editor", () => {
           await page.waitForSelector(`${editorSelector} button.deleteButton`);
           await page.click(`${editorSelector} button.deleteButton`);
           await waitForSerialized(page, 0);
-
-          await page.waitForFunction(() => {
-            const messageElement = document.querySelector(
-              "#editorUndoBarMessage"
-            );
-            return messageElement && messageElement.textContent.trim() !== "";
-          });
-          const message = await page.waitForSelector("#editorUndoBarMessage");
-          const messageText = await page.evaluate(
-            el => el.textContent,
-            message
-          );
-          expect(messageText).toContain("Text removed");
+          await waitForTextToBe(page, "#editorUndoBarMessage", "Text removed");
         })
       );
     });
@@ -3618,9 +3576,7 @@ describe("FreeText Editor", () => {
             const { map } =
               window.PDFViewerApplication.pdfDocument.annotationStorage
                 .serializable;
-            return (
-              map.size === 4 && [...map.values()].every(entry => entry.deleted)
-            );
+            return map.size === 4 && map.values().every(entry => entry.deleted);
           });
 
           // Disable editing mode.

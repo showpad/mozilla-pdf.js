@@ -21,39 +21,26 @@ const FORMS_VERSION = 21.00720099;
 const USERACTIVATION_CALLBACKID = 0;
 const USERACTIVATION_MAXTIME_VALIDITY = 5000;
 
-function serializeError(error) {
-  const value = `${error.toString()}\n${error.stack}`;
-  return { command: "error", value };
+function serializeError(error, prefix = "") {
+  // Scripts can throw non-Error values.
+  let message;
+  try {
+    message = String(error);
+  } catch {
+    message = "Unknown error";
+  }
+  let stack;
+  try {
+    stack = error?.stack;
+  } catch {}
+  const value = typeof stack === "string" ? `${message}\n${stack}` : message;
+  return { command: "error", value: `${prefix}${value}` };
 }
 
 // Helpers for simple `Map.prototype.getOrInsertComputed()` invocations,
 // to avoid duplicate function creation.
 const makeArr = () => [];
 const makeMap = () => new Map();
-
-if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
-  // TODO: Remove this once `Math.sumPrecise` is supported in QuickJS.
-  //
-  // Note that this isn't a "proper" polyfill, but since we're only using it to
-  // replace `Array.prototype.reduce()` invocations it should be fine.
-  if (typeof Math.sumPrecise !== "function") {
-    Math.sumPrecise = function (numbers) {
-      return numbers.reduce((a, b) => a + b, 0);
-    };
-  }
-
-  // TODO: Remove this once `Map.prototype.getOrInsertComputed` is supported in
-  // QuickJS.
-  if (typeof Map.prototype.getOrInsertComputed !== "function") {
-    // eslint-disable-next-line no-extend-native
-    Map.prototype.getOrInsertComputed = function (key, callbackFn) {
-      if (!this.has(key)) {
-        this.set(key, callbackFn(key));
-      }
-      return this.get(key);
-    };
-  }
-}
 
 export {
   FORMS_VERSION,

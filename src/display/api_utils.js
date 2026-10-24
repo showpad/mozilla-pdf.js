@@ -20,6 +20,12 @@ import {
   warn,
 } from "../shared/util.js";
 
+// Deprecated API function -- display regardless of the `verbosity` setting.
+function deprecated(details) {
+  // eslint-disable-next-line no-console
+  console.log("Deprecated API usage: " + details);
+}
+
 function getUrlProp(val) {
   if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
     return null; // The 'url' is unused with `PDFDataRangeTransport`.
@@ -113,6 +119,34 @@ const isValidExplicitDest = _isValidExplicitDest.bind(
   /* validName = */ isNameProxy
 );
 
+// Return false for invalid or opaque base URLs.
+function isSameOrigin(baseUrl, otherUrl) {
+  if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
+    return false;
+  }
+  const base = URL.parse(baseUrl);
+  if (!base?.origin || base.origin === "null") {
+    return false;
+  }
+  const other = new URL(otherUrl, base);
+  return base.origin === other.origin;
+}
+
+// Wrap cross-origin workers in blob modules for generic builds.
+function getWorkerSrc(src) {
+  if (
+    typeof PDFJSDev !== "undefined" &&
+    PDFJSDev.test("GENERIC") &&
+    !isSameOrigin(window.location, src)
+  ) {
+    const wrapper = `await import("${new URL(src, window.location).href}");`;
+    return URL.createObjectURL(
+      new Blob([wrapper], { type: "text/javascript" })
+    );
+  }
+  return src;
+}
+
 class LoopbackPort {
   #listeners = new Map();
 
@@ -161,12 +195,51 @@ class LoopbackPort {
   }
 }
 
+class StatTimer {
+  #started = new Map();
+
+  times = [];
+
+  time(name) {
+    if (this.#started.has(name)) {
+      warn(`Timer is already running for ${name}`);
+    }
+    this.#started.set(name, Date.now());
+  }
+
+  timeEnd(name) {
+    if (!this.#started.has(name)) {
+      warn(`Timer has not been started for ${name}`);
+    }
+    this.times.push({
+      name,
+      start: this.#started.get(name),
+      end: Date.now(),
+    });
+    // Remove timer from started so it can be called again.
+    this.#started.delete(name);
+  }
+
+  toString() {
+    // Find the longest name for padding purposes.
+    const longest = Math.max(...this.times.map(t => t.name.length));
+
+    return this.times
+      .map(t => `${t.name.padEnd(longest)} ${t.end - t.start}ms\n`)
+      .join("");
+  }
+}
+
 export {
+  deprecated,
   getDataProp,
   getFactoryUrlProp,
   getUrlProp,
+  getWorkerSrc,
   isNameProxy,
   isRefProxy,
+  isSameOrigin,
   isValidExplicitDest,
   LoopbackPort,
+  StatTimer,
 };

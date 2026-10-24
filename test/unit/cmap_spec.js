@@ -101,6 +101,51 @@ describe("cmap", function () {
     expect(cmap.lookup(0x1c)).toBeUndefined();
   });
 
+  it("ignores ranges once too many entries have been mapped", async function () {
+    // 16 overlapping (2^20 - 1)-entry ranges leave 15 entries.
+    let str = "16 begincidrange\n";
+    for (let i = 0; i < 16; i++) {
+      str += `<00000000> <000FFFFE> ${i}\n`;
+    }
+    // prettier-ignore
+    str += "endcidrange\n" +
+           "1 begincidrange\n" +
+           "<00000000> <0000000F> 100\n" + // One over budget.
+           "endcidrange\n" +
+           "1 begincidrange\n" +
+           "<00000000> <0000000E> 200\n" + // Fill the budget.
+           "endcidrange\n" +
+           "1 begincidrange\n" +
+           "<00000000> <00000000> 300\n" + // Budget exhausted.
+           "endcidrange\n" +
+           "1 begincidchar\n" +
+           "<00100000> 400\n" + // Not charged to the range budget.
+           "endcidchar\n";
+    const stream = new StringStream(str);
+    const cmap = await CMapFactory.create({ encoding: stream });
+    expect(cmap.lookup(0x00000)).toEqual(200);
+    expect(cmap.lookup(0x0000e)).toEqual(214);
+    expect(cmap.lookup(0x0000f)).toEqual(15 + 0xf);
+    expect(cmap.lookup(0xffffe)).toEqual(15 + 0xffffe);
+    expect(cmap.lookup(0xfffff)).toBeUndefined();
+    expect(cmap.lookup(0x100000)).toEqual(400);
+  });
+
+  it("ignores an oversized range without affecting later ranges", async function () {
+    // prettier-ignore
+    const str = "1 begincidrange\n" +
+              "<00000000> <FFFFFFFF> 0\n" +
+              "endcidrange\n" +
+              "1 begincidrange\n" +
+              "<0000> <0001> 5\n" +
+              "endcidrange\n";
+    const stream = new StringStream(str);
+    const cmap = await CMapFactory.create({ encoding: stream });
+    expect(cmap.lookup(0x0000)).toEqual(5);
+    expect(cmap.lookup(0x0001)).toEqual(6);
+    expect(cmap.lookup(0x0002)).toBeUndefined();
+  });
+
   it("decodes codespace ranges", async function () {
     // prettier-ignore
     const str = "1 begincodespacerange\n" +
@@ -141,9 +186,37 @@ describe("cmap", function () {
     });
     expect(cmap).toBeInstanceOf(CMap);
     expect(cmap.useCMap).not.toBeNull();
-    expect(cmap.builtInCMap).toBeFalsy();
-    expect(cmap.length).toEqual(0x20a7);
-    expect(cmap.isIdentityCMap).toEqual(false);
+    expect(cmap.builtInCMap).toBeFalse();
+    expect(cmap.size).toEqual(0x20a7);
+    expect(cmap.isIdentityCMap).toBeFalse();
+  });
+
+  it("prefers its own mappings over those inherited through usecmap", async function () {
+    const cmap = await CMapFactory.create({
+      encoding: Name.get("ETenms-B5-H"),
+      fetchBuiltInCMap,
+      useCMap: null,
+    });
+
+    expect(cmap.lookup(0x41)).toEqual(34);
+    expect(cmap.lookup(0xa140)).toEqual(99);
+  });
+
+  it("prefers embedded mappings over those inherited through usecmap", async function () {
+    // prettier-ignore
+    const str = "/ETen-B5-H usecmap\n" +
+              "1 begincidchar\n" +
+              "<41> 34\n" +
+              "endcidchar\n";
+    const stream = new StringStream(str);
+    const cmap = await CMapFactory.create({
+      encoding: stream,
+      fetchBuiltInCMap,
+      useCMap: null,
+    });
+
+    expect(cmap.lookup(0x41)).toEqual(34);
+    expect(cmap.lookup(0xa140)).toEqual(99);
   });
 
   it("parses cmapname", async function () {
@@ -157,7 +230,7 @@ describe("cmap", function () {
     const str = "/WMode 1 def\n";
     const stream = new StringStream(str);
     const cmap = await CMapFactory.create({ encoding: stream });
-    expect(cmap.vertical).toEqual(true);
+    expect(cmap.vertical).toBeTrue();
   });
 
   it("loads built in cmap", async function () {
@@ -168,9 +241,9 @@ describe("cmap", function () {
     });
     expect(cmap).toBeInstanceOf(CMap);
     expect(cmap.useCMap).toBeNull();
-    expect(cmap.builtInCMap).toBeTruthy();
-    expect(cmap.length).toEqual(0x20a7);
-    expect(cmap.isIdentityCMap).toEqual(false);
+    expect(cmap.builtInCMap).toBeTrue();
+    expect(cmap.size).toEqual(0x20a7);
+    expect(cmap.isIdentityCMap).toBeFalse();
   });
 
   it("loads built in identity cmap", async function () {
@@ -180,11 +253,11 @@ describe("cmap", function () {
       useCMap: null,
     });
     expect(cmap).toBeInstanceOf(IdentityCMap);
-    expect(cmap.vertical).toEqual(false);
-    expect(cmap.length).toEqual(0x10000);
+    expect(cmap.vertical).toBeFalse();
+    expect(cmap.size).toEqual(0x10000);
     expect(function () {
       return cmap.isIdentityCMap;
-    }).toThrow(new Error("should not access .isIdentityCMap"));
+    }).toThrowError("should not access .isIdentityCMap");
   });
 
   it("attempts to load a non-existent built-in CMap", async function () {
@@ -196,7 +269,7 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       expect(reason.message).toEqual("Unknown CMap name: null");
@@ -221,7 +294,7 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       expect(reason.message).toEqual(
@@ -250,12 +323,12 @@ describe("cmap", function () {
       });
 
       // Shouldn't get here.
-      expect(false).toEqual(true);
+      expect(false).toBeTrue();
     } catch (reason) {
       expect(reason).toBeInstanceOf(Error);
       const message = reason.message;
-      expect(message.startsWith("Unable to load CMap data at: ")).toEqual(true);
-      expect(message.endsWith("/external/bcmaps/Adobe-Japan1-1")).toEqual(true);
+      expect(message.startsWith("Unable to load CMap data at: ")).toBeTrue();
+      expect(message.endsWith("/external/bcmaps/Adobe-Japan1-1")).toBeTrue();
     }
   });
 });

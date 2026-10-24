@@ -22,6 +22,7 @@ import {
   toggleExpandedBtn,
   toggleSelectedBtn,
 } from "./ui_utils.js";
+import { internalOpt } from "./internal_evt.js";
 import { Menu } from "./menu.js";
 import { Sidebar } from "./sidebar.js";
 
@@ -30,14 +31,14 @@ const SIDEBAR_RESIZING_CLASS = "viewsManagerResizing";
 const UI_NOTIFICATION_CLASS = "pdfSidebarNotification";
 
 /**
- * @typedef {Object} PDFSidebarOptions
+ * @typedef {object} PDFSidebarOptions
  * @property {PDFSidebarElements} elements - The DOM elements.
  * @property {EventBus} eventBus - The application event bus.
  * @property {L10n} l10n - The localization service.
  */
 
 /**
- * @typedef {Object} PDFSidebarElements
+ * @typedef {object} PDFSidebarElements
  * @property {HTMLDivElement} outerContainer - The outer container
  *   (encasing both the viewer and sidebar elements).
  * @property {HTMLDivElement} sidebarContainer - The sidebar container
@@ -89,7 +90,7 @@ class ViewsManager extends Sidebar {
       outlinesView,
       attachmentsView,
       layersView,
-      viewsManagerAddFileButton,
+      viewsManagerAddFile: { button: viewsManagerAddFileButton },
       viewsManagerCurrentOutlineButton,
       viewsManagerSelectorButton,
       viewsManagerSelectorOptions,
@@ -98,6 +99,7 @@ class ViewsManager extends Sidebar {
     },
     eventBus,
     l10n,
+    enableMerge = false,
     enableSplitMerge = false,
     globalAbortSignal,
   }) {
@@ -149,6 +151,10 @@ class ViewsManager extends Sidebar {
       viewsManagerStatus.hidden = true;
     }
     this._enableSplitMerge = enableSplitMerge;
+    this._enableMerge = enableMerge;
+    if (!enableMerge) {
+      viewsManagerAddFileButton.hidden = true;
+    }
 
     this.menu = new Menu(
       viewsManagerSelectorOptions,
@@ -162,7 +168,7 @@ class ViewsManager extends Sidebar {
       attachmentsTitle: "pdfjs-views-manager-attachments-title",
       layersTitle: "pdfjs-views-manager-layers-title1",
       notificationButton: "pdfjs-toggle-views-manager-notification-button",
-      toggleButton: "pdfjs-toggle-views-manager-button",
+      toggleButton: "pdfjs-toggle-views-manager-button1",
     });
 
     this.#addEventListeners();
@@ -260,10 +266,10 @@ class ViewsManager extends Sidebar {
         return;
     }
 
-    if (this._enableSplitMerge) {
-      this.viewsManagerStatus.hidden = view !== SidebarView.THUMBS;
-    }
-    this.viewsManagerAddFileButton.hidden = view !== SidebarView.THUMBS;
+    this.viewsManagerStatus.hidden =
+      !this._enableSplitMerge || view !== SidebarView.THUMBS;
+    this.viewsManagerAddFileButton.hidden =
+      !this._enableMerge || view !== SidebarView.THUMBS;
     this.viewsManagerCurrentOutlineButton.hidden = view !== SidebarView.OUTLINE;
     this.viewsManagerHeaderLabel.setAttribute(
       "data-l10n-id",
@@ -469,38 +475,54 @@ class ViewsManager extends Sidebar {
       }
     };
 
-    eventBus._on("outlineloaded", evt => {
-      onTreeLoaded(evt.outlineCount, this.outlineButton, SidebarView.OUTLINE);
+    eventBus.on(
+      "outlineloaded",
+      evt => {
+        onTreeLoaded(evt.outlineCount, this.outlineButton, SidebarView.OUTLINE);
 
-      evt.currentOutlineItemPromise.then(enabled => {
-        if (!this.isInitialViewSet) {
-          return;
-        }
-        this.viewsManagerCurrentOutlineButton.disabled = !enabled;
-      });
-    });
+        evt.currentOutlineItemPromise.then(enabled => {
+          if (!this.isInitialViewSet) {
+            return;
+          }
+          this.viewsManagerCurrentOutlineButton.disabled = !enabled;
+        });
+      },
+      internalOpt
+    );
 
-    eventBus._on("attachmentsloaded", evt => {
-      onTreeLoaded(
-        evt.attachmentsCount,
-        this.attachmentsButton,
-        SidebarView.ATTACHMENTS
-      );
-    });
+    eventBus.on(
+      "attachmentsloaded",
+      evt => {
+        onTreeLoaded(
+          evt.attachmentsCount,
+          this.attachmentsButton,
+          SidebarView.ATTACHMENTS
+        );
+      },
+      internalOpt
+    );
 
-    eventBus._on("layersloaded", evt => {
-      onTreeLoaded(evt.layersCount, this.layersButton, SidebarView.LAYERS);
-    });
+    eventBus.on(
+      "layersloaded",
+      evt => {
+        onTreeLoaded(evt.layersCount, this.layersButton, SidebarView.LAYERS);
+      },
+      internalOpt
+    );
 
     // Update the thumbnailViewer, if visible, when exiting presentation mode.
-    eventBus._on("presentationmodechanged", evt => {
-      if (
-        evt.state === PresentationModeState.NORMAL &&
-        this.visibleView === SidebarView.THUMBS
-      ) {
-        this.onUpdateThumbnails();
-      }
-    });
+    eventBus.on(
+      "presentationmodechanged",
+      evt => {
+        if (
+          evt.state === PresentationModeState.NORMAL &&
+          this.visibleView === SidebarView.THUMBS
+        ) {
+          this.onUpdateThumbnails();
+        }
+      },
+      internalOpt
+    );
   }
 
   onStartResizing() {

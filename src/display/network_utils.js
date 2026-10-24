@@ -15,7 +15,7 @@
 
 import { assert, ResponseException } from "../shared/util.js";
 import { getFilenameFromContentDispositionHeader } from "./content_disposition.js";
-import { isPdfFile } from "./display_utils.js";
+import { isPdfFile } from "./dom_utils.js";
 
 function createHeaders(isHttp, httpHeaders) {
   const headers = new Headers();
@@ -30,6 +30,17 @@ function createHeaders(isHttp, httpHeaders) {
     }
   }
   return headers;
+}
+
+// Trim the trailing whitespace of the raw response headers, but keep the
+// regular spaces (hence no `trimEnd`). Scanning backwards keeps this linear,
+// whereas a `$`-anchored regex is quadratic in the length of the run.
+function trimHeadersEnd(str) {
+  let end = str.length;
+  while (end > 0 && str[end - 1] !== " " && /\s/.test(str[end - 1])) {
+    end--;
+  }
+  return str.slice(0, end);
 }
 
 function getResponseOrigin(url) {
@@ -65,10 +76,11 @@ function validateRangeRequestCapabilities({
     // make any sense to abort the request and retry with a range request.
     return rv;
   }
-  if (disableRange || !isHttp) {
-    return rv;
-  }
-  if (responseHeaders.get("Accept-Ranges") !== "bytes") {
+  if (
+    disableRange ||
+    !isHttp ||
+    responseHeaders.get("Accept-Ranges") !== "bytes"
+  ) {
     return rv;
   }
 
@@ -117,5 +129,6 @@ export {
   ensureResponseOrigin,
   extractFilenameFromHeader,
   getResponseOrigin,
+  trimHeadersEnd,
   validateRangeRequestCapabilities,
 };

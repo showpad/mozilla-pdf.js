@@ -13,9 +13,10 @@
  * limitations under the License.
  */
 
+import { MathClamp } from "pdfjs-lib";
+
 /**
  * Wraps two elements with a drag-to-resize handle between them.
- *
  * @param {HTMLElement} firstEl
  * @param {HTMLElement} secondEl
  * @param {object} [options]
@@ -104,13 +105,9 @@ class SplitView {
     if (total <= 0) {
       return 0;
     }
-    if (total <= this.#minSize * 2) {
-      return Math.min(total, Math.max(0, requestedFirst));
-    }
-    return Math.max(
-      this.#minSize,
-      Math.min(total - this.#minSize, requestedFirst)
-    );
+    return total <= this.#minSize * 2
+      ? MathClamp(requestedFirst, 0, total)
+      : MathClamp(requestedFirst, this.#minSize, total - this.#minSize);
   }
 
   #resize(newFirst) {

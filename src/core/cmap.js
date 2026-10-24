@@ -17,11 +17,12 @@ import { Cmd, EOF, isCmd, Name } from "./primitives.js";
 import { FormatError, unreachable, warn } from "../shared/util.js";
 import { BaseStream } from "./base_stream.js";
 import { BinaryCMapReader } from "./binary_cmap.js";
+import { CharCodeMap } from "./char_code_map.js";
 import { Lexer } from "./parser.js";
 import { MissingDataException } from "./core_utils.js";
 import { Stream } from "./stream.js";
 
-const BUILT_IN_CMAPS = [
+const BUILT_IN_CMAPS = new Set([
   // << Start unicode maps.
   "Adobe-GB1-UCS2",
   "Adobe-CNS1-UCS2",
@@ -192,25 +193,30 @@ const BUILT_IN_CMAPS = [
   "UniKS-UTF8-V",
   "V",
   "WP-Symbol",
-];
+]);
 
 // Heuristic to avoid hanging the worker-thread for CMap data with ridiculously
 // large ranges, such as e.g. 0xFFFFFFFF (fixes issue11922_reduced.pdf).
+// Apply the entry limit across all ranges, including overlapping ones.
 const MAX_MAP_RANGE = 2 ** 24 - 1; // = 0xFFFFFF
 
 // CMap, not to be confused with TrueType's cmap.
 class CMap {
+  // Map entries have one of two forms.
+  // - cid chars are 16-bit unsigned integers, stored as integers.
+  // - bf chars are variable-length byte sequences, stored as strings, with
+  //   one byte per character.
+  #map = new CharCodeMap();
+
+  #mappedEntries = 0;
+
   constructor(builtInCMap = false) {
     // Codespace ranges are stored as follows:
     // [[1BytePairs], [2BytePairs], [3BytePairs], [4BytePairs]]
     // where nBytePairs are ranges e.g. [low1, high1, low2, high2, ...]
     this.codespaceRanges = [[], [], [], []];
     this.numCodespaceRanges = 0;
-    // Map entries have one of two forms.
-    // - cid chars are 16-bit unsigned integers, stored as integers.
-    // - bf chars are variable-length byte sequences, stored as strings, with
-    //   one byte per character.
-    this._map = [];
+
     this.name = "";
     this.vertical = false;
     this.useCMap = null;
@@ -222,22 +228,28 @@ class CMap {
     this.numCodespaceRanges++;
   }
 
-  mapCidRange(low, high, dstLow) {
-    if (high - low > MAX_MAP_RANGE) {
-      throw new Error("mapCidRange - ignoring data above MAX_MAP_RANGE.");
+  #consumeBudget(count, name) {
+    if (count <= 0) {
+      return;
     }
+    if (this.#mappedEntries + count > MAX_MAP_RANGE) {
+      throw new Error(`${name} - ignoring data above MAX_MAP_RANGE.`);
+    }
+    this.#mappedEntries += count;
+  }
+
+  mapCidRange(low, high, dstLow) {
+    this.#consumeBudget(high - low + 1, "mapCidRange");
     while (low <= high) {
-      this._map[low++] = dstLow++;
+      this.#map.set(low++, dstLow++);
     }
   }
 
   mapBfRange(low, high, dstLow) {
-    if (high - low > MAX_MAP_RANGE) {
-      throw new Error("mapBfRange - ignoring data above MAX_MAP_RANGE.");
-    }
+    this.#consumeBudget(high - low + 1, "mapBfRange");
     const lastByte = dstLow.length - 1;
     while (low <= high) {
-      this._map[low++] = dstLow;
+      this.#map.set(low++, dstLow);
       // Only the last byte has to be incremented (in the normal case).
       const nextCharCode = dstLow.charCodeAt(lastByte) + 1;
       if (nextCharCode > 0xff) {
@@ -253,68 +265,37 @@ class CMap {
   }
 
   mapBfRangeToArray(low, high, array) {
-    if (high - low > MAX_MAP_RANGE) {
-      throw new Error("mapBfRangeToArray - ignoring data above MAX_MAP_RANGE.");
-    }
     const ii = array.length;
+    this.#consumeBudget(Math.min(high - low + 1, ii), "mapBfRangeToArray");
     let i = 0;
     while (low <= high && i < ii) {
-      this._map[low] = array[i++];
-      ++low;
+      this.#map.set(low++, array[i++]);
     }
   }
 
   // This is used for both bf and cid chars.
   mapOne(src, dst) {
-    this._map[src] = dst;
+    this.#map.set(src, dst);
   }
 
   lookup(code) {
-    return this._map[code];
+    return this.#map.get(code);
   }
 
   contains(code) {
-    return this._map[code] !== undefined;
+    return this.#map.has(code);
   }
 
   forEach(callback) {
-    // Most maps have fewer than 65536 entries, and for those we use normal
-    // array iteration. But really sparse tables are possible -- e.g. with
-    // indices in the *billions*. For such tables we use for..in, which isn't
-    // ideal because it stringifies the indices for all present elements, but
-    // it does avoid iterating over every undefined entry.
-    const map = this._map;
-    const length = map.length;
-    if (length <= 0x10000) {
-      for (let i = 0; i < length; i++) {
-        if (map[i] !== undefined) {
-          callback(i, map[i]);
-        }
-      }
-    } else {
-      for (const i in map) {
-        callback(i, map[i]);
-      }
-    }
+    this.#map.forEach(callback);
   }
 
   charCodeOf(value) {
-    // `Array.prototype.indexOf` is *extremely* inefficient for arrays which
-    // are both very sparse and very large (see issue8372.pdf).
-    const map = this._map;
-    if (map.length <= 0x10000) {
-      return map.indexOf(value);
-    }
-    for (const charCode in map) {
-      if (map[charCode] === value) {
-        return charCode | 0;
-      }
-    }
-    return -1;
+    return this.#map.charCodeOf(value);
   }
 
   getMap() {
-    return this._map;
+    return this.#map.clone();
   }
 
   readCharCode(str, offset, out) {
@@ -326,7 +307,7 @@ class CMap {
       c = ((c << 8) | str.charCodeAt(offset + n)) >>> 0;
       // Check each codespace range to see if it falls within.
       const codespaceRange = codespaceRanges[n];
-      for (let k = 0, kk = codespaceRange.length; k < kk; ) {
+      for (let k = 0, kk = codespaceRange.length; k < kk;) {
         const low = codespaceRange[k++];
         const high = codespaceRange[k++];
         if (c >= low && c <= high) {
@@ -345,7 +326,7 @@ class CMap {
     for (let n = 0, nn = codespaceRanges.length; n < nn; n++) {
       // Check each codespace range to see if it falls within.
       const codespaceRange = codespaceRanges[n];
-      for (let k = 0, kk = codespaceRange.length; k < kk; ) {
+      for (let k = 0, kk = codespaceRange.length; k < kk;) {
         const low = codespaceRange[k++];
         const high = codespaceRange[k++];
         if (charCode >= low && charCode <= high) {
@@ -356,19 +337,19 @@ class CMap {
     return 1;
   }
 
-  get length() {
-    return this._map.length;
+  get size() {
+    return this.#map.size;
   }
 
   get isIdentityCMap() {
     if (!(this.name === "Identity-H" || this.name === "Identity-V")) {
       return false;
     }
-    if (this._map.length !== 0x10000) {
+    if (this.#map.size !== 0x10000) {
       return false;
     }
     for (let i = 0; i < 0x10000; i++) {
-      if (this._map[i] !== i) {
+      if (this.#map.get(i) !== i) {
         return false;
       }
     }
@@ -421,15 +402,10 @@ class IdentityCMap extends CMap {
   }
 
   getMap() {
-    // Sometimes identity maps must be instantiated, but it's rare.
-    const map = new Array(0x10000);
-    for (let i = 0; i <= 0xffff; i++) {
-      map[i] = i;
-    }
-    return map;
+    unreachable("should not call getMap");
   }
 
-  get length() {
+  get size() {
     return 0x10000;
   }
 
@@ -641,10 +617,7 @@ async function parseCMap(cMap, lexer, fetchBuiltInCMap, useCMap) {
     // specified.
     useCMap = embeddedUseCMap;
   }
-  if (useCMap) {
-    return extendCMap(cMap, fetchBuiltInCMap, useCMap);
-  }
-  return cMap;
+  return useCMap ? extendCMap(cMap, fetchBuiltInCMap, useCMap) : cMap;
 }
 
 async function extendCMap(cMap, fetchBuiltInCMap, useCMap) {
@@ -660,7 +633,7 @@ async function extendCMap(cMap, fetchBuiltInCMap, useCMap) {
   }
   // Merge the map into the current one, making sure not to override
   // any previously defined entries.
-  cMap.useCMap.forEach(function (key, value) {
+  cMap.useCMap.forEach((key, value) => {
     if (!cMap.contains(key)) {
       cMap.mapOne(key, value);
     }
@@ -675,7 +648,7 @@ async function createBuiltInCMap(name, fetchBuiltInCMap) {
   } else if (name === "Identity-V") {
     return new IdentityCMap(true, 2);
   }
-  if (!BUILT_IN_CMAPS.includes(name)) {
+  if (!BUILT_IN_CMAPS.has(name)) {
     throw new Error("Unknown CMap name: " + name);
   }
   if (!fetchBuiltInCMap) {
@@ -712,10 +685,9 @@ class CMapFactory {
         useCMap
       );
 
-      if (parsedCMap.isIdentityCMap) {
-        return createBuiltInCMap(parsedCMap.name, fetchBuiltInCMap);
-      }
-      return parsedCMap;
+      return parsedCMap.isIdentityCMap
+        ? createBuiltInCMap(parsedCMap.name, fetchBuiltInCMap)
+        : parsedCMap;
     }
     throw new Error("Encoding required.");
   }

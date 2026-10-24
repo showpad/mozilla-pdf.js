@@ -59,15 +59,12 @@ describe("Scripting", function () {
       createSandbox(data) {
         promise.then(sbx => sbx.create(data));
       },
-      dispatchEventInSandbox(data) {
-        return promise.then(sbx => sbx.dispatchEvent(data));
-      },
+      dispatchEventInSandbox: data =>
+        promise.then(sbx => sbx.dispatchEvent(data)),
       nukeSandbox() {
         promise.then(sbx => sbx.nukeSandbox());
       },
-      eval(code, key) {
-        return promise.then(sbx => sbx.evalForTesting(code, key));
-      },
+      eval: (code, key) => promise.then(sbx => sbx.evalForTesting(code, key)),
     };
   });
 
@@ -76,6 +73,7 @@ describe("Scripting", function () {
     sandbox = null;
     send_queue = null;
     window.alert = windowAlert;
+    windowAlert = test_id = ref = null;
   });
 
   describe("Sandbox", function () {
@@ -116,12 +114,686 @@ describe("Scripting", function () {
         name: "Keystroke",
         willCommit: true,
       });
-      expect(send_queue.has(refId)).toEqual(true);
+      expect(send_queue.has(refId)).toBeTrue();
       expect(send_queue.get(refId)).toEqual({
         id: refId,
         siblings: null,
         value: expected,
         formattedValue: null,
+      });
+    });
+
+    it("should keep using the original global evaluator", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          field: [
+            {
+              id: refId,
+              value: "",
+              actions: {
+                replaceEval: [`globalThis.eval = () => { throw null; };`],
+                updateField: [`event.source.value = "updated";`],
+              },
+              type: "text",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await sandbox.dispatchEventInSandbox({ id: refId, name: "replaceEval" });
+      await sandbox.dispatchEventInSandbox({ id: refId, name: "updateField" });
+      expect(send_queue.get(refId)).toEqual({ id: refId, value: "updated" });
+    });
+
+    it("should check the radio button matching the field value", async () => {
+      const refIds = [getId(), getId()];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            {
+              id: refIds[0],
+              value: "Second",
+              exportValues: "First",
+              actions: {},
+              type: "radiobutton",
+            },
+            {
+              id: refIds[1],
+              exportValues: "Second",
+              actions: {},
+              type: "radiobutton",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(
+        `[0, 1].map(i => getField("radio").isBoxChecked(i))`
+      );
+      expect(value).toEqual([false, true]);
+    });
+
+    it("should report unchecked radio buttons and checkboxes", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            {
+              id: getId(),
+              value: "Off",
+              exportValues: "First",
+              actions: {},
+              type: "radiobutton",
+            },
+            {
+              id: getId(),
+              exportValues: "Second",
+              actions: {},
+              type: "radiobutton",
+            },
+          ],
+          checkbox: [
+            { id: getId(), exportValues: "Yes", actions: {}, type: "checkbox" },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(
+        `["radio", "checkbox"].map(name => getField(name).isBoxChecked(0))`
+      );
+      expect(value).toEqual([false, false]);
+    });
+
+    it("should ignore invalid widget indices", async () => {
+      const refIds = [getId(), getId(), getId()];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            {
+              id: refIds[0],
+              value: "First",
+              exportValues: "First",
+              actions: {},
+              type: "radiobutton",
+            },
+            {
+              id: refIds[1],
+              exportValues: "Second",
+              actions: {},
+              type: "radiobutton",
+            },
+          ],
+          checkbox: [
+            {
+              id: refIds[2],
+              value: "Yes",
+              exportValues: "Yes",
+              actions: {},
+              type: "checkbox",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const radio = getField("radio");
+        const checkbox = getField("checkbox");
+        for (const index of [0.5, NaN, "abc", "01", -1, 2, undefined]) {
+          radio.checkThisBox(index);
+          checkbox.checkThisBox(index, false);
+        }
+        return [
+          radio.value,
+          checkbox.value,
+          radio.isBoxChecked(0.5),
+          radio.isDefaultChecked(0.5),
+          radio.isBoxChecked("0"),
+        ];
+      })()`);
+      expect(value).toEqual(["First", "Yes", false, false, true]);
+      for (const id of refIds) {
+        expect(send_queue.has(id)).toBeFalse();
+      }
+    });
+
+    it("should run each radio widget's PageOpen and PageClose action chains", async () => {
+      // Each event uses its own globals.
+      const radio = (exportValues, page, chain) => ({
+        id: getId(),
+        value: "A",
+        exportValues,
+        page,
+        actions: { PageOpen: chain("Open"), PageClose: chain("Close") },
+        type: "radiobutton",
+      });
+      const increment = e => [
+        `globalThis.m${e} = (globalThis.m${e} || 0) + 1;`,
+      ];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            // Chains with the same first script.
+            radio("A", 0, e => [
+              `globalThis.n${e} = 0;`,
+              `globalThis.n${e} += 1;`,
+            ]),
+            radio("B", 0, e => [
+              `globalThis.n${e} = 0;`,
+              `globalThis.n${e} += 2;`,
+            ]),
+            // Identical chains.
+            radio("C", 1, increment),
+            radio("D", 1, increment),
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      for (const name of ["PageOpen", "PageClose"]) {
+        for (const pageNumber of [1, 2]) {
+          await sandbox.dispatchEventInSandbox({
+            id: "page",
+            name,
+            pageNumber,
+            actions: {},
+          });
+        }
+      }
+      expect(
+        await myeval(`[
+          globalThis.nOpen,
+          globalThis.mOpen,
+          globalThis.nClose,
+          globalThis.mClose,
+        ]`)
+      ).toEqual([2, 2, 2, 2]);
+    });
+
+    it("should run widget PageOpen and PageClose actions even when they match the field's", async () => {
+      const increment = e => `globalThis.n${e} = (globalThis.n${e} || 0) + 1;`;
+      const actions = {
+        PageOpen: [increment("Open")],
+        PageClose: [increment("Close")],
+      };
+      const refIds = [0, 1, 2].map(_ => getId());
+      const radio = (id, exportValues) => ({
+        id,
+        value: "A",
+        exportValues,
+        page: 0,
+        actions,
+        type: "radiobutton",
+      });
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            // Parent field with the same action chains.
+            {
+              id: refIds[0],
+              type: "",
+              kidIds: refIds.slice(1),
+              actions,
+            },
+            radio(refIds[1], "A"),
+            radio(refIds[2], "B"),
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      for (const name of ["PageOpen", "PageClose"]) {
+        await sandbox.dispatchEventInSandbox({
+          id: "page",
+          name,
+          pageNumber: 1,
+          actions: {},
+        });
+      }
+      expect(await myeval(`[globalThis.nOpen, globalThis.nClose]`)).toEqual([
+        2, 2,
+      ]);
+    });
+
+    it("should uncheck a checkbox set to a non-export value", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          checkbox: [
+            {
+              id: refId,
+              value: "Yes",
+              exportValues: "Yes",
+              actions: {},
+              type: "checkbox",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const checkbox = getField("checkbox");
+        checkbox.value = "0";
+        return [checkbox.value, checkbox.isBoxChecked(0)];
+      })()`);
+      expect(value).toEqual(["Off", false]);
+      expect(send_queue.get(refId)).toEqual({
+        id: refId,
+        siblings: [],
+        value: "Off",
+      });
+    });
+
+    it("should report checkbox defaults independently of current values", async () => {
+      const checkbox = (value, defaultValue) => [
+        {
+          id: getId(),
+          value,
+          defaultValue,
+          exportValues: "Yes",
+          actions: {},
+          type: "checkbox",
+        },
+      ];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: { off: checkbox("Yes", "Off"), on: checkbox("Off", "Yes") },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const off = getField("off");
+        const on = getField("on");
+        const before = [off.isDefaultChecked(0), on.isDefaultChecked(0)];
+        off.value = "Off";
+        on.value = "Yes";
+        return [
+          ...before,
+          off.isDefaultChecked(0),
+          off.isDefaultChecked(0.5),
+          on.isDefaultChecked(0),
+          on.isDefaultChecked(1),
+        ];
+      })()`);
+      expect(value).toEqual([false, true, false, false, true, false]);
+    });
+
+    it("should let scripts declare variables named like internal ones", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+      const names = [
+        "AForm",
+        "App",
+        "Border",
+        "Color",
+        "Console",
+        "Doc",
+        "Field",
+        "Util",
+        "initSandbox",
+      ];
+
+      const types = await myeval(
+        `[${names.map(name => `typeof ${name}`).join(", ")}]`
+      );
+      expect(types).toEqual(names.map(() => "undefined"));
+
+      const value = await myeval(
+        `globalThis.eval("${names.map(name => `var ${name} = 1;`).join(" ")} 123")`
+      );
+      expect(value).toEqual(123);
+    });
+
+    it("should select the items of a choice field by index", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          list: [
+            {
+              id: refId,
+              value: "A",
+              items: Array.from("abcdefghijk", c => ({
+                displayValue: c,
+                exportValue: c.toUpperCase(),
+              })),
+              actions: {},
+              type: "listbox",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await myeval(`(getField("list").currentValueIndices = 1, 0)`);
+      expect(send_queue.get(refId).indices).toEqual([1]);
+      expect(await myeval(`getField("list").value`)).toEqual("B");
+
+      await myeval(`(getField("list").multipleSelection = true, 0)`);
+      await myeval(`(getField("list").currentValueIndices = [10, 2], 0)`);
+      expect(send_queue.get(refId).indices).toEqual([2, 10]);
+      expect(await myeval(`getField("list").value`)).toEqual(["C", "K"]);
+    });
+
+    it("should expose scripting constants globally", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`[
+        globalThis.border === border, border.s,
+        globalThis.cursor === cursor, cursor.hidden,
+        globalThis.display === display, display.noView,
+        globalThis.font === font, font.Helv,
+        globalThis.highlight === highlight, highlight.p,
+        globalThis.position === position, position.overlay,
+        globalThis.scaleHow === scaleHow, scaleHow.proportional,
+        globalThis.scaleWhen === scaleWhen, scaleWhen.tooBig,
+        globalThis.style === style, style.ch,
+        globalThis.trans === trans, trans.replace,
+        globalThis.zoomtype === zoomtype, zoomtype.fitP,
+        globalThis.ADBE === ADBE, ADBE.Reader_Value_Asked,
+        typeof IDS_INVALID_VALUE, RE_ZIP_COMMIT[0],
+      ]`);
+      expect(value).toEqual([
+        true,
+        "solid",
+        true,
+        1,
+        true,
+        3,
+        true,
+        "Helvetica",
+        true,
+        "push",
+        true,
+        6,
+        true,
+        0,
+        true,
+        2,
+        true,
+        "check",
+        true,
+        "Replace",
+        true,
+        "FitPage",
+        true,
+        true,
+        "string",
+        "\\d{5}",
+      ]);
+    });
+
+    it("should send cleared values and sibling IDs for grouped buttons", async () => {
+      const radioIds = [getId(), getId()];
+      const checkboxIds = [getId(), getId()];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          radio: [
+            {
+              id: radioIds[0],
+              value: "First",
+              exportValues: "First",
+              actions: {},
+              type: "radiobutton",
+            },
+            {
+              id: radioIds[1],
+              exportValues: "Second",
+              actions: {},
+              type: "radiobutton",
+            },
+          ],
+          checkbox: [
+            {
+              id: checkboxIds[0],
+              value: "Yes",
+              exportValues: "Yes",
+              actions: {},
+              type: "checkbox",
+            },
+            {
+              id: checkboxIds[1],
+              exportValues: "Other",
+              actions: {},
+              type: "checkbox",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await myeval(`getField("radio").value = null`);
+      expect(send_queue.get(radioIds[0])).toEqual({
+        id: radioIds[0],
+        siblings: [radioIds[1]],
+        value: "",
+      });
+
+      await myeval(`getField("checkbox").value = "Off"`);
+      expect(send_queue.get(checkboxIds[0])).toEqual({
+        id: checkboxIds[0],
+        siblings: [checkboxIds[1]],
+        value: "Off",
+      });
+    });
+
+    it("should support custom valueOf and Number prototype methods", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        function Num(v) { this.v = v; }
+        Num.prototype.valueOf = function () { return this.v; };
+        Number.prototype.formatMoney = function () { return "$" + this; };
+        return [new Num(5) + 1, (7).formatMoney()];
+      })()`);
+      expect(value).toEqual([6, "$7"]);
+    });
+
+    it("should call detached app, color, console and util methods", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const { clearTimeOut, setTimeOut } = app;
+        clearTimeOut(setTimeOut("0", 100000));
+        const { equal } = color;
+        const { println } = console;
+        println("Hello");
+        const { scand } = util;
+        return [
+          equal(color.black, ["RGB", 0, 0, 0]),
+          scand("yyyy", "2020").getFullYear(),
+        ];
+      })()`);
+      expect(value).toEqual([true, 2020]);
+      expect(send_queue.get("println")).toEqual({
+        command: "println",
+        value: "PDF.js Console:: Hello",
+      });
+    });
+
+    it("should send display and value updates for descendant fields", async () => {
+      const refIds = [0, 1, 2, 3].map(_ => getId());
+      const text = id => ({ id, value: "", actions: {}, type: "text" });
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          A: [{ id: refIds[0], type: "", kidIds: [refIds[1], refIds[2]] }],
+          "A.B": [text(refIds[1])],
+          "A.C": [{ id: refIds[2], type: "", kidIds: [refIds[3]] }],
+          "A.C.D": [text(refIds[3])],
+        },
+        calculationOrder: [],
+      });
+
+      await myeval(
+        `(getField("A").display = display.hidden, getField("A").value = "a", 0)`
+      );
+      for (const id of [refIds[1], refIds[3]]) {
+        expect(send_queue.get(id)).toEqual({ id, display: 1, value: "a" });
+      }
+      expect(send_queue.has(refIds[0])).toBeFalse();
+      expect(send_queue.has(refIds[2])).toBeFalse();
+    });
+
+    it("should propagate textSize, defaultValue and selection indices to descendants", async () => {
+      const refIds = [0, 1, 2, 3, 4].map(_ => getId());
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          A: [{ id: refIds[0], type: "", kidIds: [refIds[1], refIds[2]] }],
+          "A.B": [
+            {
+              id: refIds[1],
+              value: "",
+              defaultValue: "",
+              actions: {},
+              type: "text",
+            },
+          ],
+          "A.C": [
+            {
+              id: refIds[2],
+              value: "a",
+              items: [
+                { displayValue: "a", exportValue: "a" },
+                { displayValue: "b", exportValue: "b" },
+              ],
+              actions: {},
+              type: "listbox",
+            },
+          ],
+          D: [{ id: refIds[3], type: "", kidIds: [refIds[4]] }],
+          "D.E": [{ id: refIds[4], value: "", actions: {}, type: "text" }],
+        },
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const field = getField("A");
+        field.textSize = 12;
+        field.defaultValue = "hello";
+        field.currentValueIndices = 1;
+        getField("D").textSize = 7;
+        resetForm(["A.B"]);
+        return [
+          getField("A.B").textSize,
+          getField("A.B").value,
+          getField("A.C").value,
+          getField("D.E").textSize,
+          field.textSize,
+          Object.keys(field).includes("textSize"),
+        ];
+      })()`);
+      expect(value).toEqual([12, "hello", "b", 7, 12, true]);
+    });
+
+    it("should handle ResetForm without sending field updates", async () => {
+      const refIds = [0, 1, 2].map(_ => getId());
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          combo: [
+            {
+              id: refIds[0],
+              value: "B",
+              defaultValue: null,
+              items: [
+                { displayValue: "A", exportValue: "A" },
+                { displayValue: "B", exportValue: "B" },
+              ],
+              actions: {},
+              type: "combobox",
+            },
+          ],
+          radio: [
+            {
+              id: refIds[1],
+              value: "Second",
+              defaultValue: "First",
+              exportValues: "First",
+              actions: {},
+              type: "radiobutton",
+            },
+            {
+              id: refIds[2],
+              exportValues: "Second",
+              actions: {},
+              type: "radiobutton",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await sandbox.dispatchEventInSandbox({
+        id: "app",
+        name: "ResetForm",
+        ids: refIds,
+      });
+      for (const id of refIds) {
+        expect(send_queue.has(id)).toBeFalse();
+      }
+      const value = await myeval(`[
+        getField("combo").value,
+        getField("combo").currentValueIndices,
+        getField("radio").value,
+        getField("radio").isBoxChecked(0),
+      ]`);
+      expect(value).toEqual(["B", 1, "First", true]);
+    });
+
+    it("should send list box multipleSelection changes", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          list: [
+            {
+              id: refId,
+              value: "A",
+              items: [
+                { displayValue: "a", exportValue: "A" },
+                { displayValue: "b", exportValue: "B" },
+              ],
+              actions: {},
+              type: "listbox",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await myeval(`(getField("list").multipleSelection = true, 0)`);
+      expect(send_queue.get(refId)).toEqual({
+        id: refId,
+        multipleSelection: true,
       });
     });
   });
@@ -199,6 +871,119 @@ describe("Scripting", function () {
       );
       expect(value).toEqual([4, 5, 6, 7]);
     });
+
+    it("should reset the descendants of a non-terminal field", async () => {
+      const refIds = [0, 1, 2, 3, 4].map(_ => getId());
+      const text = id => ({
+        id,
+        value: "",
+        defaultValue: "",
+        actions: {},
+        type: "text",
+      });
+      const data = {
+        objects: {
+          A: [{ id: refIds[0], type: "", kidIds: [refIds[1], refIds[2]] }],
+          "A.B": [text(refIds[1])],
+          "A.C": [{ id: refIds[2], type: "", kidIds: [refIds[3]] }],
+          "A.C.D": [text(refIds[3])],
+          E: [text(refIds[4])],
+        },
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        calculationOrder: [],
+        dispatchEventName: "_dispatchMe",
+      };
+      sandbox.createSandbox(data);
+
+      await myeval(
+        `(["A.B", "A.C.D", "E"].forEach(n => this.getField(n).value = "hello"), 0)`
+      );
+      for (const id of [refIds[1], refIds[3], refIds[4]]) {
+        send_queue.delete(id);
+      }
+
+      await myeval(`(this.resetForm(["A"]), 0)`);
+
+      for (const id of [refIds[1], refIds[3]]) {
+        expect(send_queue.get(id)).toEqual({
+          id,
+          siblings: null,
+          value: "",
+          formattedValue: null,
+          selRange: [0, 0],
+        });
+      }
+      expect(send_queue.has(refIds[4])).toBeFalse();
+
+      const values = await myeval(
+        `["A.B", "A.C.D", "E"].map(n => this.getField(n).value)`
+      );
+      expect(values).toEqual(["", "", "hello"]);
+    });
+
+    it("should run OpenAction once, after formatting", async () => {
+      const push = name => `(globalThis.run ??= []).push("${name}");`;
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        docInfo: { actions: { OpenAction: [push("OpenAction")] } },
+        objects: {
+          field: [
+            {
+              id: getId(),
+              value: "",
+              actions: { Format: [push("Format")] },
+              type: "text",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await sandbox.dispatchEventInSandbox({ id: "doc", name: "Open" });
+      expect(await myeval(`globalThis.run`)).toEqual(["Format", "OpenAction"]);
+    });
+
+    it("should preserve an unparsable date on document open", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          date: [
+            {
+              id: refId,
+              value: "2024",
+              hasDatetimeHTML: true,
+              datetimeFormat: "mm/dd/yyyy",
+              actions: { Format: [`AFDate_FormatEx("mm/dd/yyyy");`] },
+              type: "text",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      expect(await myeval(`util.scand("mm/dd/yyyy", "2024")`)).toBeNull();
+      await sandbox.dispatchEventInSandbox({ id: "doc", name: "Open" });
+      expect(send_queue.has(refId)).toBeFalse();
+      expect(await myeval(`getField("date").value`)).toEqual("2024");
+    });
+
+    it("should tell when the WillSave actions have run", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        docInfo: {
+          actions: { WillSave: [`throw new Error("WillSave error");`] },
+        },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      // An action error must not suppress the completion reply.
+      await sandbox.dispatchEventInSandbox({ id: "doc", name: "WillSave" });
+      expect(send_queue.has("WillSaveFinished")).toEqual(true);
+      send_queue.delete("WillSaveFinished");
+      send_queue.delete("error");
+    });
   });
 
   describe("Util", function () {
@@ -228,6 +1013,15 @@ describe("Scripting", function () {
         value = await myeval(`util.printd("dddd ddd dd d", ${date})`);
         expect(value).toEqual("Sunday Sun 15 15");
       });
+
+      it("should preserve escaped characters in date formats", async () => {
+        const date = `new Date("Sun Apr 15 2007 03:14:15")`;
+        const format = String.raw`\m mm \d dd \\ \é`;
+        const value = await myeval(
+          `util.printd(${JSON.stringify(format)}, ${date})`
+        );
+        expect(value).toEqual("m 04 d 15 \\ é");
+      });
     });
 
     describe("scand", function () {
@@ -249,6 +1043,22 @@ describe("Scripting", function () {
 
         value = await myeval(`util.scand("mmddyyyy", "07a15b2007").toString()`);
         expect(new Date(value)).toEqual(new Date("07/15/2007 12:00:00"));
+      });
+
+      it("should parse several dates with the same format", async () => {
+        const value = await myeval(
+          `["3:30 pm", "4:45 pm", "9:15 pm"].map(d => util.scand("h:MM tt", d).getHours())`
+        );
+        expect(value).toEqual([15, 16, 21]);
+      });
+
+      it("should handle a format with repeated specifiers", async () => {
+        const cFormat = "Hm".repeat(40);
+        const cDate = `${"1".repeat(84)}x`;
+        const value = await myeval(
+          `util.scand("${cFormat}", "${cDate}")?.toString() ?? "null"`
+        );
+        expect(value).toEqual("null");
       });
     });
 
@@ -295,6 +1105,9 @@ describe("Scripting", function () {
 
         value = await myeval(`util.printf("Decimal number: %,0.0f", -4.49)`);
         expect(value).toEqual("Decimal number: -4");
+
+        value = await myeval(`util.printf("Decimal number: %,0.2f", -0.5)`);
+        expect(value).toEqual("Decimal number: -0.50");
       });
 
       it("should print a string with no argument", async () => {
@@ -346,10 +1159,181 @@ describe("Scripting", function () {
         willCommit: true,
       });
 
-      expect(send_queue.has(refId)).toEqual(true);
+      expect(send_queue.has(refId)).toBeTrue();
       expect(send_queue.get(refId)).toEqual({
         id: refId,
         value: "123",
+      });
+    });
+
+    it("should report null and run the next action", async () => {
+      const refId = getId();
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          field: [
+            {
+              id: refId,
+              value: "",
+              actions: {
+                custom: ["throw null;", "globalThis.nextAction = true;"],
+              },
+              type: "text",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await sandbox.dispatchEventInSandbox({ id: refId, name: "custom" });
+      expect(send_queue.get("error")).toEqual({
+        command: "error",
+        value: `Error when executing "custom" for field "${refId}"\nnull`,
+      });
+      send_queue.delete("error");
+      expect(await myeval(`globalThis.nextAction`)).toEqual(true);
+    });
+
+    it("should report errors when string conversion or stack access throws", async () => {
+      const refId = getId();
+      const cases = {
+        throwingToString: ["({ toString() { throw 1; } })", "Unknown error"],
+        nullPrototype: ["Object.create(null)", "Unknown error"],
+        throwingStack: ["({ get stack() { throw 2; } })", "[object Object]"],
+      };
+      const actions = Object.create(null);
+      for (const [name, [thrown]] of Object.entries(cases)) {
+        actions[name] = [`throw ${thrown};`];
+      }
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {
+          field: [{ id: refId, value: "", actions, type: "text" }],
+        },
+        calculationOrder: [],
+      });
+
+      for (const [name, [, expected]] of Object.entries(cases)) {
+        send_queue.delete("error");
+        await sandbox.dispatchEventInSandbox({ id: refId, name });
+        expect(send_queue.get("error"))
+          .withContext(name)
+          .toEqual({
+            command: "error",
+            value: `Error when executing "${name}" for field "${refId}"\n${expected}`,
+          });
+      }
+      send_queue.delete("error");
+    });
+
+    it("should report errors from fields without widgets", async () => {
+      const refIds = [getId(), getId()];
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        docInfo: { actions: { OpenAction: ["globalThis.openAction = true;"] } },
+        objects: {
+          A: [
+            {
+              id: refIds[0],
+              type: "",
+              kidIds: [refIds[1]],
+              actions: { Format: [`throw new Error("Broken");`] },
+            },
+          ],
+          "A.B": [
+            {
+              id: refIds[1],
+              value: "",
+              actions: { Format: ["globalThis.kidFormat = true;"] },
+              type: "text",
+            },
+          ],
+        },
+        calculationOrder: [],
+      });
+
+      await sandbox.dispatchEventInSandbox({ id: "doc", name: "Open" });
+      expect(send_queue.get("error").value.split("\n").slice(0, 2)).toEqual([
+        `Error when executing "Format" for field "${refIds[0]}"`,
+        "Error: Broken",
+      ]);
+      send_queue.delete("error");
+      expect(
+        await myeval(`[globalThis.kidFormat, globalThis.openAction]`)
+      ).toEqual([true, true]);
+    });
+
+    it("should trigger an event added with setAction", async () => {
+      const refId = getId();
+      const data = {
+        objects: {
+          field: [
+            {
+              id: refId,
+              value: "",
+              actions: {},
+              type: "text",
+            },
+          ],
+        },
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        calculationOrder: [],
+      };
+      sandbox.createSandbox(data);
+
+      await myeval(
+        `(this.getField("field").setAction("test", 'event.source.value = "abc";'), 0)`
+      );
+
+      await sandbox.dispatchEventInSandbox({
+        id: refId,
+        value: "",
+        name: "test",
+        willCommit: true,
+      });
+
+      expect(send_queue.has(refId)).toBeTrue();
+      expect(send_queue.get(refId)).toEqual({
+        id: refId,
+        value: "abc",
+      });
+    });
+
+    it("should trigger an event appended with setAction", async () => {
+      const refId = getId();
+      const data = {
+        objects: {
+          field: [
+            {
+              id: refId,
+              value: "",
+              actions: {
+                test: [`event.source.value = "a";`],
+              },
+              type: "text",
+            },
+          ],
+        },
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        calculationOrder: [],
+      };
+      sandbox.createSandbox(data);
+
+      await myeval(
+        `(this.getField("field").setAction("test", 'event.source.value += "b";'), 0)`
+      );
+
+      await sandbox.dispatchEventInSandbox({
+        id: refId,
+        value: "",
+        name: "test",
+        willCommit: true,
+      });
+
+      expect(send_queue.has(refId)).toBeTrue();
+      expect(send_queue.get(refId)).toEqual({
+        id: refId,
+        value: "ab",
       });
     });
 
@@ -382,7 +1366,7 @@ describe("Scripting", function () {
         selEnd: 4,
       });
 
-      expect(send_queue.has(refId)).toEqual(true);
+      expect(send_queue.has(refId)).toBeTrue();
       expect(send_queue.get(refId)).toEqual({
         id: refId,
         siblings: null,
@@ -420,7 +1404,7 @@ describe("Scripting", function () {
         selEnd: 4,
       });
 
-      expect(send_queue.has(refId)).toEqual(true);
+      expect(send_queue.has(refId)).toBeTrue();
       expect(send_queue.get(refId)).toEqual({
         id: refId,
         siblings: null,
@@ -454,7 +1438,7 @@ describe("Scripting", function () {
         name: "test",
         willCommit: true,
       });
-      expect(send_queue.has(refId)).toEqual(false);
+      expect(send_queue.has(refId)).toBeFalse();
     });
 
     it("should trigger a valid commit Keystroke event", async () => {
@@ -494,7 +1478,7 @@ describe("Scripting", function () {
         willCommit: true,
       });
 
-      expect(send_queue.has(refId1)).toEqual(true);
+      expect(send_queue.has(refId1)).toBeTrue();
       expect(send_queue.get(refId1)).toEqual({
         id: refId1,
         siblings: null,
@@ -581,6 +1565,18 @@ describe("Scripting", function () {
       value = await myeval(`color.convert(["T"], "CMYK")`);
       expect(round(value)).toEqual(["CMYK", 0, 0, 0, 1]);
     });
+
+    it("should make added colors enumerable", async () => {
+      const value = await myeval(`(() => {
+        color.purple = ["RGB", 0.5, 0, 0.5];
+        const names = [];
+        for (const name in color) {
+          names.push(name);
+        }
+        return [color.purple, names.includes("purple"), names.includes("convert")];
+      })()`);
+      expect(value).toEqual([["RGB", 0.5, 0, 0.5], true, false]);
+    });
   });
 
   describe("App", function () {
@@ -636,7 +1632,7 @@ describe("Scripting", function () {
         name: "Keystroke",
         willCommit: true,
       });
-      expect(send_queue.has("alert")).toEqual(true);
+      expect(send_queue.has("alert")).toBeTrue();
       expect(send_queue.get("alert")).toEqual({
         command: "alert",
         value: "hello",
@@ -650,8 +1646,56 @@ describe("Scripting", function () {
         name: "Keystroke",
         willCommit: true,
       });
-      expect(send_queue.has("alert")).toEqual(false);
+      expect(send_queue.has("alert")).toBeFalse();
       send_queue.delete(refId);
+    });
+
+    it("should ignore an invalid timeout", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      const value = await myeval(`(() => {
+        const timeout = app.setTimeOut("0", 100000);
+        app.clearTimeOut(timeout);
+        app.clearTimeOut(timeout);
+        app.clearTimeOut(undefined);
+        app.clearInterval(42);
+        app.clearInterval({});
+        return "ok";
+      })()`);
+      expect(value).toEqual("ok");
+    });
+
+    it("should cancel a cleared timeout", async () => {
+      sandbox.createSandbox({
+        appInfo: { language: "en-US", platform: "Linux x86_64" },
+        objects: {},
+        calculationOrder: [],
+      });
+
+      await myeval(`(() => {
+        globalThis.run = [];
+        app.clearTimeOut(app.setTimeOut("run.push('timeout');", 0));
+        app.clearInterval(app.setInterval("run.push('interval');", 0));
+        // Keep the handle alive to prevent cancellation by GC.
+        globalThis.kept = app.setTimeOut("run.push('kept');", 0);
+        return 0;
+      })()`);
+      // Earlier timers would run before the retained timeout.
+      let run;
+      for (let i = 0; i < 100; i++) {
+        run = await myeval(`globalThis.run`);
+        if (run.length > 0) {
+          break;
+        }
+        await new Promise(resolve => {
+          setTimeout(resolve, 10);
+        });
+      }
+      expect(run).toEqual(["kept"]);
     });
   });
 
@@ -669,10 +1713,10 @@ describe("Scripting", function () {
       it("should parse a date with a format", async () => {
         const check = async (date, format, expected) => {
           const value = await myeval(
-            `AFParseDateEx("${date}", "${format}").toISOString().replace(/T.*$/, "")`
+            `AFParseDateEx("${date}", "${format}").toISOString().replace(/T.*/, "")`
           );
           expect(value).toEqual(
-            new Date(expected).toISOString().replace(/T.*$/, "")
+            new Date(expected).toISOString().replace(/T.*/, "")
           );
         };
 
@@ -727,7 +1771,7 @@ describe("Scripting", function () {
         expect(value).toEqual(-123.456);
 
         value = await myeval(`AFMakeNumber("not a number")`);
-        expect(value).toEqual(null);
+        expect(value).toBeNull();
       });
     });
 
@@ -791,7 +1835,7 @@ describe("Scripting", function () {
           value: "0",
           name: "test1",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "0.00€",
@@ -803,7 +1847,7 @@ describe("Scripting", function () {
           value: "",
           name: "test6",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "0.00€",
@@ -815,7 +1859,7 @@ describe("Scripting", function () {
           value: "123456.789",
           name: "test1",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "123,456.79€",
@@ -827,7 +1871,7 @@ describe("Scripting", function () {
           value: "223456.789",
           name: "test2",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "$223456,8",
@@ -839,7 +1883,7 @@ describe("Scripting", function () {
           value: "-323456.789",
           name: "test3",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "323,456.79€",
@@ -852,7 +1896,7 @@ describe("Scripting", function () {
           value: "-423456.789",
           name: "test4",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "(423,456.79€)",
@@ -864,7 +1908,7 @@ describe("Scripting", function () {
           value: "-52345.678",
           name: "test5",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "(52,345.68€)",
@@ -904,7 +1948,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -943,7 +1987,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has("alert")).toEqual(true);
+        expect(send_queue.has("alert")).toBeTrue();
         expect(send_queue.get("alert")).toEqual({
           command: "alert",
           value:
@@ -986,7 +2030,7 @@ describe("Scripting", function () {
           value: "0.456789",
           name: "test1",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "45.68%",
@@ -998,7 +2042,7 @@ describe("Scripting", function () {
           value: "0.456789",
           name: "test2",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "%45.68",
@@ -1036,7 +2080,7 @@ describe("Scripting", function () {
           value: "Sun Apr 15 2007 03:14:15",
           name: "test1",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "4/15",
@@ -1048,7 +2092,7 @@ describe("Scripting", function () {
           value: "Sun Apr 15 2007 03:14:15",
           name: "test2",
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           value: "4/15/07 3:14 am",
@@ -1083,7 +2127,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1098,7 +2142,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1114,7 +2158,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1130,7 +2174,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1169,7 +2213,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1205,7 +2249,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has("alert")).toEqual(true);
+        expect(send_queue.has("alert")).toBeTrue();
         expect(send_queue.get("alert")).toEqual({
           command: "alert",
           value:
@@ -1280,7 +2324,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1294,7 +2338,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1308,7 +2352,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1316,7 +2360,7 @@ describe("Scripting", function () {
           formattedValue: null,
         });
 
-        expect(send_queue.has(refIds[4])).toEqual(true);
+        expect(send_queue.has(refIds[4])).toBeTrue();
         expect(send_queue.get(refIds[4])).toEqual({
           id: refIds[4],
           siblings: null,
@@ -1386,7 +2430,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[5])).toEqual(true);
+        expect(send_queue.has(refIds[5])).toBeTrue();
         expect(send_queue.get(refIds[5])).toEqual({
           id: refIds[5],
           siblings: null,
@@ -1400,7 +2444,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[5])).toEqual(true);
+        expect(send_queue.has(refIds[5])).toBeTrue();
         expect(send_queue.get(refIds[5])).toEqual({
           id: refIds[5],
           siblings: null,
@@ -1474,7 +2518,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1488,7 +2532,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1502,7 +2546,7 @@ describe("Scripting", function () {
           name: "Keystroke",
           willCommit: true,
         });
-        expect(send_queue.has(refIds[3])).toEqual(true);
+        expect(send_queue.has(refIds[3])).toBeTrue();
         expect(send_queue.get(refIds[3])).toEqual({
           id: refIds[3],
           siblings: null,
@@ -1510,7 +2554,7 @@ describe("Scripting", function () {
           formattedValue: null,
         });
 
-        expect(send_queue.has(refIds[4])).toEqual(true);
+        expect(send_queue.has(refIds[4])).toBeTrue();
         expect(send_queue.get(refIds[4])).toEqual({
           id: refIds[4],
           siblings: null,
@@ -1550,7 +2594,7 @@ describe("Scripting", function () {
           selStart: 0,
           selEnd: 0,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         send_queue.delete(refId);
 
         await sandbox.dispatchEventInSandbox({
@@ -1562,7 +2606,7 @@ describe("Scripting", function () {
           selStart: 1,
           selEnd: 1,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         send_queue.delete(refId);
 
         await sandbox.dispatchEventInSandbox({
@@ -1574,7 +2618,7 @@ describe("Scripting", function () {
           selStart: 2,
           selEnd: 2,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         send_queue.delete(refId);
 
         await sandbox.dispatchEventInSandbox({
@@ -1586,7 +2630,7 @@ describe("Scripting", function () {
           selStart: 3,
           selEnd: 3,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1604,7 +2648,7 @@ describe("Scripting", function () {
           selStart: 3,
           selEnd: 3,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         send_queue.delete(refId);
 
         await sandbox.dispatchEventInSandbox({
@@ -1615,7 +2659,7 @@ describe("Scripting", function () {
           selStart: 4,
           selEnd: 4,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1662,7 +2706,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1676,7 +2720,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1723,7 +2767,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1737,7 +2781,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1784,7 +2828,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1798,7 +2842,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1845,7 +2889,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1859,7 +2903,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1906,7 +2950,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1920,7 +2964,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1967,7 +3011,7 @@ describe("Scripting", function () {
             selStart: i,
             selEnd: i,
           });
-          expect(send_queue.has(refId)).toEqual(true);
+          expect(send_queue.has(refId)).toBeTrue();
           send_queue.delete(refId);
           value += change;
         }
@@ -1981,7 +3025,7 @@ describe("Scripting", function () {
           selStart: i,
           selEnd: i,
         });
-        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.has(refId)).toBeTrue();
         expect(send_queue.get(refId)).toEqual({
           id: refId,
           siblings: null,
@@ -1996,20 +3040,20 @@ describe("Scripting", function () {
     describe("eMailValidate", function () {
       it("should validate an e-mail address", async () => {
         let value = await myeval(`eMailValidate(123)`);
-        expect(value).toEqual(false);
+        expect(value).toBeFalse();
 
         value = await myeval(`eMailValidate("foo@bar.com")`);
-        expect(value).toEqual(true);
+        expect(value).toBeTrue();
 
         value = await myeval(`eMailValidate("foo bar")`);
-        expect(value).toEqual(false);
+        expect(value).toBeFalse();
       });
     });
 
     describe("AFExactMatch", function () {
       it("should check matching between regexs and a string", async () => {
         let value = await myeval(`AFExactMatch(/\\d+/, "123")`);
-        expect(value).toEqual(true);
+        expect(value).toBeTrue();
 
         value = await myeval(`AFExactMatch(/\\d+/, "foo")`);
         expect(value).toEqual(0);

@@ -17,6 +17,8 @@ import {
   bytesToString,
   FormatError,
   info,
+  isArrayEqual,
+  makeArr,
   shadow,
   stringToBytes,
   Util,
@@ -28,10 +30,59 @@ import {
   ISOAdobeCharset,
 } from "./charsets.js";
 import { ExpertEncoding, StandardEncoding } from "./encodings.js";
-import { readInt16 } from "./core_utils.js";
+import { DataBuilder } from "./data_builder.js";
+import { MathClamp } from "../shared/math_clamp.js";
 
 // Maximum subroutine call depth of type 2 charstrings. Matches OTS.
 const MAX_SUBR_NESTING = 10;
+
+// Per-glyph token limit, including subroutines.
+const MAX_CHARSTRING_TOKENS = 64 * 1024 * 1024;
+
+// Type 2 operand stack limit (OTS).
+const MAX_STACK_SIZE = 48;
+
+// CFF FDSelect uses Card8 indices, so only 256 font DICTs are addressable.
+const MAX_FD_ARRAY_COUNT = 256;
+
+function removeCharStringBytes(cursor, data, start, end) {
+  const { readStart } = cursor;
+  if (start > readStart) {
+    data.copyWithin(cursor.writePos, readStart, start);
+    cursor.writePos += start - readStart;
+  }
+  cursor.readStart = end;
+}
+
+// A charstring with only an optional width and endchar has no outline.
+function isEmptyCharString(data) {
+  const b0 = data[0];
+  let pos = 0;
+  if (b0 === 28) {
+    pos = 3;
+  } else if (b0 >= 32 && b0 <= 246) {
+    pos = 1;
+  } else if (b0 >= 247 && b0 <= 254) {
+    pos = 2;
+  } else if (b0 === 255) {
+    pos = 5;
+  }
+  return data[pos] === 14;
+}
+
+function looksLikeUnsigned16BitNegative(coord) {
+  return coord > 0x7fff && coord <= 0xffff;
+}
+
+function recoverSigned16BitBBox(bbox, onlyLowerLeft = false) {
+  return Util.normalizeRect(
+    bbox.map((coord, i) =>
+      (!onlyLowerLeft || i < 2) && looksLikeUnsigned16BitNegative(coord)
+        ? coord - 0x10000
+        : coord
+    )
+  );
+}
 
 /**
  * The CFF class takes a Type1 file and wrap it into a
@@ -107,6 +158,11 @@ const CFFStandardStrings = [
 ];
 
 const NUM_STANDARD_CFF_STRINGS = 391;
+
+const DEFAULT_BLUE_SCALE = 0.039625;
+const DEFAULT_BLUE_SHIFT = 7;
+const DEFAULT_BLUE_FUZZ = 1;
+const DEFAULT_EXPANSION_FACTOR = 0.06;
 
 const CharstringValidationData = [
   /*  0 */ null,
@@ -220,6 +276,12 @@ const CharstringValidationData12 = [
 ];
 
 class CFFParser {
+  #privateDicts = new Map();
+
+  #privateDataLength = 0;
+
+  #subrsIndexes = new Map();
+
   constructor(file, properties, seacAnalysisEnabled) {
     this.bytes = file.getBytes();
     this.properties = properties;
@@ -228,7 +290,7 @@ class CFFParser {
 
   parse() {
     const properties = this.properties;
-    const cff = new CFF();
+    const cff = new CFF(this.bytes.length);
     this.cff = cff;
 
     // The first five sections must be in order, all the others are reached
@@ -262,8 +324,39 @@ class CFFParser {
       properties.fontMatrix = fontMatrix;
     }
 
-    const fontBBox = topDict.getByName("FontBBox");
-    if (fontBBox) {
+    let fontBBox = topDict.getByName("FontBBox");
+    const descriptorBBox = properties.bbox?.some(coord => coord !== 0)
+      ? recoverSigned16BitBBox(properties.bbox)
+      : null;
+    const cffBBoxHasUnsignedLowerLeft = fontBBox
+      ?.slice(0, 2)
+      .some(looksLikeUnsigned16BitNegative);
+    const cffBBoxHasUnsignedCoords = fontBBox?.some(
+      looksLikeUnsigned16BitNegative
+    );
+    if (fontBBox?.every(coord => coord === 0) && descriptorBBox) {
+      // The CFF FontBBox is empty, hence fall back to the FontDescriptor bbox.
+      fontBBox = descriptorBBox;
+      topDict.setByName("FontBBox", fontBBox);
+    } else if (cffBBoxHasUnsignedCoords) {
+      const recoveredFontBBox = recoverSigned16BitBBox(fontBBox);
+      const descriptorCorroborates =
+        descriptorBBox &&
+        properties.bbox.some(coord => coord < 0) &&
+        !properties.bbox.some(looksLikeUnsigned16BitNegative) &&
+        isArrayEqual(recoveredFontBBox, descriptorBBox);
+
+      if (descriptorCorroborates || cffBBoxHasUnsignedLowerLeft) {
+        // Some Ghostscript-generated CFF fonts encode negative lower-left
+        // coordinates as unsigned 16-bit values. Preserve large upper-right
+        // coordinates unless the descriptor independently confirms the repair.
+        fontBBox = descriptorCorroborates
+          ? recoveredFontBBox
+          : recoverSigned16BitBBox(fontBBox, /* onlyLowerLeft = */ true);
+        topDict.setByName("FontBBox", fontBBox);
+      }
+    }
+    if (fontBBox?.some(coord => coord !== 0)) {
       // adjusting ascent/descent
       properties.ascent = Math.max(fontBBox[3], fontBBox[1]);
       properties.descent = Math.min(fontBBox[1], fontBBox[3]);
@@ -273,7 +366,12 @@ class CFFParser {
     let charset, encoding;
     if (cff.isCIDFont) {
       const fdArrayIndex = this.parseIndex(topDict.getByName("FDArray")).obj;
-      for (let i = 0, ii = fdArrayIndex.count; i < ii; ++i) {
+      let fdArrayCount = fdArrayIndex.count;
+      if (fdArrayCount > MAX_FD_ARRAY_COUNT) {
+        warn(`CFFParser.parse: too many FDArray entries (${fdArrayCount}).`);
+        fdArrayCount = MAX_FD_ARRAY_COUNT;
+      }
+      for (let i = 0; i < fdArrayCount; ++i) {
         const dictRaw = fdArrayIndex.get(i);
         const fontDict = this.createDict(
           CFFTopDict,
@@ -355,6 +453,7 @@ class CFFParser {
   }
 
   parseDict(dict) {
+    const view = new DataView(dict.buffer, dict.byteOffset, dict.bytesLength);
     let pos = 0;
 
     function parseOperand() {
@@ -362,14 +461,12 @@ class CFFParser {
       if (value === 30) {
         return parseFloatOperand();
       } else if (value === 28) {
-        value = readInt16(dict, pos);
+        value = view.getInt16(pos);
         pos += 2;
         return value;
       } else if (value === 29) {
-        value = dict[pos++];
-        value = (value << 8) | dict[pos++];
-        value = (value << 8) | dict[pos++];
-        value = (value << 8) | dict[pos++];
+        value = view.getInt32(pos);
+        pos += 4;
         return value;
       } else if (value >= 32 && value <= 246) {
         return value - 139;
@@ -378,7 +475,7 @@ class CFFParser {
       } else if (value >= 251 && value <= 254) {
         return -((value - 251) * 256) - dict[pos++] - 108;
       }
-      warn('CFFParser_parseDict: "' + value + '" is a reserved command.');
+      warn(`CFFParser.parseDict: "${value}" is a reserved command.`);
       return NaN;
     }
 
@@ -438,16 +535,22 @@ class CFFParser {
 
     if (count !== 0) {
       const offsetSize = bytes[pos++];
-      // add 1 for offset to determine size of last object
+      if (offsetSize < 1 || offsetSize > 4) {
+        throw new FormatError(`Invalid CFF INDEX offset size: ${offsetSize}`);
+      }
+      // Offsets are relative to the byte before the object data.
       const startPos = pos + (count + 1) * offsetSize - 1;
+      const bytesLength = bytes.length;
+      // Clamp offsets to prevent out-of-bounds or overlapping entries.
+      let prevOffset = startPos;
 
       for (i = 0, ii = count + 1; i < ii; ++i) {
         let offset = 0;
         for (let j = 0; j < offsetSize; ++j) {
-          offset <<= 8;
-          offset += bytes[pos++];
+          offset = (offset << 8) | bytes[pos++];
         }
-        offsets.push(startPos + offset);
+        prevOffset = MathClamp(startPos + offset, prevOffset, bytesLength);
+        offsets.push(prevOffset);
       }
       end = offsets[count];
     }
@@ -489,13 +592,43 @@ class CFFParser {
     if (!data || state.callDepth > MAX_SUBR_NESTING) {
       return false;
     }
+    const cursor = { readStart: 0, writePos: 0 };
+    try {
+      return this.#parseCharString(
+        state,
+        data,
+        localSubrIndex,
+        globalSubrIndex,
+        cursor
+      );
+    } finally {
+      const { readStart, writePos } = cursor;
+      if (readStart > 0) {
+        data.copyWithin(writePos, readStart);
+        data.fill(/* endchar = */ 14, data.length - readStart + writePos);
+      }
+    }
+  }
+
+  #parseCharString(state, data, localSubrIndex, globalSubrIndex, cursor) {
+    const view = new DataView(data.buffer, data.byteOffset, data.bytesLength);
     let stackSize = state.stackSize;
-    const stack = state.stack;
+    const { stack, argStarts } = state;
 
-    let length = data.length;
+    const length = data.length;
 
-    for (let j = 0; j < length; ) {
+    for (let j = 0; j < length;) {
+      // Track operand byte offsets, including the following operator.
+      // A negative first offset marks operands unsafe to remove.
+      argStarts[stackSize] = j;
       const value = data[j++];
+      if (
+        ++state.tokens > MAX_CHARSTRING_TOKENS ||
+        stackSize > MAX_STACK_SIZE
+      ) {
+        warn("Charstring exceeds the execution limits.");
+        return false;
+      }
       let validationCommand = null;
       if (value === 12) {
         const q = data[j++];
@@ -513,7 +646,7 @@ class CFFParser {
         }
       } else if (value === 28) {
         // number (16 bit)
-        stack[stackSize] = readInt16(data, j);
+        stack[stackSize] = view.getInt16(j);
         j += 2;
         stackSize++;
       } else if (value === 14) {
@@ -539,21 +672,14 @@ class CFFParser {
         stackSize++;
       } else if (value === 255) {
         // number (32 bit)
-        stack[stackSize] =
-          ((data[j] << 24) |
-            (data[j + 1] << 16) |
-            (data[j + 2] << 8) |
-            data[j + 3]) /
-          65536;
+        stack[stackSize] = view.getInt32(j) / 65536;
         j += 4;
         stackSize++;
       } else if (value === 19 || value === 20) {
         state.hints += stackSize >> 1;
         if (state.hints === 0) {
           // Not a valid value (see bug 1529502): just remove it.
-          data.copyWithin(j - 1, j, -1);
-          j -= 1;
-          length -= 1;
+          removeCharStringBytes(cursor, data, j - 1, j);
           continue;
         }
         // skipping right amount of hints flag data
@@ -596,6 +722,7 @@ class CFFParser {
         }
         state.callDepth--;
         stackSize = state.stackSize;
+        argStarts[0] = -1;
         continue;
       } else if (value === 11) {
         state.stackSize = stackSize;
@@ -608,9 +735,7 @@ class CFFParser {
         validationCommand = CharstringValidationData[14];
       } else if (value === 9) {
         // Not a valid value.
-        data.copyWithin(j - 1, j, -1);
-        j -= 1;
-        length -= 1;
+        removeCharStringBytes(cursor, data, j - 1, j);
         continue;
       } else {
         validationCommand = CharstringValidationData[value];
@@ -648,21 +773,30 @@ class CFFParser {
           }
           return false;
         }
-        if (state.firstStackClearing && validationCommand.stackClearing) {
-          state.firstStackClearing = false;
-          // the optional character width can be found before the first
-          // stack-clearing command arguments
-          stackSize -= validationCommand.min;
-          if (stackSize >= 2 && validationCommand.stem) {
-            // there are even amount of arguments for stem commands
-            stackSize %= 2;
-          } else if (stackSize > 1) {
-            warn("Found too many parameters for stack-clearing command");
+        if (validationCommand.stackClearing) {
+          // Stem operands come in pairs.
+          let extraArgs = validationCommand.stem
+            ? stackSize % 2
+            : stackSize - validationCommand.min;
+          if (state.firstStackClearing && extraArgs > 0) {
+            // Use the last extra operand as a width delta from nominalWidthX.
+            state.width = stack[--extraArgs];
           }
-          if (stackSize > 0) {
-            // Width can be any number since its the difference
-            // from nominalWidthX.
-            state.width = stack[stackSize - 1];
+          state.firstStackClearing = false;
+          if (
+            extraArgs > 0 &&
+            state.callDepth === 0 &&
+            argStarts[0] >= cursor.readStart
+          ) {
+            // OTS rejects the repeated rmoveto widths in issue 10175;
+            // FreeType ignores them. Preserve shared subroutines, where an
+            // operand may be another glyph's width.
+            removeCharStringBytes(
+              cursor,
+              data,
+              argStarts[0],
+              argStarts[extraArgs]
+            );
           }
         }
         if ("stackDelta" in validationCommand) {
@@ -670,6 +804,7 @@ class CFFParser {
             validationCommand.stackFn(stack, stackSize);
           }
           stackSize += validationCommand.stackDelta;
+          argStarts[0] = -1;
         } else if (
           validationCommand.stackClearing ||
           validationCommand.resetStack
@@ -677,9 +812,6 @@ class CFFParser {
           stackSize = 0;
         }
       }
-    }
-    if (length < data.length) {
-      data.fill(/* endchar = */ 14, length);
     }
     state.stackSize = stackSize;
     return true;
@@ -693,15 +825,17 @@ class CFFParser {
     fdArray,
     privateDict,
   }) {
-    const seacs = [];
+    const seacs = new Map();
     const widths = [];
     const count = charStrings.count;
     for (let i = 0; i < count; i++) {
       const charstring = charStrings.get(i);
       const state = {
         callDepth: 0,
+        tokens: 0,
         stackSize: 0,
         stack: [],
+        argStarts: [],
         hints: 0,
         firstStackClearing: true,
         seac: null,
@@ -728,14 +862,12 @@ class CFFParser {
       } else if (localSubrIndex) {
         localSubrToUse = localSubrIndex;
       }
-      if (valid) {
-        valid = this.parseCharString(
-          state,
-          charstring,
-          localSubrToUse,
-          globalSubrIndex
-        );
-      }
+      valid &&= this.parseCharString(
+        state,
+        charstring,
+        localSubrToUse,
+        globalSubrIndex
+      );
       if (state.width !== null) {
         const nominalWidth = privateDictToUse.getByName("nominalWidthX");
         widths[i] = nominalWidth + state.width;
@@ -744,7 +876,7 @@ class CFFParser {
         widths[i] = defaultWidth;
       }
       if (state.seac !== null) {
-        seacs[i] = state.seac;
+        seacs.set(i, state.seac);
       }
       if (!valid) {
         // resetting invalid charstring to single 'endchar'
@@ -758,6 +890,13 @@ class CFFParser {
     const privateDict = this.createDict(CFFPrivateDict, [], parentDict.strings);
     parentDict.setByKey(18, [0, 0]);
     parentDict.privateDict = privateDict;
+  }
+
+  #addPrivateDataLength(length) {
+    this.#privateDataLength += length;
+    if (this.#privateDataLength > this.bytes.length) {
+      throw new FormatError("CFF Private DICT data exceeds the font length");
+    }
   }
 
   parsePrivateDict(parentDict) {
@@ -779,9 +918,23 @@ class CFFParser {
       this.emptyPrivateDictionary(parentDict);
       return;
     }
+    // The Private DICT extends past the end of the font data, which means
+    // the embedded font is truncated; abort so the caller can substitute a
+    // system font instead of rendering blank glyphs (issue 7625).
+    if (offset + size > this.bytes.length) {
+      throw new FormatError("CFF Private DICT extends past end of font");
+    }
+
+    const cacheKey = `${offset}_${size}`;
+    const cachedDict = this.#privateDicts.get(cacheKey);
+    if (cachedDict) {
+      parentDict.privateDict = cachedDict;
+      return;
+    }
 
     const privateDictEnd = offset + size;
     const dictData = this.bytes.subarray(offset, privateDictEnd);
+    this.#addPrivateDataLength(dictData.length);
     const dict = this.parseDict(dictData);
     const privateDict = this.createDict(
       CFFPrivateDict,
@@ -789,11 +942,80 @@ class CFFParser {
       parentDict.strings
     );
     parentDict.privateDict = privateDict;
+    this.#privateDicts.set(cacheKey, privateDict);
 
-    if (privateDict.getByName("ExpansionFactor") === 0) {
+    const blueScale = privateDict.getByName("BlueScale");
+    const blueShift = privateDict.getByName("BlueShift");
+    const blueFuzz = privateDict.getByName("BlueFuzz");
+    const expansionFactor = privateDict.getByName("ExpansionFactor");
+    if (
+      blueScale === 0 &&
+      blueShift === 0 &&
+      blueFuzz === 0 &&
+      expansionFactor === 0
+    ) {
+      // Ghostscript can fail to initialize Private DICT defaults before
+      // writing them, which leaves omitted blue zone values as explicit
+      // zeroes. This has been seen in FDArray entries.
+      privateDict.setByName("BlueScale", DEFAULT_BLUE_SCALE);
+      privateDict.setByName("BlueShift", DEFAULT_BLUE_SHIFT);
+      privateDict.setByName("BlueFuzz", DEFAULT_BLUE_FUZZ);
+    }
+
+    if (expansionFactor === 0) {
       // Firefox doesn't render correctly such a font on Windows (see issue
       // 15289), hence we just reset it to its default value.
-      privateDict.setByName("ExpansionFactor", 0.06);
+      privateDict.setByName("ExpansionFactor", DEFAULT_EXPANSION_FACTOR);
+    }
+    if (blueScale > 0) {
+      // Adobe's font validator (AFDKO, see `absfont.cpp`) flags BlueScale as
+      // out-of-range when `BlueScale * maxZoneHeight` is below 0.5 or above 1.
+      // The Type 2 hinting engine in coretype/FreeType disables the lower
+      // clamp at render time because library fonts with small zones and a
+      // default BlueScale (0.039625) trip the threshold even though they
+      // render correctly. To avoid changing those fonts here, only apply
+      // the lower clamp when BlueScale is also smaller than the default,
+      // i.e. when the font genuinely deviates from the standard value.
+      // The upper clamp matches what FreeType already enforces (psblues.c)
+      // and is safe to apply unconditionally.
+      let maxZoneHeight = 0;
+      for (const zones of [
+        privateDict.getByName("BlueValues"),
+        privateDict.getByName("OtherBlues"),
+      ]) {
+        if (!zones) {
+          continue;
+        }
+        // BlueValues/OtherBlues are stored as deltas where the odd-indexed
+        // entries are the heights of each zone.
+        for (let i = 1; i < zones.length; i += 2) {
+          if (zones[i] > maxZoneHeight) {
+            maxZoneHeight = zones[i];
+          }
+        }
+      }
+      if (maxZoneHeight > 0) {
+        // The lower bound of AFDKO's valid window is `0.5 / maxZoneHeight`.
+        // When that bound is itself above the default BlueScale the font simply
+        // has small zones (e.g. Eurostile LT Std, or the SofiaPro fonts shipped
+        // with a near-default 0.037): even the default 0.039625 would be
+        // flagged as out-of-range, so this is the rendered intent and forcing
+        // BlueScale up only misaligns/collapses overshooting glyphs (notably
+        // with macOS's Core Text rasterizer). Only apply the lower clamp when
+        // its target does not exceed the default.
+        // Round the bound in order to avoid too long operand (issue 21466).
+        const PRECISION = 1e5;
+        const lowerBound = 0.5 / maxZoneHeight;
+        const minBlueScale =
+          lowerBound <= DEFAULT_BLUE_SCALE
+            ? Math.ceil(lowerBound * PRECISION) / PRECISION
+            : -Infinity;
+        const maxBlueScale = Math.floor(PRECISION / maxZoneHeight) / PRECISION;
+        const clamped = MathClamp(blueScale, minBlueScale, maxBlueScale);
+        if (clamped !== blueScale) {
+          privateDict.setByName("BlueScale", clamped);
+        }
+      }
     }
 
     // Parse the Subrs index also since it's relative to the private dict.
@@ -805,10 +1027,19 @@ class CFFParser {
     // Validate the offset.
     if (subrsOffset === 0 || relativeOffset >= this.bytes.length) {
       this.emptyPrivateDictionary(parentDict);
+      this.#privateDicts.set(cacheKey, parentDict.privateDict);
       return;
     }
-    const subrsIndex = this.parseIndex(relativeOffset);
-    privateDict.subrsIndex = subrsIndex.obj;
+    privateDict.subrsIndex = this.#subrsIndexes.getOrInsertComputed(
+      relativeOffset,
+      () => {
+        const { obj, endPos } = this.parseIndex(relativeOffset);
+        this.#addPrivateDataLength(
+          Math.max(endPos - relativeOffset, obj.count)
+        );
+        return obj;
+      }
+    );
   }
 
   parseCharsets(pos, length, strings, cid) {
@@ -832,8 +1063,7 @@ class CFFParser {
       );
     }
 
-    const bytes = this.bytes;
-    const start = pos;
+    const { bytes } = this;
     const format = bytes[pos++];
     const charset = [cid ? 0 : ".notdef"];
     let id, count, i;
@@ -869,11 +1099,8 @@ class CFFParser {
       default:
         throw new FormatError("Unknown charset format");
     }
-    // Raw won't be needed if we actually compile the charset.
-    const end = pos;
-    const raw = bytes.subarray(start, end);
 
-    return new CFFCharset(false, format, charset, raw);
+    return new CFFCharset(false, format, charset);
   }
 
   parseEncoding(pos, properties, strings, charset) {
@@ -971,6 +1198,10 @@ class CFFParser {
           }
           const fdIndex = bytes[pos++];
           const next = (bytes[pos] << 8) | bytes[pos + 1];
+          // Reject ranges that would expand FDSelect past the glyph count.
+          if (next - first > length - fdSelect.length) {
+            throw new FormatError("parseFDSelect: Invalid font data.");
+          }
           for (let j = first; j < next; ++j) {
             fdSelect.push(fdIndex);
           }
@@ -1017,19 +1248,40 @@ class CFF {
 
   charStringCount = 0;
 
-  duplicateFirstGlyph() {
-    // Browsers will not display a glyph at position 0. Typically glyph 0 is
-    // notdef, but a number of fonts put a valid glyph there so it must be
-    // duplicated and appended.
-    if (this.charStrings.count >= 65535) {
-      warn("Not enough space in charstrings to duplicate first glyph.");
-      return;
+  constructor(rawFileLength = 0) {
+    this.rawFileLength = rawFileLength;
+  }
+
+  /**
+   * Copy glyph 0 to a nonzero index; cmap reserves index 0 for .notdef.
+   * @param {boolean} [replaceEmptyGlyph] - Reuse an empty glyph if full.
+   * @returns {number} The copy's glyph ID, or 0 if no slot is available.
+   */
+  duplicateFirstGlyph(replaceEmptyGlyph = false) {
+    const { charStrings, fdSelect } = this;
+    const glyphZero = charStrings.get(0);
+    let id = charStrings.count;
+    if (id < 65535) {
+      charStrings.add(glyphZero);
+    } else {
+      id = replaceEmptyGlyph ? id - 1 : 0;
+      while (
+        id > 0 &&
+        (this.seacs.has(id) || !isEmptyCharString(charStrings.get(id)))
+      ) {
+        id--;
+      }
+      if (id === 0) {
+        warn("Not enough space in charstrings to duplicate first glyph.");
+        return 0;
+      }
+      charStrings.set(id, glyphZero);
     }
-    const glyphZero = this.charStrings.get(0);
-    this.charStrings.add(glyphZero);
+    this.widths[id] = this.widths[0];
     if (this.isCIDFont) {
-      this.fdSelect.fdSelect.push(this.fdSelect.fdSelect[0]);
+      fdSelect.fdSelect[id] = fdSelect.fdSelect[0];
     }
+    return id;
   }
 
   hasGlyphId(id) {
@@ -1057,10 +1309,9 @@ class CFFStrings {
     if (index >= 0 && index <= NUM_STANDARD_CFF_STRINGS - 1) {
       return CFFStandardStrings[index];
     }
-    if (index - NUM_STANDARD_CFF_STRINGS <= this.strings.length) {
-      return this.strings[index - NUM_STANDARD_CFF_STRINGS];
-    }
-    return CFFStandardStrings[0];
+    return index - NUM_STANDARD_CFF_STRINGS <= this.strings.length
+      ? this.strings[index - NUM_STANDARD_CFF_STRINGS]
+      : CFFStandardStrings[0];
   }
 
   getSID(str) {
@@ -1069,10 +1320,7 @@ class CFFStrings {
       return index;
     }
     index = this.strings.indexOf(str);
-    if (index !== -1) {
-      return index + NUM_STANDARD_CFF_STRINGS;
-    }
-    return -1;
+    return index !== -1 ? index + NUM_STANDARD_CFF_STRINGS : -1;
   }
 
   add(value) {
@@ -1109,6 +1357,8 @@ class CFFIndex {
 }
 
 class CFFDict {
+  values = new Map();
+
   constructor(tables, strings) {
     this.keyToNameMap = tables.keyToNameMap;
     this.nameToKeyMap = tables.nameToKeyMap;
@@ -1117,12 +1367,11 @@ class CFFDict {
     this.opcodes = tables.opcodes;
     this.order = tables.order;
     this.strings = strings;
-    this.values = Object.create(null);
   }
 
   // value should always be an array
   setByKey(key, value) {
-    if (!(key in this.keyToNameMap)) {
+    if (!this.keyToNameMap.has(key)) {
       return false;
     }
     // ignore empty values
@@ -1136,59 +1385,59 @@ class CFFDict {
         return true;
       }
     }
-    const type = this.types[key];
+    const type = this.types.get(key);
     // remove the array wrapping these types of values
     if (type === "num" || type === "sid" || type === "offset") {
       value = value[0];
     }
-    this.values[key] = value;
+    this.values.set(key, value);
     return true;
   }
 
   setByName(name, value) {
-    if (!(name in this.nameToKeyMap)) {
+    if (!this.nameToKeyMap.has(name)) {
       throw new FormatError(`Invalid dictionary name "${name}"`);
     }
-    this.values[this.nameToKeyMap[name]] = value;
+    const key = this.nameToKeyMap.get(name);
+    this.values.set(key, value);
   }
 
   hasName(name) {
-    return this.nameToKeyMap[name] in this.values;
+    const key = this.nameToKeyMap.get(name);
+    return this.values.has(key);
   }
 
   getByName(name) {
-    if (!(name in this.nameToKeyMap)) {
+    if (!this.nameToKeyMap.has(name)) {
       throw new FormatError(`Invalid dictionary name ${name}"`);
     }
-    const key = this.nameToKeyMap[name];
-    if (!(key in this.values)) {
-      return this.defaults[key];
-    }
-    return this.values[key];
+    const key = this.nameToKeyMap.get(name);
+    return this.values.has(key) ? this.values.get(key) : this.defaults.get(key);
   }
 
   removeByName(name) {
-    delete this.values[this.nameToKeyMap[name]];
+    const key = this.nameToKeyMap.get(name);
+    this.values.delete(key);
   }
 
   static createTables(layout) {
     const tables = {
-      keyToNameMap: {},
-      nameToKeyMap: {},
-      defaults: {},
-      types: {},
-      opcodes: {},
+      keyToNameMap: new Map(),
+      nameToKeyMap: new Map(),
+      defaults: new Map(),
+      types: new Map(),
+      opcodes: new Map(),
       order: [],
     };
     for (const entry of layout) {
       const key = Array.isArray(entry[0])
         ? (entry[0][0] << 8) + entry[0][1]
         : entry[0];
-      tables.keyToNameMap[key] = entry[1];
-      tables.nameToKeyMap[entry[1]] = key;
-      tables.types[key] = entry[2];
-      tables.defaults[key] = entry[3];
-      tables.opcodes[key] = Array.isArray(entry[0]) ? entry[0] : [entry[0]];
+      tables.keyToNameMap.set(key, entry[1]);
+      tables.nameToKeyMap.set(entry[1], key);
+      tables.types.set(key, entry[2]);
+      tables.defaults.set(key, entry[3]);
+      tables.opcodes.set(key, Array.isArray(entry[0]) ? entry[0] : [entry[0]]);
       tables.order.push(key);
     }
     return tables;
@@ -1241,9 +1490,10 @@ class CFFTopDict extends CFFDict {
     return shadow(this, "tables", this.createTables(CFFTopDictLayout));
   }
 
+  privateDict = null;
+
   constructor(strings) {
     super(CFFTopDict.tables, strings);
-    this.privateDict = null;
   }
 }
 
@@ -1252,16 +1502,16 @@ const CFFPrivateDictLayout = [
   [7, "OtherBlues", "delta", null],
   [8, "FamilyBlues", "delta", null],
   [9, "FamilyOtherBlues", "delta", null],
-  [[12, 9], "BlueScale", "num", 0.039625],
-  [[12, 10], "BlueShift", "num", 7],
-  [[12, 11], "BlueFuzz", "num", 1],
+  [[12, 9], "BlueScale", "num", DEFAULT_BLUE_SCALE],
+  [[12, 10], "BlueShift", "num", DEFAULT_BLUE_SHIFT],
+  [[12, 11], "BlueFuzz", "num", DEFAULT_BLUE_FUZZ],
   [10, "StdHW", "num", null],
   [11, "StdVW", "num", null],
   [[12, 12], "StemSnapH", "delta", null],
   [[12, 13], "StemSnapV", "delta", null],
   [[12, 14], "ForceBold", "num", 0],
   [[12, 17], "LanguageGroup", "num", 0],
-  [[12, 18], "ExpansionFactor", "num", 0.06],
+  [[12, 18], "ExpansionFactor", "num", DEFAULT_EXPANSION_FACTOR],
   [[12, 19], "initialRandomSeed", "num", 0],
   [20, "defaultWidthX", "num", 0],
   [21, "nominalWidthX", "num", 0],
@@ -1273,9 +1523,10 @@ class CFFPrivateDict extends CFFDict {
     return shadow(this, "tables", this.createTables(CFFPrivateDictLayout));
   }
 
+  subrsIndex = null;
+
   constructor(strings) {
     super(CFFPrivateDict.tables, strings);
-    this.subrsIndex = null;
   }
 }
 
@@ -1286,11 +1537,10 @@ const CFFCharsetPredefinedTypes = {
 };
 
 class CFFCharset {
-  constructor(predefined, format, charset, raw) {
+  constructor(predefined, format, charset) {
     this.predefined = predefined;
     this.format = format;
     this.charset = charset;
-    this.raw = raw;
   }
 }
 
@@ -1310,41 +1560,40 @@ class CFFFDSelect {
   }
 
   getFDIndex(glyphIndex) {
-    if (glyphIndex < 0 || glyphIndex >= this.fdSelect.length) {
-      return -1;
-    }
-    return this.fdSelect[glyphIndex];
+    return glyphIndex < 0 || glyphIndex >= this.fdSelect.length
+      ? -1
+      : this.fdSelect[glyphIndex];
   }
 }
 
 // Helper class to keep track of where an offset is within the data and helps
 // filling in that offset once it's known.
 class CFFOffsetTracker {
-  offsets = Object.create(null);
+  #offsets = new Map();
 
   isTracking(key) {
-    return key in this.offsets;
+    return this.#offsets.has(key);
   }
 
   track(key, location) {
-    if (key in this.offsets) {
+    if (this.#offsets.has(key)) {
       throw new FormatError(`Already tracking location of ${key}`);
     }
-    this.offsets[key] = location;
+    this.#offsets.set(key, location);
   }
 
   offset(value) {
-    for (const key in this.offsets) {
-      this.offsets[key] += value;
+    for (const [key, val] of this.#offsets) {
+      this.#offsets.set(key, val + value);
     }
   }
 
   setEntryLocation(key, values, output) {
-    if (!(key in this.offsets)) {
+    if (!this.#offsets.has(key)) {
       throw new FormatError(`Not tracking location of ${key}`);
     }
     const data = output.data;
-    const dataOffset = this.offsets[key];
+    const dataOffset = this.#offsets.get(key);
     const size = 5;
     for (let i = 0, ii = values.length; i < ii; ++i) {
       const offset0 = i * size + dataOffset;
@@ -1380,28 +1629,14 @@ class CFFCompiler {
 
   compile() {
     const cff = this.cff;
-    const output = {
-      data: [],
-      length: 0,
-      add(data) {
-        try {
-          // It's possible to exceed the call stack maximum size when trying
-          // to push too much elements.
-          // In case of failure, we fallback to the `concat` method.
-          this.data.push(...data);
-        } catch {
-          this.data = this.data.concat(data);
-        }
-        this.length = this.data.length;
-      },
-    };
+    const output = new DataBuilder({ minLength: cff.rawFileLength });
 
     // Compile the five entries that must be in order.
     const header = this.compileHeader(cff.header);
-    output.add(header);
+    output.setArray(header);
 
     const nameIndex = this.compileNameIndex(cff.names);
-    output.add(nameIndex);
+    output.setArray(nameIndex);
 
     if (cff.isCIDFont) {
       // The spec is unclear on how font matrices should relate to each other
@@ -1441,14 +1676,14 @@ class CFFCompiler {
       output.length,
       cff.isCIDFont
     );
-    output.add(compiled.output);
+    output.setArray(compiled.output);
     const topDictTracker = compiled.trackers[0];
 
     const stringIndex = this.compileStringIndex(cff.strings.strings);
-    output.add(stringIndex);
+    output.setArray(stringIndex);
 
     const globalSubrIndex = this.compileIndex(cff.globalSubrIndex);
-    output.add(globalSubrIndex);
+    output.setArray(globalSubrIndex);
 
     // Now start on the other entries that have no specific order.
     if (cff.encoding && cff.topDict.hasName("Encoding")) {
@@ -1461,7 +1696,7 @@ class CFFCompiler {
       } else {
         const encoding = this.compileEncoding(cff.encoding);
         topDictTracker.setEntryLocation("Encoding", [output.length], output);
-        output.add(encoding);
+        output.setArray(encoding);
       }
     }
     const charset = this.compileCharset(
@@ -1471,23 +1706,23 @@ class CFFCompiler {
       cff.isCIDFont
     );
     topDictTracker.setEntryLocation("charset", [output.length], output);
-    output.add(charset);
+    output.setArray(charset);
 
     const charStrings = this.compileCharStrings(cff.charStrings);
     topDictTracker.setEntryLocation("CharStrings", [output.length], output);
-    output.add(charStrings);
+    output.setArray(charStrings);
 
     if (cff.isCIDFont) {
       // For some reason FDSelect must be in front of FDArray on windows. OSX
       // and linux don't seem to care.
       topDictTracker.setEntryLocation("FDSelect", [output.length], output);
       const fdSelect = this.compileFDSelect(cff.fdSelect);
-      output.add(fdSelect);
+      output.setArray(fdSelect);
       // It is unclear if the sub font dictionary can have CID related
       // dictionary keys, but the sanitizer doesn't like them so remove them.
       compiled = this.compileTopDicts(cff.fdArray, output.length, true);
       topDictTracker.setEntryLocation("FDArray", [output.length], output);
-      output.add(compiled.output);
+      output.setArray(compiled.output);
       const fontDictTrackers = compiled.trackers;
 
       this.compilePrivateDicts(cff.fdArray, fontDictTrackers, output);
@@ -1497,16 +1732,15 @@ class CFFCompiler {
 
     // If the font data ends with INDEX whose object data is zero-length,
     // the sanitizer will bail out. Add a dummy byte to avoid that.
-    output.add([0]);
+    output.setArray([0]);
 
     return output.data;
   }
 
   encodeNumber(value) {
-    if (Number.isInteger(value)) {
-      return this.encodeInteger(value);
-    }
-    return this.encodeFloat(value);
+    return Number.isInteger(value)
+      ? this.encodeInteger(value)
+      : this.encodeFloat(value);
   }
 
   static get EncodeFloatRegExp() {
@@ -1642,11 +1876,18 @@ class CFFCompiler {
   }
 
   compilePrivateDicts(dicts, trackers, output) {
+    const locations = new Map();
+    const subrs = new Map();
     for (let i = 0, ii = dicts.length; i < ii; ++i) {
       const fontDict = dicts[i];
       const privateDict = fontDict.privateDict;
       if (!privateDict || !fontDict.hasName("Private")) {
         throw new FormatError("There must be a private dictionary.");
+      }
+      let location = locations.get(privateDict);
+      if (location) {
+        trackers[i].setEntryLocation("Private", location, output);
+        continue;
       }
       const privateDictTracker = new CFFOffsetTracker();
       const privateDictData = this.compileDict(privateDict, privateDictTracker);
@@ -1660,22 +1901,28 @@ class CFFCompiler {
         outputLength = 0;
       }
 
-      trackers[i].setEntryLocation(
-        "Private",
-        [privateDictData.length, outputLength],
-        output
-      );
-      output.add(privateDictData);
+      location = [privateDictData.length, outputLength];
+      locations.set(privateDict, location);
+      trackers[i].setEntryLocation("Private", location, output);
+      output.setArray(privateDictData);
 
       if (privateDict.subrsIndex && privateDict.hasName("Subrs")) {
-        const subrs = this.compileIndex(privateDict.subrsIndex);
+        subrs
+          .getOrInsertComputed(privateDict.subrsIndex, makeArr)
+          .push([privateDictTracker, outputLength]);
+      }
+    }
+    // Write Subrs last to keep relative offsets positive.
+    for (const [subrsIndex, users] of subrs) {
+      const subrsStart = output.length;
+      for (const [privateDictTracker, privateDictStart] of users) {
         privateDictTracker.setEntryLocation(
           "Subrs",
-          [privateDictData.length],
+          [subrsStart - privateDictStart],
           output
         );
-        output.add(subrs);
       }
+      output.setArray(this.compileIndex(subrsIndex));
     }
   }
 
@@ -1683,11 +1930,11 @@ class CFFCompiler {
     const out = [];
     // The dictionary keys must be in a certain order.
     for (const key of dict.order) {
-      if (!(key in dict.values)) {
+      if (!dict.values.has(key)) {
         continue;
       }
-      let values = dict.values[key];
-      let types = dict.types[key];
+      let values = dict.values.get(key);
+      let types = dict.types.get(key);
       if (!Array.isArray(types)) {
         types = [types];
       }
@@ -1712,7 +1959,7 @@ class CFFCompiler {
             // For offsets we just insert a 32bit integer so we don't have to
             // deal with figuring out the length of the offset when it gets
             // replaced later on by the compiler.
-            const name = dict.keyToNameMap[key];
+            const name = dict.keyToNameMap.get(key);
             // Some offsets have the offset and the length, so just record the
             // position of the first one.
             if (!offsetTracker.isTracking(name)) {
@@ -1731,7 +1978,7 @@ class CFFCompiler {
             throw new FormatError(`Unknown data type of ${type}`);
         }
       }
-      out.push(...dict.opcodes[key]);
+      out.push(...dict.opcodes.get(key));
     }
     return out;
   }
@@ -1781,7 +2028,7 @@ class CFFCompiler {
     } else {
       const length = 1 + numGlyphsLessNotDef * 2;
       out = new Uint8Array(length);
-      out[0] = 0; // format 0
+      // format 0, skip redundant `out[0] = 0;` assignment.
       let charsetIndex = 0;
       const numCharsets = charset.charset.length;
       let warned = false;
@@ -1802,11 +2049,11 @@ class CFFCompiler {
         out[i + 1] = sid & 0xff;
       }
     }
-    return this.compileTypedArray(out);
+    return out;
   }
 
   compileEncoding(encoding) {
-    return this.compileTypedArray(encoding.raw);
+    return encoding.raw;
   }
 
   compileFDSelect(fdSelect) {
@@ -1816,9 +2063,7 @@ class CFFCompiler {
       case 0:
         out = new Uint8Array(1 + fdSelect.fdSelect.length);
         out[0] = format;
-        for (i = 0; i < fdSelect.fdSelect.length; i++) {
-          out[i + 1] = fdSelect.fdSelect[i];
-        }
+        out.set(fdSelect.fdSelect, 1);
         break;
       case 3:
         const start = 0;
@@ -1847,11 +2092,7 @@ class CFFCompiler {
         out = new Uint8Array(ranges);
         break;
     }
-    return this.compileTypedArray(out);
-  }
-
-  compileTypedArray(data) {
-    return Array.from(data);
+    return out;
   }
 
   compileIndex(index, trackers = []) {
@@ -1861,10 +2102,8 @@ class CFFCompiler {
 
     // If there is no object, just create an index.
     if (count === 0) {
-      return [0, 0];
+      return new Uint8Array(2);
     }
-
-    const data = [(count >> 8) & 0xff, count & 0xff];
 
     let lastOffset = 1,
       i;
@@ -1883,29 +2122,32 @@ class CFFCompiler {
       offsetSize = 4;
     }
 
+    const data = new Uint8Array(2 + offsetSize * (count + 1) + lastOffset);
+    let pos = 0;
+
+    data[pos++] = (count >> 8) & 0xff;
+    data[pos++] = count & 0xff;
+
     // Next byte contains the offset size use to reference object in the file
-    data.push(offsetSize);
+    data[pos++] = offsetSize;
 
     // Add another offset after this one because we need a new offset
     let relativeOffset = 1;
     for (i = 0; i < count + 1; i++) {
       if (offsetSize === 1) {
-        data.push(relativeOffset & 0xff);
+        data[pos++] = relativeOffset & 0xff;
       } else if (offsetSize === 2) {
-        data.push((relativeOffset >> 8) & 0xff, relativeOffset & 0xff);
+        data[pos++] = (relativeOffset >> 8) & 0xff;
+        data[pos++] = relativeOffset & 0xff;
       } else if (offsetSize === 3) {
-        data.push(
-          (relativeOffset >> 16) & 0xff,
-          (relativeOffset >> 8) & 0xff,
-          relativeOffset & 0xff
-        );
+        data[pos++] = (relativeOffset >> 16) & 0xff;
+        data[pos++] = (relativeOffset >> 8) & 0xff;
+        data[pos++] = relativeOffset & 0xff;
       } else {
-        data.push(
-          (relativeOffset >>> 24) & 0xff,
-          (relativeOffset >> 16) & 0xff,
-          (relativeOffset >> 8) & 0xff,
-          relativeOffset & 0xff
-        );
+        data[pos++] = (relativeOffset >>> 24) & 0xff;
+        data[pos++] = (relativeOffset >> 16) & 0xff;
+        data[pos++] = (relativeOffset >> 8) & 0xff;
+        data[pos++] = relativeOffset & 0xff;
       }
 
       if (objects[i]) {
@@ -1915,10 +2157,10 @@ class CFFCompiler {
 
     for (i = 0; i < count; i++) {
       // Notify the tracker where the object will be offset in the data.
-      if (trackers[i]) {
-        trackers[i].offset(data.length);
-      }
-      data.push(...objects[i]);
+      trackers[i]?.offset(pos);
+
+      data.set(objects[i], pos);
+      pos += objects[i].length;
     }
     return data;
   }

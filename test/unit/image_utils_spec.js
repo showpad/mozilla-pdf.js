@@ -19,6 +19,8 @@ import {
   grayToRGBA,
 } from "../../src/shared/image_utils.js";
 import { FeatureTest, ImageKind } from "../../src/shared/util.js";
+import { GlobalImageCache } from "../../src/core/image_utils.js";
+import { Ref } from "../../src/core/primitives.js";
 
 describe("image_utils", function () {
   // Precompute endian-dependent constants once for all tests.
@@ -327,6 +329,149 @@ describe("image_utils", function () {
       expect(dest[1]).toEqual(0); // untouched
       expect(dest[2]).toEqual(RED); // red
       expect(dest[3]).toEqual(0); // untouched
+    });
+
+    it("handles srcPos offset for RGB_24BPP", function () {
+      // Four black pixels to skip, then one red pixel read from srcPos=12.
+      const src = new Uint8Array([
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0,
+      ]);
+      const dest = new Uint32Array(1);
+      const result = convertToRGBA({
+        src,
+        dest,
+        srcPos: 12,
+        width: 1,
+        height: 1,
+        kind: ImageKind.RGB_24BPP,
+      });
+      expect(result.srcPos).toEqual(15);
+      expect(dest[0]).toEqual(RED);
+    });
+
+    it("handles a source with a byteOffset for RGB_24BPP", function () {
+      // Skip four bytes outside the source view.
+      const buffer = new Uint8Array([
+        1, 2, 3, 4, 255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 0, 0,
+      ]).buffer;
+      const src = new Uint8Array(buffer, 4);
+      const dest = new Uint32Array(5);
+      const result = convertToRGBA({
+        src,
+        dest,
+        width: 5,
+        height: 1,
+        kind: ImageKind.RGB_24BPP,
+      });
+      expect(result.srcPos).toEqual(15);
+      expect(result.destPos).toEqual(5);
+      expect(dest).toEqual(new Uint32Array([WHITE, BLACK, WHITE, BLACK, RED]));
+    });
+
+    it("handles a source which isn't 4-byte aligned for RGB_24BPP", function () {
+      // byteOffset + srcPos = 1 + 2 = 3 is not 4-byte aligned.
+      const buffer = new Uint8Array([
+        1, 2, 3, 255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 0, 0,
+      ]).buffer;
+      const src = new Uint8Array(buffer, 1);
+      const dest = new Uint32Array(5);
+      const result = convertToRGBA({
+        src,
+        dest,
+        srcPos: 2,
+        width: 5,
+        height: 1,
+        kind: ImageKind.RGB_24BPP,
+      });
+      expect(result.srcPos).toEqual(17);
+      expect(result.destPos).toEqual(5);
+      expect(dest).toEqual(new Uint32Array([WHITE, BLACK, WHITE, BLACK, RED]));
+    });
+  });
+
+  describe("GlobalImageCache decoded images", function () {
+    const ref = Ref.get(10, 0);
+    let frame;
+
+    beforeEach(function () {
+      if (
+        !FeatureTest.isVideoFrameSupported ||
+        !FeatureTest.platform.isFirefox
+      ) {
+        pending("Decoded images are only kept in Firefox.");
+      }
+      frame = new VideoFrame(new Uint8Array(4 * 4 * 4), {
+        format: "RGBA",
+        codedWidth: 4,
+        codedHeight: 4,
+        timestamp: 0,
+      });
+    });
+
+    afterEach(function () {
+      frame?.close();
+      frame = null;
+    });
+
+    it("keeps a decoded image until it's taken", function () {
+      const cache = new GlobalImageCache();
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { bitmap: frame, width: 4, height: 4 });
+
+      const imgData = cache.takeDecodedImage(ref);
+      expect(imgData.width).toEqual(4);
+      expect(imgData.bitmap).toBeInstanceOf(VideoFrame);
+      expect(imgData.bitmap).not.toBe(frame);
+      imgData.bitmap.close();
+
+      expect(cache.takeDecodedImage(ref)).toBeNull();
+    });
+
+    it("keeps a decoded ImageBitmap as a VideoFrame", async function () {
+      const bitmap = await createImageBitmap(new ImageData(4, 4));
+      const cache = new GlobalImageCache();
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { bitmap });
+      // The cache must survive closing the original bitmap.
+      bitmap.close();
+
+      const imgData = cache.takeDecodedImage(ref);
+      expect(imgData.bitmap).toBeInstanceOf(VideoFrame);
+      expect(imgData.bitmap.displayWidth).toEqual(4);
+      imgData.bitmap.close();
+    });
+
+    it("releases the decoded images when their page is cleaned-up", function () {
+      const cache = new GlobalImageCache();
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { bitmap: frame });
+
+      cache.cleanupPage(/* pageProxyId = */ 2);
+      cache.takeDecodedImage(ref).bitmap.close();
+
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { bitmap: frame });
+      cache.cleanupPage(/* pageProxyId = */ 1);
+      expect(cache.takeDecodedImage(ref)).toBeNull();
+      // The original frame remains open.
+      expect(frame.codedWidth).toEqual(4);
+    });
+
+    it("doesn't keep an image decoded after its page was cleaned-up", function () {
+      const cache = new GlobalImageCache();
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.cleanupPage(/* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { bitmap: frame });
+
+      expect(cache.takeDecodedImage(ref)).toBeNull();
+    });
+
+    it("doesn't keep images without a bitmap", function () {
+      const cache = new GlobalImageCache();
+      cache.startDecodedImage(ref, /* pageProxyId = */ 1);
+      cache.setDecodedImage(ref, { data: new Uint8Array(4) });
+
+      expect(cache.takeDecodedImage(ref)).toBeNull();
     });
   });
 });

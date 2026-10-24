@@ -97,7 +97,7 @@ class Builder {
       this._addNamespacePrefix(prefixes);
     }
 
-    if (attributes.hasOwnProperty($nsAttributes)) {
+    if (Object.hasOwn(attributes, $nsAttributes)) {
       // Only support xfa-data namespace.
       const dataTemplate = NamespaceSetUp.datasets;
       const nsAttrs = attributes[$nsAttributes];
@@ -190,11 +190,9 @@ class Builder {
     if (hasNamespace) {
       this._currentNamespace = this._namespaceStack.pop();
     }
-    if (prefixes) {
-      prefixes.forEach(({ prefix }) => {
-        this._namespacePrefixes.get(prefix).pop();
-      });
-    }
+    prefixes?.forEach(({ prefix }) => {
+      this._namespacePrefixes.get(prefix).pop();
+    });
     if (nsAgnostic) {
       this._nsAgnosticLevel--;
     }

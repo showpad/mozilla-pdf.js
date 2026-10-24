@@ -15,103 +15,46 @@
 
 import { FeatureTest } from "pdfjs-lib";
 
-const CharacterType = {
-  SPACE: 0,
-  ALPHA_LETTER: 1,
-  PUNCT: 2,
-  HAN_LETTER: 3,
-  KATAKANA_LETTER: 4,
-  HIRAGANA_LETTER: 5,
-  HALFWIDTH_KATAKANA_LETTER: 6,
-  THAI_LETTER: 7,
-};
+let wordSegmenter = null;
+let graphemeSegmenter = null;
 
-function isAlphabeticalScript(charCode) {
-  return charCode < 0x2e80;
-}
+function isWordBreakAt(content, pos) {
+  // `pos` must be a grapheme boundary (so a combining mark stays attached to
+  // its base, and a surrogate pair isn't split) as well as a word boundary,
+  // the latter tested on the two adjacent grapheme clusters in isolation like
+  // Firefox's find (see `nsFind::BreakInBetween`).
+  graphemeSegmenter ||= new Intl.Segmenter(undefined, {
+    granularity: "grapheme",
+  });
 
-function isAscii(charCode) {
-  return (charCode & 0xff80) === 0;
-}
+  const graphemes = graphemeSegmenter.segment(content);
+  const after = graphemes.containing(pos);
+  if (after.index !== pos) {
+    return false;
+  }
 
-function isAsciiAlpha(charCode) {
+  wordSegmenter ||= new Intl.Segmenter(undefined, { granularity: "word" });
+  const before = graphemes.containing(pos - 1).segment;
   return (
-    (charCode >= /* a = */ 0x61 && charCode <= /* z = */ 0x7a) ||
-    (charCode >= /* A = */ 0x41 && charCode <= /* Z = */ 0x5a)
+    wordSegmenter.segment(before + after.segment).containing(before.length)
+      .index === before.length
   );
-}
-
-function isAsciiDigit(charCode) {
-  return charCode >= /* 0 = */ 0x30 && charCode <= /* 9 = */ 0x39;
-}
-
-function isAsciiSpace(charCode) {
-  return (
-    charCode === /* SPACE = */ 0x20 ||
-    charCode === /* TAB = */ 0x09 ||
-    charCode === /* CR = */ 0x0d ||
-    charCode === /* LF = */ 0x0a
-  );
-}
-
-function isHan(charCode) {
-  return (
-    (charCode >= 0x3400 && charCode <= 0x9fff) ||
-    (charCode >= 0xf900 && charCode <= 0xfaff)
-  );
-}
-
-function isKatakana(charCode) {
-  return charCode >= 0x30a0 && charCode <= 0x30ff;
-}
-
-function isHiragana(charCode) {
-  return charCode >= 0x3040 && charCode <= 0x309f;
-}
-
-function isHalfwidthKatakana(charCode) {
-  return charCode >= 0xff60 && charCode <= 0xff9f;
-}
-
-function isThai(charCode) {
-  return (charCode & 0xff80) === 0x0e00;
 }
 
 /**
- * This function is based on the word-break detection implemented in:
- * https://hg.mozilla.org/mozilla-central/file/tip/intl/lwbrk/WordBreaker.cpp
+ * Determine if the match spanning `[startIdx, startIdx + length)` in `content`
+ * is a whole word, i.e. there's a word break on each side of it. Each boundary
+ * is tested on its two adjacent characters in isolation rather than on the
+ * whole string, so a contraction such as "can't" doesn't prevent "can" from
+ * being an entire word, matching Firefox's find:
+ * https://searchfox.org/firefox-main/source/toolkit/components/find/nsFind.cpp
  */
-function getCharacterType(charCode) {
-  if (isAlphabeticalScript(charCode)) {
-    if (isAscii(charCode)) {
-      if (isAsciiSpace(charCode)) {
-        return CharacterType.SPACE;
-      } else if (
-        isAsciiAlpha(charCode) ||
-        isAsciiDigit(charCode) ||
-        charCode === /* UNDERSCORE = */ 0x5f
-      ) {
-        return CharacterType.ALPHA_LETTER;
-      }
-      return CharacterType.PUNCT;
-    } else if (isThai(charCode)) {
-      return CharacterType.THAI_LETTER;
-    } else if (charCode === /* NBSP = */ 0xa0) {
-      return CharacterType.SPACE;
-    }
-    return CharacterType.ALPHA_LETTER;
-  }
-
-  if (isHan(charCode)) {
-    return CharacterType.HAN_LETTER;
-  } else if (isKatakana(charCode)) {
-    return CharacterType.KATAKANA_LETTER;
-  } else if (isHiragana(charCode)) {
-    return CharacterType.HIRAGANA_LETTER;
-  } else if (isHalfwidthKatakana(charCode)) {
-    return CharacterType.HALFWIDTH_KATAKANA_LETTER;
-  }
-  return CharacterType.ALPHA_LETTER;
+function isEntireWord(content, startIdx, length) {
+  const endIdx = startIdx + length;
+  return (
+    (startIdx === 0 || isWordBreakAt(content, startIdx)) &&
+    (endIdx === content.length || isWordBreakAt(content, endIdx))
+  );
 }
 
 let NormalizeWithNFKC;
@@ -127,7 +70,7 @@ function getNormalizeWithNFKC() {
     // In order to detect if the string is up to date, a check is performed in
     // the loop below, and if a difference is detected, an error is thrown.
     /* eslint-disable no-irregular-whitespace */
-    NormalizeWithNFKC ||= `\xA0¨ª¯²-µ¸-º¼-¾Ĳ-ĳĿ-ŀŉſǄ-ǌǱ-ǳʰ-ʸ˘-˝ˠ-ˤʹͺ;΄-΅·ϐ-ϖϰ-ϲϴ-ϵϹևٵ-ٸक़-य़ড়-ঢ়য়ਲ਼ਸ਼ਖ਼-ਜ਼ਫ਼ଡ଼-ଢ଼ำຳໜ-ໝ༌གྷཌྷདྷབྷཛྷཀྵჼᴬ-ᴮᴰ-ᴺᴼ-ᵍᵏ-ᵪᵸᶛ-ᶿẚ-ẛάέήίόύώΆ᾽-῁ΈΉ῍-῏ΐΊ῝-῟ΰΎ῭-`ΌΏ´-῾ - ‑‗․-… ″-‴‶-‷‼‾⁇-⁉⁗ ⁰-ⁱ⁴-₎ₐ-ₜ₨℀-℃℅-ℇ℉-ℓℕ-№ℙ-ℝ℠-™ℤΩℨK-ℭℯ-ℱℳ-ℹ℻-⅀ⅅ-ⅉ⅐-ⅿ↉∬-∭∯-∰〈-〉①-⓪⨌⩴-⩶⫝̸ⱼ-ⱽⵯ⺟⻳⼀-⿕　〶〸-〺゛-゜ゟヿㄱ-ㆎ㆒-㆟㈀-㈞㈠-㉇㉐-㉾㊀-㏿ꚜ-ꚝꝰ꟱-ꟴꟸ-ꟹꭜ-ꭟꭩ豈-嗀塚晴凞-羽蘒諸逸-都飯-舘並-龎ﬀ-ﬆﬓ-ﬗיִײַ-זּטּ-לּמּנּ-סּףּ-פּצּ-ﮱﯓ-ﴽﵐ-ﶏﶒ-ﷇﷰ-﷼︐-︙︰-﹄﹇-﹒﹔-﹦﹨-﹫ﹰ-ﹲﹴﹶ-ﻼ！-ﾾￂ-ￇￊ-ￏￒ-ￗￚ-ￜ￠-￦`;
+    NormalizeWithNFKC ||= `\xA0¨ª¯²-µ¸-º¼-¾Ĳ-ĳĿ-ŀŉſǄ-ǌǱ-ǳʰ-ʸ˘-˝ˠ-ˤʹͺ;΄-΅·ϐ-ϖϰ-ϲϴ-ϵϹևٵ-ٸक़-य़ড়-ঢ়য়ਲ਼ਸ਼ਖ਼-ਜ਼ਫ਼ଡ଼-ଢ଼ำຳໜ-ໝ༌གྷཌྷདྷབྷཛྷཀྵჼᴬ-ᴮᴰ-ᴺᴼ-ᵍᵏ-ᵪᵸᶛ-ᶿẚ-ẛάέήίόύώΆ᾽-῁ΈΉ῍-῏ΐΊ῝-῟ΰΎ῭-`ΌΏ´-῾ - ‑‗․-… ″-‴‶-‷‼‾⁇-⁉⁗ ⁰-ⁱ⁴-₎ₐ-ₜ₨℀-℃℅-ℇ℉-ℓℕ-№ℙ-ℝ℠-™ℤΩℨK-ℭℯ-ℱℳ-ℹ℻-⅀ⅅ-ⅉ⅐-ⅿ↉∬-∭∯-∰〈-〉①-⓪⨌⩴-⩶⫝̸ⱼ-ⱽⵯ⺟⻳⼀-⿕　〶〸-〺゛-゜ゟヿㄱ-ㆎ㆒-㆟㈀-㈞㈠-㉇㉐-㉾㊀-㏿ꚜ-ꚝꝰ꟱-ꟴꟸ-ꟹꭜ-ꭟꭩ豈-嗀塚晴凞-羽蘒諸逸-都飯-舘並-龎ﬀ-ﬆﬓ-ﬗיִײַ-זּטּ-לּמּנּ-סּףּ-פּצּ-ﮱﯓ-ﴽﵐ-ﶏﶒ-ﷇﷰ-﷼︐-︙︰-﹄﹇-﹒﹔-﹦﹨-﹫ﹰ-ﹲﹴﹶ-ﻼ！-ﾾￂ-ￇￊ-ￏￒ-ￗￚ-ￜ￠-￦￨-￮`;
   }
 
   if (
@@ -137,6 +80,16 @@ function getNormalizeWithNFKC() {
   ) {
     const ranges = [];
     const range = [];
+    const flushRange = () => {
+      if (range.length !== 2) {
+        return;
+      }
+      const [start, end] = range;
+      const first = String.fromCharCode(start);
+      ranges.push(
+        start === end ? first : `${first}-${String.fromCharCode(end)}`
+      );
+    };
     const diacriticsRegex = /^\p{M}$/u;
     // Some chars must be replaced by their NFKC counterpart during a search.
     for (let i = 0; i < 65536; i++) {
@@ -145,26 +98,16 @@ function getNormalizeWithNFKC() {
       }
       const c = String.fromCharCode(i);
       if (c.normalize("NFKC") !== c && !diacriticsRegex.test(c)) {
-        if (range.length !== 2) {
-          range[0] = range[1] = i;
-          continue;
-        }
-        if (range[1] + 1 !== i) {
-          if (range[0] === range[1]) {
-            ranges.push(String.fromCharCode(range[0]));
-          } else {
-            ranges.push(
-              `${String.fromCharCode(range[0])}-${String.fromCharCode(
-                range[1]
-              )}`
-            );
-          }
-          range[0] = range[1] = i;
-        } else {
+        if (range.length === 2 && range[1] + 1 === i) {
           range[1] = i;
+        } else {
+          flushRange();
+          range[0] = range[1] = i;
         }
       }
     }
+    // Flush the range still pending after the loop.
+    flushRange();
 
     const rangesStr = ranges.join("");
     if (!NormalizeWithNFKC) {
@@ -191,4 +134,4 @@ function getNormalizeWithNFKC() {
   return NormalizeWithNFKC;
 }
 
-export { CharacterType, getCharacterType, getNormalizeWithNFKC };
+export { getNormalizeWithNFKC, isEntireWord };

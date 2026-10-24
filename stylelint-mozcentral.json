@@ -1,11 +1,18 @@
 {
   "plugins": ["./external/stylelint/no-unused-custom-properties.mjs"],
+  "referenceFiles": ["./external/stylelint/mozcentral-tokens.css"],
   "rules": {
     "no-unknown-custom-properties": true,
     "pdfjs/no-unused-custom-properties": [
       true,
       {
-        "ignoreList": ["scale-round-x", "scale-round-y", "input-width"]
+        "ignoreList": [
+          "scale-round-x",
+          "scale-round-y",
+          "input-width",
+          "message-bar-icon-container-border-radius-start-start",
+          "message-bar-icon-container-border-radius-end-start"
+        ]
       }
     ]
   }

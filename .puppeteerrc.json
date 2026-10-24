@@ -1,0 +1,13 @@
+{
+  "chrome": {
+    "skipDownload": true,
+    "version": "stable"
+  },
+  "chrome-headless-shell": {
+    "skipDownload": true
+  },
+  "firefox": {
+    "skipDownload": true,
+    "version": "nightly"
+  }
+}

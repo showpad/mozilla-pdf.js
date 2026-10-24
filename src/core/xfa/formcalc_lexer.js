@@ -116,11 +116,11 @@ const TOKEN = {
   upto: 54,
 };
 
-const hexPattern = /^[uU]([0-9a-fA-F]{4,8})/;
-const numberPattern = /^\d*(?:\.\d*)?(?:[Ee][+-]?\d+)?/;
-const dotNumberPattern = /^\d*(?:[Ee][+-]?\d+)?/;
+const hexPattern = /^u([0-9a-f]{4,8})/i;
+const numberPattern = /^\d*(?:\.\d*)?(?:E[+-]?\d+)?/i;
+const dotNumberPattern = /^\d*(?:E[+-]?\d+)?/i;
 const eolPattern = /[\r\n]+/;
-const identifierPattern = new RegExp("^[\\p{L}_$!][\\p{L}\\p{N}_$]*", "u");
+const identifierPattern = /^[\p{L}_$!][\p{L}\p{N}_$]*/u;
 
 class Token {
   constructor(id, value = null) {
@@ -180,11 +180,9 @@ class Lexer {
     this.pos += match[0].length;
 
     const lower = identifier.toLowerCase();
-    if (!KEYWORDS.has(lower)) {
-      return new Token(TOKEN.identifier, identifier);
-    }
-
-    return Singletons[lower];
+    return !KEYWORDS.has(lower)
+      ? new Token(TOKEN.identifier, identifier)
+      : Singletons[lower];
   }
 
   getString() {

@@ -15,6 +15,7 @@
 
 import { BaseStream } from "./base_stream.js";
 import { Stream } from "./stream.js";
+import { unreachable } from "../shared/util.js";
 
 // Lots of DecodeStreams are created whose buffers are never used.  For these
 // we share a single empty buffer. This is (a) space-efficient and (b) avoids
@@ -24,21 +25,30 @@ const emptyBuffer = new Uint8Array(0);
 
 // Super class for the decoding streams.
 class DecodeStream extends BaseStream {
+  buffer = emptyBuffer;
+
+  bufferLength = 0;
+
+  eof = false;
+
+  minBufferLength = 512;
+
+  pos = 0;
+
   constructor(maybeMinBufferLength) {
     super();
     this._rawMinBufferLength = maybeMinBufferLength || 0;
 
-    this.pos = 0;
-    this.bufferLength = 0;
-    this.eof = false;
-    this.buffer = emptyBuffer;
-    this.minBufferLength = 512;
     if (maybeMinBufferLength) {
       // Compute the first power of two that is as big as maybeMinBufferLength.
       while (this.minBufferLength < maybeMinBufferLength) {
         this.minBufferLength *= 2;
       }
     }
+  }
+
+  readBlock() {
+    unreachable("Abstract method `readBlock` called");
   }
 
   get isEmpty() {
@@ -101,10 +111,9 @@ class DecodeStream extends BaseStream {
 
   async getImageData(length, decoderOptions) {
     if (!this.canAsyncDecodeImageFromBuffer) {
-      if (this.isAsyncDecoder) {
-        return this.decodeImage(null, length, decoderOptions);
-      }
-      return this.getBytes(length, decoderOptions);
+      return this.isAsyncDecoder
+        ? this.decodeImage(null, length, decoderOptions)
+        : this.getBytes(length, decoderOptions);
     }
     const data = await this.stream.asyncGetBytes();
     return this.decodeImage(data, length, decoderOptions);
@@ -112,31 +121,36 @@ class DecodeStream extends BaseStream {
 
   async asyncGetBytesFromDecompressionStream(name) {
     this.stream.reset();
-    const bytes = this.stream.isAsync
-      ? await this.stream.asyncGetBytes()
-      : this.stream.getBytes();
+    const bytes =
+      (this.stream.isAsync && (await this.stream.asyncGetBytes())) ||
+      this.stream.getBytes();
 
     try {
       const { readable, writable } = new DecompressionStream(name);
       const writer = writable.getWriter();
-      await writer.ready;
-
-      // We can't await writer.write() because it'll block until the reader
-      // starts which happens few lines below.
-      writer
-        .write(bytes)
-        .then(async () => {
-          await writer.ready;
-          await writer.close();
-        })
-        .catch(() => {});
+      // Don't await the writer: it only makes progress once the reader pulls.
+      // close() is queued behind write(), so the stream is only closed once
+      // all the bytes have been written.
+      // Handle decompression errors through reader.read() below.
+      writer.write(bytes).catch(() => {});
+      writer.close().catch(() => {});
 
       const chunks = [];
       let totalLength = 0;
 
-      for await (const chunk of readable) {
+      // Faster than `for await`.
+      const reader = readable.getReader();
+      while (true) {
+        const { value: chunk, done } = await reader.read();
+        if (done) {
+          break;
+        }
         chunks.push(chunk);
         totalLength += chunk.byteLength;
+      }
+      // Avoid copying single-chunk output.
+      if (chunks.length === 1) {
+        return { decompressed: chunks[0], compressed: bytes };
       }
       const data = new Uint8Array(totalLength);
       let offset = 0;
@@ -168,21 +182,16 @@ class DecodeStream extends BaseStream {
     return new Stream(this.buffer, start, length, dict);
   }
 
-  getBaseStreams() {
-    return this.stream ? this.stream.getBaseStreams() : null;
-  }
-
   clone() {
     // Make sure it has been fully read.
     while (!this.eof) {
       this.readBlock();
     }
-    return new Stream(
-      this.buffer,
-      this.start,
-      this.end - this.start,
-      this.dict.clone()
-    );
+    return new Stream(this.buffer, 0, this.bufferLength, this.dict?.clone());
+  }
+
+  getBaseStreams() {
+    return this.stream ? this.stream.getBaseStreams() : null;
   }
 }
 
@@ -221,9 +230,12 @@ class StreamsSequenceStream extends DecodeStream {
       throw reason;
     }
     const bufferLength = this.bufferLength;
-    const newLength = bufferLength + chunk.length;
+    // Add a line feed after each stream, so that a token or a comment cannot
+    // continue into the next one.
+    const newLength = bufferLength + chunk.length + 1;
     const buffer = this.ensureBuffer(newLength);
     buffer.set(chunk, bufferLength);
+    buffer[newLength - 1] = 0x0a;
     this.bufferLength = newLength;
   }
 

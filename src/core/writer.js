@@ -14,7 +14,7 @@
  */
 
 import { bytesToString, info, warn } from "../shared/util.js";
-import { Dict, isName, Name, Ref } from "./primitives.js";
+import { Dict, isDict, isName, Name, Ref } from "./primitives.js";
 import {
   escapePDFName,
   escapeString,
@@ -57,21 +57,70 @@ async function writeStream(stream, buffer, transform) {
   let bytes = stream.getBytes();
   const { dict } = stream;
 
-  const [filter, params] = await Promise.all([
+  let [filter, params] = await Promise.all([
     dict.getAsync("Filter"),
     dict.getAsync("DecodeParms"),
   ]);
+  const filters = Array.isArray(filter)
+    ? await Promise.all(filter.map(f => dict.xref.fetchIfRefAsync(f)))
+    : [filter];
 
-  const filterZero = Array.isArray(filter)
-    ? await dict.xref.fetchIfRefAsync(filter[0])
-    : filter;
+  // /Crypt overrides the stream defaults (ISO 32000-1, 7.6.5).
+  let cryptFilterName = null;
+  const cryptFilterIndex = filters.findIndex(f => isName(f, "Crypt"));
+  if (cryptFilterIndex !== -1) {
+    if (transform) {
+      const cryptParams = Array.isArray(params)
+        ? await dict.xref.fetchIfRefAsync(params[cryptFilterIndex])
+        : params;
+      const name = cryptParams instanceof Dict ? cryptParams.get("Name") : null;
+      cryptFilterName = name instanceof Name ? name : Name.get("Identity");
+    } else {
+      // Drop /Crypt: getOriginalStream() returns decrypted bytes.
+      filters.splice(cryptFilterIndex, 1);
+      if (filters.length === 0) {
+        filter = params = undefined;
+        dict.delete("Filter");
+        dict.delete("DecodeParms");
+      } else {
+        filter = filter.toSpliced(cryptFilterIndex, 1);
+        dict.set("Filter", filter);
+        if (Array.isArray(params)) {
+          params = params.toSpliced(cryptFilterIndex, 1);
+          dict.set("DecodeParms", params);
+        }
+      }
+    }
+  }
+
+  const filterZero = filters[0];
   const isFilterZeroFlateDecode = isName(filterZero, "FlateDecode");
+
+  // These filters already compress the data, so we shouldn't try to compress it
+  // again.
+  const isFilterZeroImageDecode =
+    isName(filterZero, "DCTDecode") ||
+    isName(filterZero, "JPXDecode") ||
+    isName(filterZero, "JBIG2Decode") ||
+    isName(filterZero, "CCITTFaxDecode") ||
+    isName(filterZero, "LZWDecode");
+  const isFilterZeroCompressedObject =
+    isFilterZeroFlateDecode ||
+    isFilterZeroImageDecode ||
+    isName(filterZero, "BrotliDecode");
 
   // If the string is too small there is no real benefit in compressing it.
   // The number 256 is arbitrary, but it should be reasonable.
   const MIN_LENGTH_FOR_COMPRESSING = 256;
 
-  if (bytes.length >= MIN_LENGTH_FOR_COMPRESSING && !isFilterZeroFlateDecode) {
+  if (
+    !isFilterZeroCompressedObject &&
+    // /Crypt must come first (ISO 32000-1, 7.4.10).
+    !cryptFilterName &&
+    // Preserve plaintext metadata (ISO 32000-1, 14.3.2, note 2).
+    !isDict(dict, "Metadata") &&
+    bytes.length >= MIN_LENGTH_FOR_COMPRESSING
+  ) {
     try {
       const cs = new CompressionStream("deflate");
       const writer = cs.writable.getWriter();
@@ -113,7 +162,7 @@ async function writeStream(stream, buffer, transform) {
 
   let string = bytesToString(bytes);
   if (transform) {
-    string = transform.encryptString(string);
+    string = transform.encryptStream(string, dict, cryptFilterName);
   }
 
   dict.set("Length", string.length);
@@ -130,6 +179,31 @@ async function writeArray(array, buffer, transform) {
     }
   }
   buffer.push("]");
+}
+
+// The exponential notation isn't valid in a PDF, hence a number is always
+// written with all its digits.
+function numberToPDFString(value) {
+  // `toFixed` uses the exponential notation from 1e21 on, so such a number is
+  // written thanks to BigInt: it's necessarily an integer, and `isInteger` also
+  // rules out NaN and ±Infinity for which BigInt would throw.
+  if (Number.isInteger(value) && Math.abs(value) >= 1e21) {
+    return BigInt(value).toString();
+  }
+
+  // Below that limit `toFixed(10)` never uses the exponential notation (unlike
+  // `toString` which uses it under 1e-6) and it rounds the value: it always
+  // adds 10 decimals, hence scan them backwards to remove the trailing zeros,
+  // and then the dot itself when none of the decimals is left.
+  const str = value.toFixed(10);
+  let end = str.length;
+  while (str[end - 1] === "0") {
+    end--;
+  }
+  if (str[end - 1] === ".") {
+    end--;
+  }
+  return str.slice(0, end);
 }
 
 async function writeValue(value, buffer, transform) {
@@ -149,7 +223,7 @@ async function writeValue(value, buffer, transform) {
     // matrices (e.g. [0.000008 0 0 0.000008 0 0]).
     // The numbers must be "rounded" only when pdf.js is producing them and the
     // current transformation matrix is well known.
-    buffer.push(value.toString());
+    buffer.push(numberToPDFString(value));
   } else if (typeof value === "boolean") {
     buffer.push(value.toString());
   } else if (value instanceof Dict) {
@@ -206,7 +280,7 @@ function writeXFADataForAcroform(str, changes) {
       continue;
     }
     const { path, value } = xfa;
-    if (!path) {
+    if (!path || value === null) {
       continue;
     }
     const nodePath = parseXFAPath(path);
@@ -273,8 +347,7 @@ function updateXFA({ xfaData, xfaDatasetsRef, changes, xref }) {
     const datasets = xref.fetchIfRef(xfaDatasetsRef);
     xfaData = writeXFADataForAcroform(datasets.getString(), changes);
   }
-  const xfaDataStream = new StringStream(xfaData);
-  xfaDataStream.dict = new Dict(xref);
+  const xfaDataStream = new StringStream(xfaData, new Dict(xref));
   xfaDataStream.dict.setIfName("Type", "EmbeddedFile");
 
   changes.put(xfaDatasetsRef, {

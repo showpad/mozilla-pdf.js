@@ -186,16 +186,15 @@ function formatArg(arg, full) {
       return `<${arg.length} values>`;
     }
     const fmt = n => (Number.isInteger(n) ? n : Math.round(n * 1000) / 1000);
-    return `[${Array.from(arg).map(fmt).join(" ")}]`;
+    return `[${Array.from(arg, fmt).join(" ")}]`;
   }
   if (Array.isArray(arg)) {
     if (arg.length === 0) {
       return "[]";
     }
-    if (!full && arg.length > 4) {
-      return `[…${arg.length}]`;
-    }
-    return `[${arg.map(a => formatArg(a, full)).join(", ")}]`;
+    return !full && arg.length > 4
+      ? `[…${arg.length}]`
+      : `[${arg.map(a => formatArg(a, full)).join(", ")}]`;
   }
   if (typeof arg === "object") {
     if (!full) {
@@ -237,7 +236,7 @@ class DrawOpDetailView {
     header.textContent = name;
     argsContainer.append(header);
 
-    if (!args || args.length === 0) {
+    if (!args?.length) {
       const none = document.createElement("div");
       none.className = "detail-empty";
       none.textContent = "(no arguments)";

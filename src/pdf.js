@@ -20,7 +20,7 @@
 /** @typedef {import("./display/api").PDFDocumentProxy} PDFDocumentProxy */
 /** @typedef {import("./display/api").PDFPageProxy} PDFPageProxy */
 /** @typedef {import("./display/api").RenderTask} RenderTask */
-/** @typedef {import("./display/display_utils").PageViewport} PageViewport */
+/** @typedef {import("./display/page_viewport").PageViewport} PageViewport */
 
 import {
   AbortException,
@@ -28,6 +28,7 @@ import {
   AnnotationEditorType,
   AnnotationMode,
   AnnotationType,
+  createPromiseCapability,
   createValidAbsoluteUrl,
   FeatureTest,
   getUuid,
@@ -36,9 +37,11 @@ import {
   makeArr,
   makeMap,
   makeObj,
-  MathClamp,
+  makeSet,
+  noopFn,
   normalizeUnicode,
   OPS,
+  PasswordException,
   PasswordResponses,
   PermissionFlag,
   ResponseException,
@@ -49,24 +52,12 @@ import {
 } from "./shared/util.js";
 import {
   applyOpacity,
-  CSSConstants,
-  fetchData,
   findContrastColor,
-  getFilenameFromUrl,
-  getPdfFilenameFromUrl,
   getRGB,
-  getXfaPageViewport,
-  isDataScheme,
-  isPdfFile,
-  noContextMenu,
+  getRGBA,
   OutputScale,
-  PDFDateString,
   PixelsPerInch,
   RenderingCancelledException,
-  renderRichText,
-  setLayerDimensions,
-  stopEvent,
-  SupportedImageMimeTypes,
 } from "./display/display_utils.js";
 import {
   build,
@@ -75,6 +66,20 @@ import {
   PDFWorker,
   version,
 } from "./display/api.js";
+import {
+  CSSConstants,
+  fetchData,
+  getFilenameFromUrl,
+  getPdfFilenameFromUrl,
+  isDataScheme,
+  isPdfFile,
+  noContextMenu,
+  PDFDateString,
+  renderRichText,
+  setLayerDimensions,
+  stopEvent,
+  SupportedImageMimeTypes,
+} from "./display/dom_utils.js";
 import { AnnotationEditorLayer } from "./display/editor/annotation_editor_layer.js";
 import { AnnotationEditorUIManager } from "./display/editor/tools.js";
 import { AnnotationLayer } from "./display/annotation_layer.js";
@@ -84,6 +89,7 @@ import { DrawLayer } from "./display/draw_layer.js";
 import { GlobalWorkerOptions } from "./display/worker_options.js";
 import { HighlightOutliner } from "./display/editor/drawers/highlight.js";
 import { isValidExplicitDest } from "./display/api_utils.js";
+import { MathClamp } from "./shared/math_clamp.js";
 import { SignatureExtractor } from "./display/editor/drawers/signaturedraw.js";
 import { TextLayer } from "./display/text_layer.js";
 import { TextLayerImages } from "./display/text_layer_images.js";
@@ -108,6 +114,7 @@ globalThis.pdfjsLib = {
   applyOpacity,
   build,
   ColorPicker,
+  createPromiseCapability,
   createValidAbsoluteUrl,
   CSSConstants,
   DOMSVGFactory,
@@ -119,8 +126,8 @@ globalThis.pdfjsLib = {
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
   getRGB,
+  getRGBA,
   getUuid,
-  getXfaPageViewport,
   GlobalWorkerOptions,
   ImageKind,
   InvalidPDFException,
@@ -130,11 +137,14 @@ globalThis.pdfjsLib = {
   makeArr,
   makeMap,
   makeObj,
+  makeSet,
   MathClamp,
   noContextMenu,
+  noopFn,
   normalizeUnicode,
   OPS,
   OutputScale,
+  PasswordException,
   PasswordResponses,
   PDFDataRangeTransport,
   PDFDateString,
@@ -171,6 +181,7 @@ export {
   applyOpacity,
   build,
   ColorPicker,
+  createPromiseCapability,
   createValidAbsoluteUrl,
   CSSConstants,
   DOMSVGFactory,
@@ -182,8 +193,8 @@ export {
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
   getRGB,
+  getRGBA,
   getUuid,
-  getXfaPageViewport,
   GlobalWorkerOptions,
   ImageKind,
   InvalidPDFException,
@@ -193,11 +204,14 @@ export {
   makeArr,
   makeMap,
   makeObj,
+  makeSet,
   MathClamp,
   noContextMenu,
+  noopFn,
   normalizeUnicode,
   OPS,
   OutputScale,
+  PasswordException,
   PasswordResponses,
   PDFDataRangeTransport,
   PDFDateString,

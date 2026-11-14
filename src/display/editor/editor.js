@@ -22,20 +22,16 @@ import {
   ColorManager,
   KeyboardManager,
 } from "./tools.js";
-import {
-  FeatureTest,
-  MathClamp,
-  shadow,
-  unreachable,
-} from "../../shared/util.js";
-import { noContextMenu, stopEvent } from "../display_utils.js";
+import { FeatureTest, shadow, unreachable } from "../../shared/util.js";
+import { noContextMenu, stopEvent } from "../dom_utils.js";
 import { AltText } from "./alt_text.js";
 import { Comment } from "./comment.js";
 import { EditorToolbar } from "./toolbar.js";
+import { MathClamp } from "../../shared/math_clamp.js";
 import { TouchManager } from "../touch_manager.js";
 
 /**
- * @typedef {Object} AnnotationEditorParameters
+ * @typedef {object} AnnotationEditorParameters
  * @property {AnnotationEditorUIManager} uiManager - the global manager
  * @property {AnnotationEditorLayer} parent - the layer containing this editor
  * @property {string} id - editor id
@@ -113,6 +109,8 @@ class AnnotationEditor {
 
   static _l10n = null;
 
+  static _l10nAlert = null;
+
   static _l10nResizer = null;
 
   #isDraggable = false;
@@ -139,26 +137,23 @@ class AnnotationEditor {
       this,
       "_resizerKeyboardManager",
       new KeyboardManager([
-        [["ArrowLeft", "mac+ArrowLeft"], resize, { args: [-small, 0] }],
+        [["ArrowLeft"], resize, { args: [-small, 0] }],
         [
           ["ctrl+ArrowLeft", "mac+shift+ArrowLeft"],
           resize,
           { args: [-big, 0] },
         ],
-        [["ArrowRight", "mac+ArrowRight"], resize, { args: [small, 0] }],
+        [["ArrowRight"], resize, { args: [small, 0] }],
         [
           ["ctrl+ArrowRight", "mac+shift+ArrowRight"],
           resize,
           { args: [big, 0] },
         ],
-        [["ArrowUp", "mac+ArrowUp"], resize, { args: [0, -small] }],
+        [["ArrowUp"], resize, { args: [0, -small] }],
         [["ctrl+ArrowUp", "mac+shift+ArrowUp"], resize, { args: [0, -big] }],
-        [["ArrowDown", "mac+ArrowDown"], resize, { args: [0, small] }],
+        [["ArrowDown"], resize, { args: [0, small] }],
         [["ctrl+ArrowDown", "mac+shift+ArrowDown"], resize, { args: [0, big] }],
-        [
-          ["Escape", "mac+Escape"],
-          AnnotationEditor.prototype._stopResizingWithKeyboard,
-        ],
+        [["Escape"], AnnotationEditor.prototype._stopResizingWithKeyboard],
       ])
     );
   }
@@ -246,12 +241,20 @@ class AnnotationEditor {
 
   /**
    * Initialize the l10n stuff for this type of editor.
-   * @param {Object} l10n
+   * @param {object} l10n
    */
   static initialize(l10n, _uiManager) {
     AnnotationEditor._l10n ??= l10n;
 
-    AnnotationEditor._l10nResizer ||= Object.freeze({
+    AnnotationEditor._l10nAlert ??= Object.freeze({
+      highlight: "pdfjs-editor-highlight-added-alert",
+      freetext: "pdfjs-editor-freetext-added-alert",
+      ink: "pdfjs-editor-ink-added-alert",
+      stamp: "pdfjs-editor-stamp-added-alert",
+      signature: "pdfjs-editor-signature-added-alert",
+    });
+
+    AnnotationEditor._l10nResizer ??= Object.freeze({
       topLeft: "pdfjs-editor-resizer-top-left",
       topMiddle: "pdfjs-editor-resizer-top-middle",
       topRight: "pdfjs-editor-resizer-top-right",
@@ -358,7 +361,7 @@ class AnnotationEditor {
 
   /**
    * Add some commands into the CommandManager (undo/redo stuff).
-   * @param {Object} params
+   * @param {object} params
    */
   addCommands(params) {
     this._uiManager.addCommands(params);
@@ -416,11 +419,7 @@ class AnnotationEditor {
    * @param {FocusEvent} event
    */
   focusout(event) {
-    if (!this._focusEventsAllowed) {
-      return;
-    }
-
-    if (!this.isAttachedToDOM) {
+    if (!this._focusEventsAllowed || !this.isAttachedToDOM) {
       return;
     }
 
@@ -569,8 +568,6 @@ class AnnotationEditor {
     style.top = `${(100 * y).toFixed(2)}%`;
 
     this._onTranslating(x, y);
-
-    div.scrollIntoView({ block: "nearest" });
   }
 
   /**
@@ -649,6 +646,41 @@ class AnnotationEditor {
     x *= pageWidth;
     y *= pageHeight;
 
+    let tx = 0;
+    let ty = 0;
+    const toolbar =
+      this._uiManager._keepToolbarInPage && this._editToolbar?.div;
+    if (toolbar?.offsetParent) {
+      // Offset metrics ignore transforms; include the toolbar before rotating.
+      const scale = this.parentScale;
+      const toolbarLeft = toolbar.offsetLeft + this.div.clientLeft;
+      const toolbarTop = toolbar.offsetTop + this.div.clientTop;
+      const left = Math.min(0, toolbarLeft) / scale;
+      const top = Math.min(0, toolbarTop) / scale;
+      const widthWithToolbar =
+        width -
+        left +
+        Math.max(0, toolbarLeft + toolbar.offsetWidth - this.div.offsetWidth) /
+          scale;
+      const heightWithToolbar =
+        height -
+        top +
+        Math.max(0, toolbarTop + toolbar.offsetHeight - this.div.offsetHeight) /
+          scale;
+      // Keep the editor in the page if the toolbar cannot fit.
+      if (widthWithToolbar <= (rotation % 180 ? pageHeight : pageWidth)) {
+        width = widthWithToolbar;
+        tx = left;
+      }
+      if (heightWithToolbar <= (rotation % 180 ? pageWidth : pageHeight)) {
+        height = heightWithToolbar;
+        ty = top;
+      }
+      [tx, ty] = AnnotationEditor.#rotatePoint(tx, ty, rotation);
+      x += tx;
+      y += ty;
+    }
+
     if (this._mustFixPosition) {
       switch (rotation) {
         case 0:
@@ -670,8 +702,8 @@ class AnnotationEditor {
       }
     }
 
-    this.x = x /= pageWidth;
-    this.y = y /= pageHeight;
+    this.x = x = (x - tx) / pageWidth;
+    this.y = y = (y - ty) / pageHeight;
 
     const [bx, by] = this.getBaseTranslation();
     x += bx;
@@ -795,6 +827,8 @@ class AnnotationEditor {
       this.#resizersDiv.append(div);
       div.classList.add("resizer", name);
       div.setAttribute("data-resizer-name", name);
+      div.setAttribute("role", "spinbutton");
+      div.setAttribute("data-l10n-id", AnnotationEditor._l10nResizer[name]);
       div.addEventListener(
         "pointerdown",
         this.#resizerPointerdown.bind(this, name),
@@ -1356,16 +1390,7 @@ class AnnotationEditor {
 
     bindEvents(this, div, ["keydown", "pointerdown", "dblclick"]);
 
-    if (this.isResizable && this._uiManager._supportsPinchToZoom) {
-      this.#touchManager ||= new TouchManager({
-        container: div,
-        isPinchingDisabled: () => !this.isSelected,
-        onPinchStart: this.#touchPinchStartCallback.bind(this),
-        onPinching: this.#touchPinchCallback.bind(this),
-        onPinchEnd: this.#touchPinchEndCallback.bind(this),
-        signal: this._uiManager._signal,
-      });
-    }
+    this.#addTouchManager();
 
     this.addStandaloneCommentButton();
     this._uiManager._editorUndoBar?.hide();
@@ -1527,6 +1552,11 @@ class AnnotationEditor {
           this.#prevDragX = x;
           this.#prevDragY = y;
           this._uiManager.dragSelectedEditors(tx, ty);
+          // Keep the editor where the drag started in view. Calling
+          // `scrollIntoView` here does it once per handled pointermove, after
+          // `dragSelectedEditors` has moved the selection, rather than once
+          // from every selected editor's `drag` method.
+          this.div.scrollIntoView({ block: "nearest" });
         },
         opts
       );
@@ -1800,6 +1830,25 @@ class AnnotationEditor {
     this.div.addEventListener("focusout", this.focusout.bind(this), { signal });
   }
 
+  #addTouchManager() {
+    if (
+      this.#touchManager ||
+      !this.div ||
+      !this.isResizable ||
+      !this._uiManager._supportsPinchToZoom
+    ) {
+      return;
+    }
+    this.#touchManager = new TouchManager({
+      container: this.div,
+      isPinchingDisabled: () => !this.isSelected,
+      onPinchStart: this.#touchPinchStartCallback.bind(this),
+      onPinching: this.#touchPinchCallback.bind(this),
+      onPinchEnd: this.#touchPinchEndCallback.bind(this),
+      signal: this._uiManager._signal,
+    });
+  }
+
   /**
    * Rebuild the editor in case it has been removed on undo.
    *
@@ -1807,11 +1856,12 @@ class AnnotationEditor {
    */
   rebuild() {
     this.#addFocusListeners();
+    this.#addTouchManager();
   }
 
   /**
    * Rotate the editor when the page is rotated.
-   * @param {number} angle
+   * @param {number} _angle
    */
   rotate(_angle) {}
 
@@ -1822,7 +1872,7 @@ class AnnotationEditor {
 
   /**
    * Serialize the editor when it has been deleted.
-   * @returns {Object}
+   * @returns {object}
    */
   serializeDeleted() {
     return {
@@ -1840,8 +1890,8 @@ class AnnotationEditor {
    *
    * To implement in subclasses.
    * @param {boolean} [isForCopying]
-   * @param {Object | null} [context]
-   * @returns {Object | null}
+   * @param {object | null} [context]
+   * @returns {object | null}
    */
   serialize(isForCopying = false, context = null) {
     return {
@@ -1857,8 +1907,7 @@ class AnnotationEditor {
   /**
    * Deserialize the editor.
    * The result of the deserialization is a new editor.
-   *
-   * @param {Object} data
+   * @param {object} data
    * @param {AnnotationEditorLayer} parent
    * @param {AnnotationEditorUIManager} uiManager
    * @returns {Promise<AnnotationEditor | null>}
@@ -1914,6 +1963,11 @@ class AnnotationEditor {
       // undo/redo so we must commit it before.
       this.commit();
     }
+    // End an active pinch before detaching: its callback uses `parent` and
+    // records the resize.
+    this.#touchManager?.destroy();
+    this.#touchManager = null;
+
     if (this.parent) {
       this.parent.remove(this);
     } else {
@@ -1934,8 +1988,6 @@ class AnnotationEditor {
       this.#telemetryTimeouts = null;
     }
     this.parent = null;
-    this.#touchManager?.destroy();
-    this.#touchManager = null;
     this.#fakeAnnotation?.remove();
     this.#fakeAnnotation = null;
   }
@@ -1957,6 +2009,9 @@ class AnnotationEditor {
     }
   }
 
+  /**
+   * @returns {Array<number>|null}
+   */
   get toolbarPosition() {
     return null;
   }
@@ -2038,13 +2093,11 @@ class AnnotationEditor {
       const signal = this._uiManager._signal;
       for (const div of this.#allResizerDivs) {
         const name = div.getAttribute("data-resizer-name");
-        div.setAttribute("role", "spinbutton");
         div.addEventListener("keydown", boundResizerKeydown, { signal });
         div.addEventListener("blur", boundResizerBlur, { signal });
         div.addEventListener("focus", this.#resizerFocus.bind(this, name), {
           signal,
         });
-        div.setAttribute("data-l10n-id", AnnotationEditor._l10nResizer[name]);
       }
     }
 
@@ -2154,16 +2207,23 @@ class AnnotationEditor {
     if (!this._editToolbar) {
       this.addEditToolbar().then(() => {
         if (this.div?.classList.contains("selectedEditor")) {
-          // The editor can have been unselected while we were waiting for the
-          // edit toolbar to be created, hence we want to be sure that this
-          // editor is still selected.
-          this._editToolbar?.show();
+          // Selection may have changed while the toolbar was being created.
+          this.#showEditToolbar();
         }
       });
       return;
     }
-    this._editToolbar?.show();
+    this.#showEditToolbar();
     this.#altText?.toggleAltTextBadge(false);
+  }
+
+  #showEditToolbar() {
+    this._editToolbar?.show();
+    if (this._uiManager._keepToolbarInPage) {
+      // Include the newly visible toolbar in the bounds.
+      this.fixAndSetPosition();
+      this._onTranslated();
+    }
   }
 
   focus() {
@@ -2306,7 +2366,7 @@ class AnnotationEditor {
 
   /**
    * Get the data to report to the telemetry when the editor is added.
-   * @returns {Object}
+   * @returns {object}
    */
   get telemetryInitialData() {
     return { action: "added" };
@@ -2314,7 +2374,7 @@ class AnnotationEditor {
 
   /**
    * The telemetry data to use when saving/printing.
-   * @returns {Object|null}
+   * @returns {object | null}
    */
   get telemetryFinalData() {
     return null;
@@ -2391,7 +2451,7 @@ class AnnotationEditor {
 
   /**
    * Render an annotation in the annotation layer.
-   * @param {Object} annotation
+   * @param {object} annotation
    * @returns {HTMLElement|null}
    */
   renderAnnotationElement(annotation) {

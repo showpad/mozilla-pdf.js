@@ -69,7 +69,7 @@ const TestReporter = function (browser) {
 
     // Report on passed or failed tests.
     if (result.status === "passed") {
-      sendResult("TEST-PASSED", result.description);
+      sendResult("TEST-PASS", result.description);
     } else {
       let failedMessages = "";
       for (const item of result.failedExpectations) {

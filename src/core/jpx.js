@@ -13,10 +13,9 @@
  * limitations under the License.
  */
 
-import { BaseException, warn } from "../shared/util.js";
-import { fetchBinaryData } from "./core_utils.js";
+import { BaseException, shadow } from "../shared/util.js";
 import OpenJPEG from "../../external/openjpeg/openjpeg.js";
-import { Stream } from "./stream.js";
+import { WasmImage } from "./wasm_image.js";
 
 class JpxError extends BaseException {
   constructor(msg) {
@@ -24,100 +23,27 @@ class JpxError extends BaseException {
   }
 }
 
-class JpxImage {
-  static #buffer = null;
-
-  static #handler = null;
-
-  static #modulePromise = null;
-
-  static #useWasm = true;
-
-  static #useWorkerFetch = true;
-
-  static #wasmUrl = null;
-
-  static setOptions({ handler, useWasm, useWorkerFetch, wasmUrl }) {
-    this.#useWasm = useWasm;
-    this.#useWorkerFetch = useWorkerFetch;
-    this.#wasmUrl = wasmUrl;
-
-    if (!useWorkerFetch) {
-      this.#handler = handler;
-    }
+class JpxImage extends WasmImage {
+  static get instance() {
+    return shadow(
+      this,
+      "instance",
+      new JpxImage("openjpeg.wasm", "openjpeg_nowasm_fallback.js")
+    );
   }
 
-  static async #getJsModule(fallbackCallback) {
-    const path =
-      typeof PDFJSDev === "undefined"
-        ? `../${this.#wasmUrl}openjpeg_nowasm_fallback.js`
-        : `${this.#wasmUrl}openjpeg_nowasm_fallback.js`;
-
-    let instance = null;
-    try {
-      const mod = await (typeof PDFJSDev === "undefined"
-        ? import(path) // eslint-disable-line no-unsanitized/method
-        : __raw_import__(path));
-      instance = mod.default();
-    } catch (e) {
-      warn(`JpxImage#getJsModule: ${e}`);
-    }
-    fallbackCallback(instance);
-  }
-
-  static async #instantiateWasm(fallbackCallback, imports, successCallback) {
-    const filename = "openjpeg.wasm";
-    try {
-      if (!this.#buffer) {
-        if (this.#useWorkerFetch) {
-          this.#buffer = await fetchBinaryData(`${this.#wasmUrl}${filename}`);
-        } else {
-          if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-            throw new Error("Only worker-thread fetching supported.");
-          }
-          this.#buffer = await this.#handler.sendWithPromise(
-            "FetchBinaryData",
-            { kind: "wasmUrl", filename }
-          );
-        }
-      }
-      const results = await WebAssembly.instantiate(this.#buffer, imports);
-      return successCallback(results.instance);
-    } catch (reason) {
-      warn(`JpxImage#instantiateWasm: ${reason}`);
-
-      this.#getJsModule(fallbackCallback);
-      return null;
-    } finally {
-      this.#handler = null;
-    }
-  }
-
-  static async decode(
+  async decode(
     bytes,
     {
-      numComponents = 4,
+      numComponents,
       isIndexedColormap = false,
       smaskInData = false,
       reducePower = 0,
     } = {}
   ) {
-    if (!this.#modulePromise) {
-      const { promise, resolve } = Promise.withResolvers();
-      const promises = [promise];
-      if (!this.#useWasm) {
-        this.#getJsModule(resolve);
-      } else {
-        promises.push(
-          OpenJPEG({
-            warn,
-            instantiateWasm: this.#instantiateWasm.bind(this, resolve),
-          })
-        );
-      }
-      this.#modulePromise = Promise.race(promises);
-    }
-    const module = await this.#modulePromise;
+    const padComponents = numComponents !== undefined;
+    numComponents ??= 4;
+    const module = await this._getModule(OpenJPEG);
 
     if (!module) {
       throw new JpxError("OpenJPEG failed to initialize");
@@ -134,7 +60,8 @@ class JpxImage {
         numComponents > 0 ? numComponents : 0,
         !!isIndexedColormap,
         !!smaskInData,
-        reducePower
+        reducePower,
+        padComponents
       );
       if (ret) {
         const { errorMessages } = module;
@@ -145,28 +72,16 @@ class JpxImage {
         throw new JpxError("Unknown error");
       }
       const { imageData } = module;
-      module.imageData = null;
-
       return imageData;
     } finally {
       if (ptr) {
         module._free(ptr);
       }
+      module.imageData = null;
     }
-  }
-
-  static cleanup() {
-    this.#modulePromise = null;
   }
 
   static parseImageProperties(stream) {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("IMAGE_DECODERS")) {
-      if (stream instanceof ArrayBuffer || ArrayBuffer.isView(stream)) {
-        stream = new Stream(stream);
-      } else {
-        throw new JpxError("Invalid data format, must be a TypedArray.");
-      }
-    }
     // No need to use OpenJPEG here since we're only getting very basic
     // information which are located in the first bytes of the file.
     let newByte = stream.getByte();

@@ -21,9 +21,28 @@ const FORMS_VERSION = 21.00720099;
 const USERACTIVATION_CALLBACKID = 0;
 const USERACTIVATION_MAXTIME_VALIDITY = 5000;
 
-function serializeError(error) {
-  const value = `${error.toString()}\n${error.stack}`;
-  return { command: "error", value };
+// `uncurryThis(fn)` gives a function calling `fn` with an explicit receiver,
+// e.g. `uncurryThis(WeakMap.prototype.get)(map, key)`.
+const { apply } = Reflect;
+
+function uncurryThis(fn) {
+  return (thisArg, ...args) => apply(fn, thisArg, args);
+}
+
+function serializeError(error, prefix = "") {
+  // Scripts can throw non-Error values.
+  let message;
+  try {
+    message = String(error);
+  } catch {
+    message = "Unknown error";
+  }
+  let stack;
+  try {
+    stack = error?.stack;
+  } catch {}
+  const value = typeof stack === "string" ? `${message}\n${stack}` : message;
+  return { command: "error", value: `${prefix}${value}` };
 }
 
 // Helpers for simple `Map.prototype.getOrInsertComputed()` invocations,
@@ -31,35 +50,87 @@ function serializeError(error) {
 const makeArr = () => [];
 const makeMap = () => new Map();
 
-if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
-  // TODO: Remove this once `Math.sumPrecise` is supported in QuickJS.
-  //
-  // Note that this isn't a "proper" polyfill, but since we're only using it to
-  // replace `Array.prototype.reduce()` invocations it should be fine.
-  if (typeof Math.sumPrecise !== "function") {
-    Math.sumPrecise = function (numbers) {
-      return numbers.reduce((a, b) => a + b, 0);
-    };
-  }
+const publicPrototypes = new Map();
+const publicFunctions = new WeakSet();
 
-  // TODO: Remove this once `Map.prototype.getOrInsertComputed` is supported in
-  // QuickJS.
-  if (typeof Map.prototype.getOrInsertComputed !== "function") {
-    // eslint-disable-next-line no-extend-native
-    Map.prototype.getOrInsertComputed = function (key, callbackFn) {
-      if (!this.has(key)) {
-        this.set(key, callbackFn(key));
-      }
-      return this.get(key);
-    };
+/**
+ * Register some functions which `Function.prototype.toString` shows as native
+ * ones, see `useNativeToStringForPublicFunctions`.
+ */
+function addPublicFunctions(...fns) {
+  for (const fn of fns) {
+    if (typeof fn === "function") {
+      publicFunctions.add(fn);
+    }
   }
 }
 
+/**
+ * Make an object look like a plain one: its prototype is replaced by an object
+ * with the methods and accessors of its class, over Object.prototype.
+ * With `bindMethods`, the methods are bound to the object, otherwise the new
+ * prototype is shared by the instances of the class.
+ */
+function exposeObject(object, bindMethods = false) {
+  const prototype = Object.getPrototypeOf(object);
+  let publicPrototype = !bindMethods && publicPrototypes.get(prototype);
+  if (!publicPrototype) {
+    const descriptors = Object.getOwnPropertyDescriptors(prototype);
+    delete descriptors.constructor;
+
+    for (const descriptor of Object.values(descriptors)) {
+      const { value, get, set } = descriptor;
+      addPublicFunctions(value, get, set);
+      if (bindMethods && typeof value === "function") {
+        descriptor.value = value.bind(object);
+      }
+    }
+    publicPrototype = Object.create(Object.prototype, descriptors);
+    if (!bindMethods) {
+      publicPrototypes.set(prototype, publicPrototype);
+    }
+  }
+  return Object.setPrototypeOf(object, publicPrototype);
+}
+
+/**
+ * Make `Function.prototype.toString` show the registered API functions as
+ * native ones, like the built-in functions.
+ */
+function useNativeToStringForPublicFunctions() {
+  const nativeToString = Function.prototype.toString;
+  const isPublic = uncurryThis(WeakSet.prototype.has);
+  // Match the engine's native-function format.
+  const [prefix, suffix] = apply(nativeToString, nativeToString, []).split(
+    "toString"
+  );
+
+  // Method syntax avoids adding a `prototype` property.
+  const { toString } = {
+    toString() {
+      return isPublic(publicFunctions, this)
+        ? `${prefix}${this.name}${suffix}`
+        : apply(nativeToString, this, []);
+    },
+  };
+  publicFunctions.add(toString);
+  // eslint-disable-next-line no-extend-native
+  Object.defineProperty(Function.prototype, "toString", {
+    value: toString,
+    writable: true,
+    configurable: true,
+  });
+}
+
 export {
+  addPublicFunctions,
+  exposeObject,
   FORMS_VERSION,
   makeArr,
   makeMap,
   serializeError,
+  uncurryThis,
+  useNativeToStringForPublicFunctions,
   USERACTIVATION_CALLBACKID,
   USERACTIVATION_MAXTIME_VALIDITY,
   VIEWER_TYPE,

@@ -22,6 +22,7 @@ import {
   loadAndWait,
   PDI,
   showViewsManager,
+  waitForTooltipToBe,
 } from "./test_utils.mjs";
 
 function waitForThumbnailVisible(page, pageNum) {
@@ -70,13 +71,11 @@ describe("PDF Thumbnail View", () => {
             visible: true,
           });
 
-          const title = await page.$eval(
+          await waitForTooltipToBe(
+            page,
             getThumbnailSelector(1),
-            el => el.title
+            `Page ${FSI}1${PDI} of ${FSI}14${PDI}`
           );
-          expect(title)
-            .withContext(`In ${browserName}`)
-            .toBe(`Page ${FSI}1${PDI} of ${FSI}14${PDI}`);
         })
       );
     });
@@ -167,21 +166,9 @@ describe("PDF Thumbnail View", () => {
           await waitForThumbnailVisible(page, 2);
           await waitForThumbnailVisible(page, 3);
 
-          await kbFocusNext(page);
-          await page.waitForSelector("#viewsManagerSelectorButton:focus", {
-            visible: true,
-          });
-
-          await kbFocusNext(page);
-          await page.waitForSelector("#viewsManagerStatusActionButton:focus", {
-            visible: true,
-          });
-
-          await kbFocusNext(page);
-          await page.waitForSelector(
-            `#thumbnailsView ${getThumbnailSelector(1)}:focus`,
-            { visible: true }
-          );
+          await kbFocusNext(page, "#viewsManagerSelectorButton");
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
+          await kbFocusNext(page, `#thumbnailsView ${getThumbnailSelector(1)}`);
 
           await page.keyboard.press("ArrowDown");
           await page.waitForSelector(
@@ -219,6 +206,30 @@ describe("PDF Thumbnail View", () => {
             `#thumbnailsView ${getThumbnailSelector(1)}:focus`,
             { visible: true }
           );
+        })
+      );
+    });
+
+    it("must navigate when a synthetic click is dispatched on the thumbnail image (bug 2034568)", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await showViewsManager(page);
+          await waitForThumbnailVisible(page, 3);
+
+          // Simulate a screen reader (e.g. NVDA) firing a synthetic click on
+          // the <img> child rather than the thumbnailImageContainer button.
+          await page.evaluate(() => {
+            const img = document.querySelector(
+              `.thumbnail[page-number="3"] .thumbnailImageContainer img`
+            );
+            img.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          });
+
+          const currentPage = await page.$eval(
+            "#pageNumber",
+            el => el.valueAsNumber
+          );
+          expect(currentPage).withContext(`In ${browserName}`).toBe(3);
         })
       );
     });
@@ -260,11 +271,7 @@ describe("PDF Thumbnail View", () => {
           await enableMenuItems(page);
 
           // Focus the manage button
-          await kbFocusNext(page);
-          await kbFocusNext(page);
-          await page.waitForSelector("#viewsManagerStatusActionButton:focus", {
-            visible: true,
-          });
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
 
           // Press Enter to open the menu
           await page.keyboard.press("Enter");
@@ -292,11 +299,7 @@ describe("PDF Thumbnail View", () => {
           await enableMenuItems(page);
 
           // Focus the manage button
-          await kbFocusNext(page);
-          await kbFocusNext(page);
-          await page.waitForSelector("#viewsManagerStatusActionButton:focus", {
-            visible: true,
-          });
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
 
           // Press Space to open the menu
           await page.keyboard.press(" ");
@@ -320,6 +323,80 @@ describe("PDF Thumbnail View", () => {
           // Close menu with Escape
           await page.keyboard.press("Escape");
           await waitForMenu(page, "#viewsManagerStatusActionButton", false);
+        })
+      );
+    });
+
+    it("must move to the previous item after pressing the End key", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await showViewsManager(page);
+          await waitForThumbnailVisible(page, 1);
+
+          await enableMenuItems(page);
+
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
+          await page.keyboard.press("Enter");
+          await waitForMenu(page, "#viewsManagerStatusActionButton");
+          await page.waitForSelector("#viewsManagerStatusActionCopy:focus", {
+            visible: true,
+          });
+
+          // Move to the second menu item.
+          await page.keyboard.press("ArrowDown");
+          await page.waitForSelector("#viewsManagerStatusActionCut:focus", {
+            visible: true,
+          });
+
+          // Jump to the last menu item.
+          await page.keyboard.press("End");
+          await page.waitForSelector("#viewsManagerStatusActionExport:focus", {
+            visible: true,
+          });
+
+          // The focus must move relative to the last menu item, and not
+          // relative to the item that was focused before pressing End.
+          await page.keyboard.press("ArrowUp");
+          await page.waitForSelector("#viewsManagerStatusActionDelete:focus", {
+            visible: true,
+          });
+        })
+      );
+    });
+
+    it("must move to the next item after pressing the Home key", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await showViewsManager(page);
+          await waitForThumbnailVisible(page, 1);
+
+          await enableMenuItems(page);
+
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
+          await page.keyboard.press("Enter");
+          await waitForMenu(page, "#viewsManagerStatusActionButton");
+          await page.waitForSelector("#viewsManagerStatusActionCopy:focus", {
+            visible: true,
+          });
+
+          // Wrap around to the last menu item.
+          await page.keyboard.press("ArrowUp");
+          await page.waitForSelector("#viewsManagerStatusActionExport:focus", {
+            visible: true,
+          });
+
+          // Jump to the first menu item.
+          await page.keyboard.press("Home");
+          await page.waitForSelector("#viewsManagerStatusActionCopy:focus", {
+            visible: true,
+          });
+
+          // The focus must move relative to the first menu item, and not
+          // relative to the item that was focused before pressing Home.
+          await page.keyboard.press("ArrowDown");
+          await page.waitForSelector("#viewsManagerStatusActionCut:focus", {
+            visible: true,
+          });
         })
       );
     });
@@ -348,13 +425,11 @@ describe("PDF Thumbnail View", () => {
           await showViewsManager(page);
           await waitForThumbnailVisible(page, 1);
 
-          const title = await page.$eval(
+          await waitForTooltipToBe(
+            page,
             `.thumbnail[page-number="1"] input[type="checkbox"]`,
-            el => el.title
+            `Select page ${FSI}1${PDI}`
           );
-          expect(title)
-            .withContext(`In ${browserName}`)
-            .toBe(`Select page ${FSI}1${PDI}`);
         })
       );
     });
@@ -409,15 +484,10 @@ describe("PDF Thumbnail View", () => {
           });
 
           // Press Tab to move to the manage button (should close views menu)
-          await page.keyboard.press("Tab");
+          await kbFocusNext(page, "#viewsManagerStatusActionButton");
 
           // Wait for views manager menu to be collapsed
           await waitForMenu(page, "#viewsManagerSelectorButton", false);
-
-          // Focus should be on manage button
-          await page.waitForSelector("#viewsManagerStatusActionButton:focus", {
-            visible: true,
-          });
 
           // Open manage menu with Space key
           await page.keyboard.press(" ");
@@ -493,9 +563,7 @@ describe("PDF Thumbnail View", () => {
           await waitForThumbnailVisible(page, 1);
 
           // Focus the first thumbnail button
-          await kbFocusNext(page);
-          await kbFocusNext(page);
-          await kbFocusNext(page);
+          await kbFocusNext(page, getThumbnailSelector(1));
 
           // Verify we're on the first thumbnail
           await page.waitForSelector(`${getThumbnailSelector(1)}:focus`, {
@@ -503,10 +571,9 @@ describe("PDF Thumbnail View", () => {
           });
 
           // Tab to checkbox
-          await kbFocusNext(page);
-          await page.waitForSelector(
-            `.thumbnail[page-number="1"] input[type="checkbox"]:focus`,
-            { visible: true }
+          await kbFocusNext(
+            page,
+            `.thumbnail[page-number="1"] input[type="checkbox"]`
           );
         })
       );
@@ -520,10 +587,10 @@ describe("PDF Thumbnail View", () => {
           await waitForThumbnailVisible(page, 2);
 
           // Navigate to first checkbox
-          await kbFocusNext(page);
-          await kbFocusNext(page);
-          await kbFocusNext(page);
-          await kbFocusNext(page);
+          await kbFocusNext(
+            page,
+            `.thumbnail[page-number="1"] input[type="checkbox"]`
+          );
 
           // Verify first checkbox is focused
           await page.waitForSelector(

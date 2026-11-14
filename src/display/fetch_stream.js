@@ -13,7 +13,12 @@
  * limitations under the License.
  */
 
-import { AbortException, assert } from "../shared/util.js";
+import {
+  AbortException,
+  assert,
+  createPromiseCapability,
+  noopFn,
+} from "../shared/util.js";
 import {
   BasePDFStream,
   BasePDFStreamRangeReader,
@@ -140,7 +145,7 @@ class PDFFetchStreamReader extends BasePDFStreamReader {
   }
 
   cancel(reason) {
-    this._reader?.cancel(reason);
+    this._reader?.cancel(reason).catch(noopFn);
     this._abortController.abort();
   }
 }
@@ -148,7 +153,7 @@ class PDFFetchStreamReader extends BasePDFStreamReader {
 class PDFFetchStreamRangeReader extends BasePDFStreamRangeReader {
   _abortController = new AbortController();
 
-  _readCapability = Promise.withResolvers();
+  _readCapability = createPromiseCapability();
 
   _reader = null;
 
@@ -176,14 +181,13 @@ class PDFFetchStreamRangeReader extends BasePDFStreamRangeReader {
   async read() {
     await this._readCapability.promise;
     const { value, done } = await this._reader.read();
-    if (done) {
-      return { value, done };
-    }
-    return { value: getArrayBuffer(value), done: false };
+    return done
+      ? { value, done }
+      : { value: getArrayBuffer(value), done: false };
   }
 
   cancel(reason) {
-    this._reader?.cancel(reason);
+    this._reader?.cancel(reason).catch(noopFn);
     this._abortController.abort();
   }
 }

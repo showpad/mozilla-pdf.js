@@ -14,7 +14,7 @@
  */
 
 import { stringToBytes, unreachable } from "../shared/util.js";
-import { fetchData } from "./display_utils.js";
+import { fetchData } from "./dom_utils.js";
 
 class BaseBinaryDataFactory {
   #errorStr = Object.freeze({
@@ -70,7 +70,7 @@ class DOMBinaryDataFactory extends BaseBinaryDataFactory {
    */
   async _fetch(url, kind) {
     const type =
-      kind === "cMapUrl" && !url.endsWith(".bcmap") ? "text" : "bytes";
+      kind === "cMapUrl" && !url.endsWith(".bcmap.br") ? "text" : "bytes";
     const data = await fetchData(url, type);
     return data instanceof Uint8Array ? data : stringToBytes(data);
   }

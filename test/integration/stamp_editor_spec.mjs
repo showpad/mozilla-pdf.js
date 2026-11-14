@@ -21,6 +21,7 @@ import {
   closePages,
   copy,
   copyToClipboard,
+  decodePNG,
   dragAndDrop,
   getAnnotationSelector,
   getEditorDimensions,
@@ -48,11 +49,11 @@ import {
   waitForPageRendered,
   waitForSelectedEditor,
   waitForSerialized,
+  waitForTextToBe,
   waitForTimeout,
 } from "./test_utils.mjs";
 import fs from "fs";
 import path from "path";
-import { PNG } from "pngjs";
 
 const __dirname = import.meta.dirname;
 
@@ -117,15 +118,11 @@ describe("Stamp Editor", () => {
           );
           const editorSelector = getEditorSelector(0);
           await waitForImage(page, editorSelector);
-
-          await page.waitForFunction(
-            `document.getElementById("viewer-alert").textContent === "Image added"`
-          );
-
-          const { width } = await getEditorDimensions(page, editorSelector);
+          await waitForTextToBe(page, "#viewer-alert", "Image added");
 
           // The image is bigger than the page, so it has been scaled down to
           // 75% of the page width.
+          const { width } = await getEditorDimensions(page, editorSelector);
           expect(width).toEqual("75%");
 
           const [bitmap] = await serializeBitmapDimensions(page);
@@ -508,6 +505,39 @@ describe("Stamp Editor", () => {
           `${editorSelector} .resizer.topLeft[tabindex="-1"]`
         );
 
+        // Resizers must be labeled before entering keyboard resize mode.
+        await page.waitForFunction(
+          sel =>
+            Array.from(document.querySelectorAll(`${sel} .resizer`)).every(el =>
+              el.hasAttribute("aria-label")
+            ),
+          {},
+          editorSelector
+        );
+        const resizers = await page.$$eval(
+          `${editorSelector} .resizer`,
+          elements =>
+            elements.map(el => ({
+              role: el.getAttribute("role"),
+              label: el.getAttribute("aria-label"),
+            }))
+        );
+        expect(resizers.every(({ role }) => role === "spinbutton"))
+          .withContext(`In ${browserName}`)
+          .toBeTrue();
+        expect(resizers.map(({ label }) => label))
+          .withContext(`In ${browserName}`)
+          .toEqual([
+            "Top left corner — resize",
+            "Top middle — resize",
+            "Top right corner — resize",
+            "Middle right — resize",
+            "Bottom right corner — resize",
+            "Bottom middle — resize",
+            "Bottom left corner — resize",
+            "Middle left — resize",
+          ]);
+
         const getDims = async () => {
           const [blX, blY, trX, trY] = await getFirstSerialized(
             page,
@@ -555,10 +585,10 @@ describe("Stamp Editor", () => {
         let [newWidth, newHeight] = await getDims();
         expect(newWidth > width + 30)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
         expect(newHeight > height + 30)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
 
         for (let i = 0; i < 4; i++) {
           await kbBigMoveRight(page);
@@ -569,10 +599,10 @@ describe("Stamp Editor", () => {
         [newWidth, newHeight] = await getDims();
         expect(Math.abs(newWidth - width) < 2)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
         expect(Math.abs(newHeight - height) < 2)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
 
         // Move the focus to the next resizer.
         await page.keyboard.press("Tab");
@@ -589,7 +619,7 @@ describe("Stamp Editor", () => {
         [, newHeight] = await getDims();
         expect(newHeight > height + 50)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
 
         for (let i = 0; i < 4; i++) {
           await kbBigMoveDown(page);
@@ -600,7 +630,7 @@ describe("Stamp Editor", () => {
         [, newHeight] = await getDims();
         expect(Math.abs(newHeight - height) < 2)
           .withContext(`In ${browserName}`)
-          .toEqual(true);
+          .toBeTrue();
 
         // Escape should remove the focus from the resizer.
         await page.keyboard.press("Escape");
@@ -1110,12 +1140,7 @@ describe("Stamp Editor", () => {
         // Wait for the tooltip to be visible.
         const tooltipSelector = `${buttonSelector} .tooltip`;
         await page.waitForSelector(tooltipSelector, { visible: true });
-
-        const tooltipText = await page.evaluate(
-          sel => document.querySelector(`${sel}`).textContent,
-          tooltipSelector
-        );
-        expect(tooltipText).toEqual("Hello World");
+        await waitForTextToBe(page, tooltipSelector, "Hello World");
 
         // Click on the Review button.
         await page.click(buttonSelector);
@@ -1283,7 +1308,7 @@ describe("Stamp Editor", () => {
           },
         },
         {
-          enableAltText: false,
+          enableAltText: true,
           enableFakeMLManager: false,
           enableUpdatedAddImage: true,
           enableGuessAltText: true,
@@ -1293,6 +1318,19 @@ describe("Stamp Editor", () => {
 
     afterEach(async () => {
       await closePages(pages);
+    });
+
+    it("must hide the alt-text settings when there is no AI", async () => {
+      await Promise.all(
+        pages.map(async ([, page]) => {
+          await page.waitForSelector("#imageAltTextSettings", {
+            hidden: true,
+          });
+          await page.waitForSelector("#imageAltTextSettingsSeparator", {
+            hidden: true,
+          });
+        })
+      );
     });
 
     it("must check that the toggle button isn't displayed when there is no AI", async () => {
@@ -1393,7 +1431,7 @@ describe("Stamp Editor", () => {
           await page.waitForSelector("#secondaryToolbar", { visible: true });
           const secondary = await page.$("#secondaryToolbar");
           const png = await secondary.screenshot({ type: "png" });
-          const secondaryImage = PNG.sync.read(Buffer.from(png));
+          const secondaryImage = await decodePNG(png);
           const buffer = new Uint32Array(secondaryImage.data.buffer);
           expect(buffer.every(x => x === 0xff0000ff))
             .withContext(`In ${browserName}`)
@@ -1496,6 +1534,39 @@ describe("Stamp Editor", () => {
           await page.click(saveButtonSelector);
 
           await waitForSerialized(page, 1);
+        })
+      );
+    });
+
+    it("must remove an existing alt-text when the image is marked as decorative", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const modeChangedHandle = await waitForAnnotationModeChanged(page);
+          await page.click(getAnnotationSelector("58R"), { count: 2 });
+          await awaitPromise(modeChangedHandle);
+          const editorSelector = getEditorSelector(4);
+          await waitForSelectedEditor(page, editorSelector);
+
+          await page.click(`${editorSelector} button.altText`);
+          await page.waitForSelector("#altTextDialog", { visible: true });
+
+          await page.waitForFunction(
+            sel => document.querySelector(sel).value !== "",
+            {},
+            "#altTextDialog textarea"
+          );
+
+          await page.click("#altTextDialog #decorativeButton");
+          await page.click("#altTextDialog #altTextSave");
+
+          await waitForSerialized(page, 1);
+          const serialized = await getSerialized(page);
+          expect(serialized[0].id)
+            .withContext(`In ${browserName}`)
+            .toEqual("58R");
+          expect(serialized[0].accessibilityData)
+            .withContext(`In ${browserName}`)
+            .toEqual({ type: "Figure", alt: "", structParent: 0 });
         })
       );
     });
@@ -1631,16 +1702,7 @@ describe("Stamp Editor", () => {
         await page.waitForSelector(`${editorSelector} button.deleteButton`);
         await page.click(`${editorSelector} button.deleteButton`);
         await waitForSerialized(page, 0);
-
-        await page.waitForFunction(() => {
-          const messageElement = document.querySelector(
-            "#editorUndoBarMessage"
-          );
-          return messageElement && messageElement.textContent.trim() !== "";
-        });
-        const message = await page.waitForSelector("#editorUndoBarMessage");
-        const messageText = await page.evaluate(el => el.textContent, message);
-        expect(messageText).toContain("Image removed");
+        await waitForTextToBe(page, "#editorUndoBarMessage", "Image removed");
       }
     });
 
@@ -1887,5 +1949,86 @@ describe("Stamp Editor", () => {
         })
       );
     });
+  });
+});
+
+describe("Edit a saved stamp on a rotated page", () => {
+  let pages;
+  const pageSelector = `.page[data-page-number="2"]`;
+
+  beforeEach(async () => {
+    pages = await loadAndWait(
+      "rotation.pdf",
+      `${pageSelector} .annotationEditorLayer`,
+      50,
+      null,
+      null,
+      { width: 1000, height: 1100 }
+    );
+  });
+
+  afterEach(async () => {
+    await closePages(pages);
+  });
+
+  it("must check that the stamp isn't rotated when it's edited again", async () => {
+    await Promise.all(
+      pages.map(async ([browserName, page]) => {
+        const editorSelector = `${pageSelector} ${getEditorSelector(0)}`;
+        const getStampState = () =>
+          page.$eval(editorSelector, editor => {
+            const { width, height } = editor.getBoundingClientRect();
+            // Compare thumbnails to detect rotation.
+            const canvas = document.createElement("canvas");
+            canvas.width = canvas.height = 4;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(editor.querySelector("canvas"), 0, 0, 4, 4);
+            return {
+              width,
+              height,
+              pixels: Array.from(ctx.getImageData(0, 0, 4, 4).data),
+            };
+          });
+
+        // Insert on page 2 even when both pages fit in the viewport.
+        await page.evaluate(() => {
+          window.PDFViewerApplication.pdfViewer.currentPageNumber = 2;
+        });
+        await switchToStamp(page);
+        await page.click("#editorStampAddImage");
+        const input = await page.$("#stampEditorFileInput");
+        await input.uploadFile(
+          path.join(__dirname, "../images/firefox_logo.png")
+        );
+        await waitForImage(page, editorSelector);
+        const initial = await getStampState();
+
+        await page.evaluate(async () => {
+          const app = window.PDFViewerApplication;
+          const data = await app.pdfDocument.saveDocument();
+          await app.open({ data });
+        });
+
+        const annotationSelector = `${pageSelector} .annotationLayer .stampAnnotation`;
+        await scrollIntoView(page, annotationSelector);
+        const modeChangedHandle = await waitForAnnotationModeChanged(page);
+        await page.click(annotationSelector, { count: 2 });
+        await awaitPromise(modeChangedHandle);
+        await waitForImage(page, editorSelector);
+
+        const current = await getStampState();
+        for (const dimension of ["width", "height"]) {
+          expect(Math.abs(current[dimension] - initial[dimension]))
+            .withContext(`${dimension} in ${browserName}`)
+            .toBeLessThanOrEqual(2);
+        }
+        const maxDiff = Math.max(
+          ...current.pixels.map((value, i) =>
+            Math.abs(value - initial.pixels[i])
+          )
+        );
+        expect(maxDiff).withContext(`In ${browserName}`).toBeLessThan(64);
+      })
+    );
   });
 });

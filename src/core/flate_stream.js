@@ -19,11 +19,11 @@
  * license.
  */
 
-import { FormatError, info } from "../shared/util.js";
+import { assert, FormatError, info } from "../shared/util.js";
 import { DecodeStream } from "./decode_stream.js";
 import { Stream } from "./stream.js";
 
-const codeLenCodeMap = new Int32Array([
+const codeLenCodeMap = new Uint8Array([
   16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ]);
 
@@ -122,13 +122,29 @@ const fixedDistCodeTab = [
 ];
 
 class FlateStream extends DecodeStream {
+  // Use JS for streams with a small compressed size.
+  static #MIN_NATIVE_COMPRESSED_LENGTH = 1024;
+
+  // Prefer native decoding for larger expected outputs.
+  static #MAX_JS_DECODED_LENGTH = 16384;
+
   #isAsync = true;
+
+  #decodeInJS = false;
 
   constructor(str, maybeLength) {
     super(maybeLength);
 
     this.stream = str;
     this.dict = str.dict;
+
+    if (
+      str instanceof Stream &&
+      str.length < FlateStream.#MIN_NATIVE_COMPRESSED_LENGTH
+    ) {
+      assert(!str.isAsync, "Stream sub-classes are never asynchronous");
+      this.#decodeInJS = true;
+    }
 
     const cmf = str.getByte();
     const flg = str.getByte();
@@ -152,35 +168,51 @@ class FlateStream extends DecodeStream {
   }
 
   async getImageData(length, _decoderOptions) {
-    const data = await this.asyncGetBytes();
+    const data = await this.asyncGetBytes(length);
     if (!data) {
       return this.getBytes(length);
     }
-    if (data.length <= length) {
-      return data;
-    }
-    return data.subarray(0, length);
+    return data.length <= length ? data : data.subarray(0, length);
   }
 
-  async asyncGetBytes() {
+  /**
+   * @param {number} [decodedLength] - Expected output length, or 0 if unknown.
+   */
+  async asyncGetBytes(decodedLength = 0) {
+    if (!this.#isAsync) {
+      return null;
+    }
+    if (
+      this.#decodeInJS &&
+      (decodedLength <= FlateStream.#MAX_JS_DECODED_LENGTH ||
+        this.bufferLength > 0 ||
+        this.eof)
+    ) {
+      // Returning bytes lets callers wrap them in a plain `Stream`.
+      this.reset();
+      return this.getBytes(decodedLength);
+    }
+    // After native decoding succeeds, the JS decoder cannot reuse the input.
+    this.#decodeInJS = false;
     const { decompressed, compressed } =
       await this.asyncGetBytesFromDecompressionStream("deflate");
     if (decompressed) {
       return decompressed;
     }
-    // DecompressionStream failed (for example because there are some extra
-    // bytes after the end of the compressed data), so we fallback to our
-    // decoder.
-    // We already get the bytes from the underlying stream, so we just reuse
-    // them to avoid get them again.
+    // Restart the JS decoder with the captured input. A filter chain may have
+    // already partially decoded this stream.
 
     this.#isAsync = false;
     this.stream = new Stream(
       compressed,
-      2 /* = header size (see ctor) */,
-      compressed.length,
+      2 /* zlib header */,
+      compressed.length - 2,
       this.stream.dict
     );
+    this.bufferLength = 0;
+    this.eof = false;
+    this.codeBuf = 0;
+    this.codeSize = 0;
     this.reset();
     return null;
   }
@@ -268,8 +300,9 @@ class FlateStream extends DecodeStream {
           }
 
           // fill the table entries
+          const entry = (len << 16) | val;
           for (i = code2; i < size; i += skip) {
-            codes[i] = (len << 16) | val;
+            codes[i] = entry;
           }
           ++code;
         }
@@ -279,21 +312,22 @@ class FlateStream extends DecodeStream {
     return [codes, maxLen];
   }
 
-  #endsStreamOnError(err) {
-    info(err);
-    this.eof = true;
+  readBlock() {
+    try {
+      this.#readBlock();
+    } catch (ex) {
+      if (!(ex instanceof FormatError)) {
+        throw ex;
+      }
+      info(ex.message);
+      this.eof = true;
+    }
   }
 
-  readBlock() {
-    let buffer, hdr, len;
+  #readBlock() {
+    let buffer, len;
     const str = this.stream;
-    // read block header
-    try {
-      hdr = this.getBits(3);
-    } catch (ex) {
-      this.#endsStreamOnError(ex.message);
-      return;
-    }
+    let hdr = this.getBits(3);
     if (hdr & 1) {
       this.eof = true;
     }
@@ -301,28 +335,12 @@ class FlateStream extends DecodeStream {
 
     if (hdr === 0) {
       // uncompressed block
-      let b;
-
-      if ((b = str.getByte()) === -1) {
-        this.#endsStreamOnError("Bad block header in flate stream");
-        return;
+      const header = str.getBytes(4);
+      if (header.length < 4) {
+        throw new FormatError("Bad block header in flate stream");
       }
-      let blockLen = b;
-      if ((b = str.getByte()) === -1) {
-        this.#endsStreamOnError("Bad block header in flate stream");
-        return;
-      }
-      blockLen |= b << 8;
-      if ((b = str.getByte()) === -1) {
-        this.#endsStreamOnError("Bad block header in flate stream");
-        return;
-      }
-      let check = b;
-      if ((b = str.getByte()) === -1) {
-        this.#endsStreamOnError("Bad block header in flate stream");
-        return;
-      }
-      check |= b << 8;
+      const blockLen = header[0] | (header[1] << 8);
+      const check = header[2] | (header[3] << 8);
       if (check !== (~blockLen & 0xffff) && (blockLen !== 0 || check !== 0)) {
         // Ignoring error for bad "empty" block (see issue 1277)
         throw new FormatError("Bad uncompressed block length in flate stream");
@@ -331,18 +349,17 @@ class FlateStream extends DecodeStream {
       this.codeBuf = 0;
       this.codeSize = 0;
 
-      const bufferLength = this.bufferLength,
-        end = bufferLength + blockLen;
-      buffer = this.ensureBuffer(end);
-      this.bufferLength = end;
-
       if (blockLen === 0) {
         if (str.peekByte() === -1) {
           this.eof = true;
         }
       } else {
         const block = str.getBytes(blockLen);
+        const bufferLength = this.bufferLength,
+          newLength = bufferLength + block.length;
+        buffer = this.ensureBuffer(newLength);
         buffer.set(block, bufferLength);
+        this.bufferLength = newLength;
         if (block.length < blockLen) {
           this.eof = true;
         }
@@ -396,9 +413,10 @@ class FlateStream extends DecodeStream {
           continue;
         }
 
-        let repeatLength = this.getBits(bitsLength) + bitsOffset;
-        while (repeatLength-- > 0) {
-          codeLengths[i++] = what;
+        const repeatLen = this.getBits(bitsLength) + bitsOffset;
+        if (repeatLen > 0) {
+          codeLengths.fill(what, i, i + repeatLen);
+          i += repeatLen;
         }
       }
 
@@ -415,41 +433,54 @@ class FlateStream extends DecodeStream {
     buffer = this.buffer;
     let limit = buffer ? buffer.length : 0;
     let pos = this.bufferLength;
-    while (true) {
-      let code1 = this.getCode(litCodeTable);
-      if (code1 < 256) {
-        if (pos + 1 >= limit) {
-          buffer = this.ensureBuffer(pos + 1);
+    try {
+      while (true) {
+        let code1 = this.getCode(litCodeTable);
+        if (code1 < 256) {
+          if (pos + 1 >= limit) {
+            buffer = this.ensureBuffer(pos + 1);
+            limit = buffer.length;
+          }
+          buffer[pos++] = code1;
+          continue;
+        }
+        if (code1 === 256) {
+          this.bufferLength = pos;
+          return;
+        }
+        code1 -= 257;
+        code1 = lengthDecode[code1];
+        let code2 = code1 >> 16;
+        if (code2 > 0) {
+          code2 = this.getBits(code2);
+        }
+        len = (code1 & 0xffff) + code2;
+        code1 = this.getCode(distCodeTable);
+        code1 = distDecode[code1];
+        code2 = code1 >> 16;
+        if (code2 > 0) {
+          code2 = this.getBits(code2);
+        }
+        const dist = (code1 & 0xffff) + code2;
+        if (pos + len >= limit) {
+          buffer = this.ensureBuffer(pos + len);
           limit = buffer.length;
         }
-        buffer[pos++] = code1;
-        continue;
+        if (len <= dist) {
+          // When the old and new data doesn't overlap we can use `copyWithin`,
+          // since that's faster than a manual loop.
+          const startPos = pos - dist;
+          buffer.copyWithin(pos, startPos, startPos + len);
+          pos += len;
+        } else {
+          for (let k = 0; k < len; ++k, ++pos) {
+            buffer[pos] = buffer[pos - dist];
+          }
+        }
       }
-      if (code1 === 256) {
-        this.bufferLength = pos;
-        return;
-      }
-      code1 -= 257;
-      code1 = lengthDecode[code1];
-      let code2 = code1 >> 16;
-      if (code2 > 0) {
-        code2 = this.getBits(code2);
-      }
-      len = (code1 & 0xffff) + code2;
-      code1 = this.getCode(distCodeTable);
-      code1 = distDecode[code1];
-      code2 = code1 >> 16;
-      if (code2 > 0) {
-        code2 = this.getBits(code2);
-      }
-      const dist = (code1 & 0xffff) + code2;
-      if (pos + len >= limit) {
-        buffer = this.ensureBuffer(pos + len);
-        limit = buffer.length;
-      }
-      for (let k = 0; k < len; ++k, ++pos) {
-        buffer[pos] = buffer[pos - dist];
-      }
+    } catch (ex) {
+      this.bufferLength = pos;
+      throw ex;
     }
   }
 }

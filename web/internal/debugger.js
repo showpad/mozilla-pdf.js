@@ -95,7 +95,7 @@ async function openDocument(source, name) {
 
   if (pdfDoc) {
     pageView.reset();
-    await pdfDoc.destroy();
+    await pdfDoc.loadingTask.destroy();
     pdfDoc = null;
   }
 
@@ -107,7 +107,7 @@ async function openDocument(source, name) {
       typeof PDFJSDev === "undefined" ? "../external/iccs/" : "../web/iccs/",
     standardFontDataUrl:
       typeof PDFJSDev === "undefined"
-        ? "../external/standard_fonts/"
+        ? "../external/hellbox/"
         : "../web/standard_fonts/",
     wasmUrl: "../web/wasm/",
     useWorkerFetch: true,

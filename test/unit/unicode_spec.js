@@ -36,6 +36,8 @@ describe("unicode", function () {
     it("should re-map special Unicode values", function () {
       // copyrightsans => copyright
       expect(mapSpecialUnicodeValues(0xf8e9)).toEqual(0x00a9);
+      // braceex => curly bracket extension
+      expect(mapSpecialUnicodeValues(0xf8f4)).toEqual(0x23aa);
       // Private Use Area characters
       expect(mapSpecialUnicodeValues(0xffff)).toEqual(0);
     });
@@ -65,6 +67,11 @@ describe("unicode", function () {
           isInvisibleFormatMark: false,
           isWhitespace: true,
         },
+        " \t": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: false,
+          isWhitespace: true,
+        },
 
         // Diacritic
         "\u0302": {
@@ -82,6 +89,16 @@ describe("unicode", function () {
           isInvisibleFormatMark: false,
           isWhitespace: false,
         },
+        "\u094D": {
+          isZeroWidthDiacritic: true,
+          isInvisibleFormatMark: false,
+          isWhitespace: false,
+        },
+        "\u0651\u064E": {
+          isZeroWidthDiacritic: true,
+          isInvisibleFormatMark: false,
+          isWhitespace: false,
+        },
 
         // Invisible format mark
         "\u200B": {
@@ -92,6 +109,33 @@ describe("unicode", function () {
         "\u200D": {
           isZeroWidthDiacritic: false,
           isInvisibleFormatMark: true,
+          isWhitespace: false,
+        },
+        "\u200B\u200D": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: true,
+          isWhitespace: false,
+        },
+
+        // Several characters of different categories (issue 21890)
+        "\u092A\u094D\u0930": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: false,
+          isWhitespace: false,
+        },
+        "a\u0301": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: false,
+          isWhitespace: false,
+        },
+        " a": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: false,
+          isWhitespace: false,
+        },
+        "a\u200B": {
+          isZeroWidthDiacritic: false,
+          isInvisibleFormatMark: false,
           isWhitespace: false,
         },
 

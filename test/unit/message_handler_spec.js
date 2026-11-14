@@ -63,9 +63,7 @@ describe("message_handler", function () {
         {},
         {
           highWaterMark: 1,
-          size() {
-            return 1;
-          },
+          size: () => 1,
         }
       );
 
@@ -76,12 +74,12 @@ describe("message_handler", function () {
       let result = await reader.read();
       expect(log).toEqual("p");
       expect(result.value).toEqual("hi");
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
     });
 
     it("should not read any data when cancelled", async function () {
@@ -123,9 +121,7 @@ describe("message_handler", function () {
         {},
         {
           highWaterMark: 4,
-          size(arr) {
-            return arr.length;
-          },
+          size: arr => arr.length,
         }
       );
 
@@ -135,7 +131,7 @@ describe("message_handler", function () {
 
       const result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2");
@@ -173,9 +169,7 @@ describe("message_handler", function () {
         {},
         {
           highWaterMark: 4,
-          size(arr) {
-            return arr.length;
-          },
+          size: arr => arr.length,
         }
       );
 
@@ -185,13 +179,13 @@ describe("message_handler", function () {
 
       const result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       try {
         await reader.read();
 
         // Shouldn't get here.
-        expect(false).toEqual(true);
+        expect(false).toBeTrue();
       } catch (reason) {
         expect(log).toEqual("01pe");
         expect(reason).toBeInstanceOf(UnknownErrorException);
@@ -233,9 +227,7 @@ describe("message_handler", function () {
         {},
         {
           highWaterMark: 4,
-          size(arr) {
-            return arr.length;
-          },
+          size: arr => arr.length,
         }
       );
 
@@ -247,21 +239,21 @@ describe("message_handler", function () {
 
       let result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2");
 
       result = await reader.read();
       expect(result.value).toEqual([5, 6, 7, 8]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01p2p");
 
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
     });
 
     it(
@@ -302,9 +294,7 @@ describe("message_handler", function () {
           {},
           {
             highWaterMark: 8,
-            size(arr) {
-              return arr.length;
-            },
+            size: arr => arr.length,
           }
         );
 
@@ -314,21 +304,21 @@ describe("message_handler", function () {
 
         let result = await reader.read();
         expect(result.value).toEqual([1, 2, 3, 4]);
-        expect(result.done).toEqual(false);
+        expect(result.done).toBeFalse();
 
         await sleep(10);
         expect(log).toEqual("012p");
 
         result = await reader.read();
         expect(result.value).toEqual([5, 6, 7, 8]);
-        expect(result.done).toEqual(false);
+        expect(result.done).toBeFalse();
 
         await sleep(10);
         expect(log).toEqual("012p");
 
         result = await reader.read();
-        expect(result.value).toEqual(undefined);
-        expect(result.done).toEqual(true);
+        expect(result.value).toBeUndefined();
+        expect(result.done).toBeTrue();
       }
     );
 
@@ -360,9 +350,7 @@ describe("message_handler", function () {
         {},
         {
           highWaterMark: 10,
-          size(arr) {
-            return arr.length;
-          },
+          size: arr => arr.length,
         }
       );
 
@@ -375,14 +363,49 @@ describe("message_handler", function () {
 
       let result = await reader.read();
       expect(result.value).toEqual([1, 2, 3, 4]);
-      expect(result.done).toEqual(false);
+      expect(result.done).toBeFalse();
 
       await sleep(10);
       expect(log).toEqual("01");
 
       result = await reader.read();
-      expect(result.value).toEqual(undefined);
-      expect(result.done).toEqual(true);
+      expect(result.value).toBeUndefined();
+      expect(result.done).toBeTrue();
+    });
+
+    it("should error with a non-object reason", async function () {
+      const port = new LoopbackPort();
+      const messageHandler2 = new MessageHandler("worker", "main", port);
+      messageHandler2.on("fakeHandler", (data, sink) => {
+        sink.ready.then(() => {
+          sink.error("out of memory");
+        });
+      });
+      const messageHandler1 = new MessageHandler("main", "worker", port);
+      const readable = messageHandler1.sendWithStream("fakeHandler");
+
+      const reader = readable.getReader();
+      await expectAsync(reader.read()).toBeRejectedWith(
+        new UnknownErrorException("out of memory", "out of memory")
+      );
+    });
+  });
+
+  describe("sendWithPromise", function () {
+    it("should reject with a non-object reason", async function () {
+      const port = new LoopbackPort();
+      const messageHandler2 = new MessageHandler("worker", "main", port);
+      messageHandler2.on("fakeHandler", () => {
+        // eslint-disable-next-line no-throw-literal
+        throw "out of memory";
+      });
+      const messageHandler1 = new MessageHandler("main", "worker", port);
+
+      await expectAsync(
+        messageHandler1.sendWithPromise("fakeHandler")
+      ).toBeRejectedWith(
+        new UnknownErrorException("out of memory", "out of memory")
+      );
     });
   });
 });

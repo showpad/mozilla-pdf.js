@@ -82,7 +82,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
       factory.setFonts([]);
 
       expect(await factory.getNumPages()).toEqual(2);
@@ -168,7 +168,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
@@ -202,7 +202,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
@@ -256,7 +256,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
       factory.setFonts([]);
 
       expect(await factory.getNumPages()).toEqual(1);
@@ -330,7 +330,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
@@ -372,7 +372,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
@@ -414,7 +414,7 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
@@ -457,16 +457,16 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
       `;
-      const factory = new XFAFactory({ "xdp:xdp": xml });
+      const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
       expect(await factory.getNumPages()).toEqual(1);
 
       const pages = await factory.getPages();
       const field1 = searchHtmlNode(pages, "name", "input");
-      expect(field1).not.toEqual(null);
+      expect(field1).not.toBeNull();
 
       const field2 = searchHtmlNode(pages, "name", "textarea");
-      expect(field2).not.toEqual(null);
+      expect(field2).not.toBeNull();
     });
   });
 
@@ -511,13 +511,13 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
     `;
-    const factory = new XFAFactory({ "xdp:xdp": xml });
+    const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
     expect(await factory.getNumPages()).toEqual(1);
 
     const pages = await factory.getPages();
     const field1 = searchHtmlNode(pages, "name", "input");
-    expect(field1).not.toEqual(null);
+    expect(field1).not.toBeNull();
     expect(field1.attributes.value).toEqual("123");
   });
 
@@ -555,7 +555,9 @@ describe("XFAFactory", function () {
     let factory, pages, a;
 
     // A valid, and complete, URL.
-    factory = new XFAFactory({ "xdp:xdp": getXml("https://www.example.com/") });
+    factory = new XFAFactory(
+      new Map([["xdp:xdp", getXml("https://www.example.com/")]])
+    );
     expect(await factory.getNumPages()).toEqual(1);
     pages = await factory.getPages();
     a = searchHtmlNode(pages, "name", "a");
@@ -563,7 +565,9 @@ describe("XFAFactory", function () {
     expect(a.attributes.href).toEqual("https://www.example.com/");
 
     // A valid, but incomplete, URL.
-    factory = new XFAFactory({ "xdp:xdp": getXml("www.example.com/") });
+    factory = new XFAFactory(
+      new Map([["xdp:xdp", getXml("www.example.com/")]])
+    );
     expect(await factory.getNumPages()).toEqual(1);
     pages = await factory.getPages();
     a = searchHtmlNode(pages, "name", "a");
@@ -571,7 +575,9 @@ describe("XFAFactory", function () {
     expect(a.attributes.href).toEqual("http://www.example.com/");
 
     // A valid email-address.
-    factory = new XFAFactory({ "xdp:xdp": getXml("mailto:test@example.com") });
+    factory = new XFAFactory(
+      new Map([["xdp:xdp", getXml("mailto:test@example.com")]])
+    );
     expect(await factory.getNumPages()).toEqual(1);
     pages = await factory.getPages();
     a = searchHtmlNode(pages, "name", "a");
@@ -579,7 +585,7 @@ describe("XFAFactory", function () {
     expect(a.attributes.href).toEqual("mailto:test@example.com");
 
     // Not a valid URL.
-    factory = new XFAFactory({ "xdp:xdp": getXml("qwerty/") });
+    factory = new XFAFactory(new Map([["xdp:xdp", getXml("qwerty/")]]));
     expect(await factory.getNumPages()).toEqual(1);
     pages = await factory.getPages();
     a = searchHtmlNode(pages, "name", "a");
@@ -629,18 +635,18 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
     `;
-    const factory = new XFAFactory({ "xdp:xdp": xml });
+    const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
     expect(await factory.getNumPages()).toEqual(1);
 
     const pages = await factory.getPages();
     let a = searchHtmlNode(pages, "name", "a");
     expect(a.attributes.href).toEqual("https://github.com/mozilla/pdf.js");
-    expect(a.attributes.newWindow).toEqual(true);
+    expect(a.attributes.newWindow).toBeTrue();
 
     a = searchHtmlNode(pages, "name", "a", false, [1]);
     expect(a.attributes.href).toEqual("https://github.com/allizom/pdf.js");
-    expect(a.attributes.newWindow).toEqual(false);
+    expect(a.attributes.newWindow).toBeFalse();
   });
 
   it("should take the absolute value of the font size", async () => {
@@ -675,12 +681,99 @@ describe("XFAFactory", function () {
   </xfa:datasets>
 </xdp:xdp>
     `;
-    const factory = new XFAFactory({ "xdp:xdp": xml });
+    const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
 
     expect(await factory.getNumPages()).toEqual(1);
 
     const pages = await factory.getPages();
     const p = searchHtmlNode(pages, "name", "p");
     expect(p.attributes.style.fontSize).toEqual("13.86px");
+  });
+
+  it("should measure b and i elements like the equivalent styles", async () => {
+    const draws = {
+      regular: "Hello World",
+      b: "<b>Hello</b> World",
+      boldSpan: `<span style="font-weight:bold">Hello</span> World`,
+      i: "<i>Hello</i> World",
+      italicSpan: `<span style="font-style:italic">Hello</span> World`,
+      bi: "<b><i>Hello</i></b> World",
+      boldItalicSpan: `<span style="font-weight:bold;font-style:italic">Hello</span> World`,
+      bInSpan: `<span style="font-size:24pt"><b>Hello</b></span><br/>World`,
+      boldSpanInSpan: `<span style="font-size:24pt"><span style="font-weight:bold">Hello</span></span><br/>World`,
+      bWithStyle: `<b style="font-size:24pt;font-weight:normal">Hello</b>`,
+      spanWithStyle: `<span style="font-size:24pt">Hello</span>`,
+    };
+    const xml = `
+<?xml version="1.0"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+  <template xmlns="http://www.xfa.org/schema/xfa-template/3.3">
+    <subform name="root" mergeMode="matchTemplate">
+      <pageSet>
+        <pageArea>
+          <contentArea x="0pt" w="456pt" h="789pt"/>
+          <medium stock="default" short="456pt" long="789pt"/>
+        </pageArea>
+      </pageSet>
+      <subform name="draws" layout="tb">
+        ${Object.entries(draws)
+          .map(
+            ([name, html]) => `
+        <draw name="${name}">
+          <font typeface="Helvetica" size="12pt"/>
+          <value>
+            <exData contentType="text/html">
+              <body xmlns="http://www.w3.org/1999/xhtml"><p>${html}</p></body>
+            </exData>
+          </value>
+        </draw>`
+          )
+          .join("")}
+      </subform>
+    </subform>
+  </template>
+</xdp:xdp>
+    `;
+    const factory = new XFAFactory(new Map([["xdp:xdp", xml]]));
+    // Glyph widths differ per variant, so the selected font shows in the size.
+    const makeFont = (name, fontWeight, italicAngle, width) => ({
+      name,
+      cssFontInfo: { fontFamily: "Helvetica", fontWeight, italicAngle },
+      lineHeight: 1.2,
+      lineGap: 0.2,
+      defaultWidth: width,
+      encodeString: str => [str],
+      charsToGlyphs: str => Array.from(str, unicode => ({ unicode, width })),
+    });
+    factory.setFonts([
+      makeFont("Helvetica", 400, 0, 500),
+      makeFont("Helvetica-Bold", 700, 0, 600),
+      makeFont("Helvetica-Oblique", 400, -12, 550),
+      makeFont("Helvetica-BoldOblique", 700, -12, 650),
+    ]);
+
+    expect(await factory.getNumPages()).toEqual(1);
+
+    const pages = await factory.getPages();
+    const container = searchHtmlNode(pages, "xfaName", "draws", true);
+    const sizes = new Map(
+      container.children.map(({ attributes, children }) => {
+        const { width, height } = attributes.style;
+        return [children[0].attributes.xfaName, [width, height]];
+      })
+    );
+
+    expect(sizes.size).toEqual(Object.keys(draws).length);
+    expect(sizes.get("b")).not.toEqual(sizes.get("regular"));
+    expect(sizes.get("i")).not.toEqual(sizes.get("regular"));
+    for (const [element, span] of [
+      ["b", "boldSpan"],
+      ["i", "italicSpan"],
+      ["bi", "boldItalicSpan"],
+      ["bInSpan", "boldSpanInSpan"],
+      ["bWithStyle", "spanWithStyle"],
+    ]) {
+      expect(sizes.get(element)).withContext(element).toEqual(sizes.get(span));
+    }
   });
 });

@@ -15,6 +15,9 @@
 
 import { warn } from "../shared/util.js";
 
+// Implements a subset of the Unicode Bidirectional Algorithm (UBA).
+// Specification: https://www.unicode.org/reports/tr9/tr9-48.html
+
 // Character types for symbols from 0000 to 00FF.
 // Source: ftp://ftp.unicode.org/Public/UNIDATA/UnicodeData.txt
 // prettier-ignore
@@ -81,14 +84,13 @@ function isEven(i) {
   return (i & 1) === 0;
 }
 
-function findUnequal(arr, start, value) {
-  let j, jj;
-  for (j = start, jj = arr.length; j < jj; ++j) {
+function findUnequal(arr, start, value, end = arr.length) {
+  for (let j = start; j < end; ++j) {
     if (arr[j] !== value) {
       return j;
     }
   }
-  return j;
+  return end;
 }
 
 function reverseValues(arr, start, end) {
@@ -114,8 +116,15 @@ function createBidiText(str, isLTR, vertical = false) {
 const chars = [];
 const types = [];
 
-function bidi(str, startLevel = -1, vertical = false) {
+/**
+ * @param {string|Array<string>} text - Text to reorder, or glyph texts in
+ *   visual order. Each glyph's text is expected to be in logical order and is
+ *   kept intact if all its characters resolve to the same bidi level.
+ */
+function bidi(text, startLevel = -1, vertical = false) {
   let isLTR = true;
+  const glyphs = Array.isArray(text) ? text : null;
+  const str = glyphs ? glyphs.join("") : text;
   const strLength = str.length;
   if (strLength === 0 || vertical) {
     return createBidiText(str, isLTR, vertical);
@@ -173,11 +182,7 @@ function bidi(str, startLevel = -1, vertical = false) {
       startLevel = 1;
     }
   }
-
-  const levels = [];
-  for (i = 0; i < strLength; ++i) {
-    levels[i] = startLevel;
-  }
+  const levels = new Array(strLength).fill(startLevel);
 
   /*
    X1-X10: skip most of this, since we are NOT doing the embeddings.
@@ -297,25 +302,42 @@ function bidi(str, startLevel = -1, vertical = false) {
    text if the text on both sides has the same direction. European and Arabic
    numbers are treated as though they were R. Start-of-level-run (sor) and
    end-of-level-run (eor) are used at level run boundaries.
+   See https://www.unicode.org/reports/tr9/tr9-48.html#N1
    */
   for (i = 0; i < strLength; ++i) {
     if (types[i] === "ON") {
       const end = findUnequal(types, i + 1, "ON");
+
+      // Scan left past non-strong types to find the nearest strong context
+      // (L, R, EN, or AN), falling back to sor at the level-run boundary.
       let before = sor;
-      if (i > 0) {
-        before = types[i - 1];
+      for (let j = i - 1; j >= 0; j--) {
+        const tt = types[j];
+        if (tt === "L") {
+          before = "L";
+          break;
+        }
+        if (tt === "R" || tt === "EN" || tt === "AN") {
+          before = "R";
+          break;
+        }
       }
 
+      // Scan right past non-strong types to find the nearest strong context,
+      // falling back to eor at the level-run boundary.
       let after = eor;
-      if (end + 1 < strLength) {
-        after = types[end + 1];
+      for (let j = end; j < strLength; j++) {
+        const tt = types[j];
+        if (tt === "L") {
+          after = "L";
+          break;
+        }
+        if (tt === "R" || tt === "EN" || tt === "AN") {
+          after = "R";
+          break;
+        }
       }
-      if (before !== "L") {
-        before = "R";
-      }
-      if (after !== "L") {
-        after = "R";
-      }
+
       if (before === after) {
         types.fill(before, i, end);
       }
@@ -385,6 +407,23 @@ function bidi(str, startLevel = -1, vertical = false) {
     }
   }
 
+  if (glyphs) {
+    let pos = 0;
+    for (const glyph of glyphs) {
+      const end = pos + glyph.length;
+      if (
+        glyph.length > 1 &&
+        findUnequal(levels, pos + 1, levels[pos], end) === end
+      ) {
+        // Store the whole glyph in one slot. Empty strings in the remaining
+        // slots preserve the indices used by the character levels.
+        chars[pos] = glyph;
+        chars.fill("", pos + 1, end);
+      }
+      pos = end;
+    }
+  }
+
   // now reverse between those limits
   for (level = highestLevel; level >= lowestOddLevel; --level) {
     // find segments to reverse
@@ -422,13 +461,7 @@ function bidi(str, startLevel = -1, vertical = false) {
   // don't mirror as characters are already mirrored in the pdf
 
   // Finally, return string
-  for (i = 0, ii = chars.length; i < ii; ++i) {
-    const ch = chars[i];
-    if (ch === "<" || ch === ">") {
-      chars[i] = "";
-    }
-  }
-  return createBidiText(chars.join(""), isLTR);
+  return createBidiText(chars.join("").replaceAll(/[<>]/g, ""), isLTR);
 }
 
 export { bidi };

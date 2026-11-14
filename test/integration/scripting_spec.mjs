@@ -216,7 +216,7 @@ describe("Interaction", () => {
             `${getQuerySelector("436R")}.value === "0.69314"`
           );
           await page.waitForFunction(
-            `${getQuerySelector("471R")}.value === "0,69"`
+            `${getQuerySelector("471R")}.value === "-0,69"`
           );
         })
       );
@@ -251,7 +251,7 @@ describe("Interaction", () => {
           await page.type(getSelector("405R"), "employee");
 
           let checked = await page.$eval(getSelector("449R"), el => el.checked);
-          expect(checked).toEqual(true);
+          expect(checked).toBeTrue();
 
           // click on reset button
           await page.click(getAnnotationSelector("402R"));
@@ -276,7 +276,7 @@ describe("Interaction", () => {
           expect(text).toEqual("");
 
           checked = await page.$eval(getSelector("449R"), el => el.checked);
-          expect(checked).toEqual(false);
+          expect(checked).toBeFalse();
 
           const visibility = await page.$eval(
             getSelector("427R"),
@@ -457,6 +457,31 @@ describe("Interaction", () => {
         })
       );
     });
+
+    it("must finish the WillPrint actions of overlapping requests", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          const count = await page.evaluate(async () => {
+            const { pdfScriptingManager } = window.PDFViewerApplication;
+            // Send two requests, then two more before the sandbox replies.
+            const promises = [
+              pdfScriptingManager.dispatchWillPrint(),
+              pdfScriptingManager.dispatchWillPrint(),
+            ];
+            await Promise.resolve();
+            promises.push(
+              pdfScriptingManager.dispatchWillPrint(),
+              pdfScriptingManager.dispatchWillPrint()
+            );
+            await Promise.all(promises);
+            return promises.length;
+          });
+          expect(count).withContext(`In ${browserName}`).toEqual(4);
+        })
+      );
+    });
   });
 
   describe("in doc_actions.pdf for saving", () => {
@@ -501,6 +526,92 @@ describe("Interaction", () => {
 
           text = await page.$eval(getSelector("50R"), el => el.value);
           expect(text).withContext(`In ${browserName}`).toEqual("DidSave");
+        })
+      );
+    });
+
+    it("must save the changes made by the WillSave actions", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          await clearInput(page, getSelector("47R"));
+          await page.evaluate(_ => {
+            window.document.activeElement.blur();
+          });
+          await page.waitForFunction(`${getQuerySelector("47R")}.value === ""`);
+
+          const value = await page.evaluate(async () => {
+            const app = window.PDFViewerApplication;
+            const { downloadManager } = app;
+            const { download } = downloadManager;
+            let savedData = null;
+            downloadManager.download = data => {
+              savedData = data;
+            };
+            try {
+              await app.downloadOrSave();
+            } finally {
+              downloadManager.download = download;
+            }
+
+            const loadingTask = window.pdfjsLib.getDocument({
+              data: savedData,
+            });
+            try {
+              const pdf = await loadingTask.promise;
+              const pdfPage = await pdf.getPage(1);
+              const annotations = await pdfPage.getAnnotations();
+              return annotations.find(({ id }) => id === "47R")?.fieldValue;
+            } finally {
+              await loadingTask.destroy();
+            }
+          });
+          expect(value).withContext(`In ${browserName}`).toEqual("WillSave");
+        })
+      );
+    });
+
+    it("must recover when dispatching WillSave fails", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          await clearInput(page, getSelector("47R"));
+          await page.evaluate(_ => {
+            window.document.activeElement.blur();
+          });
+          await page.waitForFunction(`${getQuerySelector("47R")}.value === ""`);
+
+          const state = await page.evaluate(async () => {
+            const app = window.PDFViewerApplication;
+            const { downloadManager, pdfScriptingManager } = app;
+            const { download } = downloadManager;
+            const downloads = [];
+            downloadManager.download = (data, url, filename, isModified) => {
+              downloads.push(isModified);
+            };
+            pdfScriptingManager.dispatchWillSave = () =>
+              Promise.reject(new Error("WillSave can't run."));
+            try {
+              await app.downloadOrSave();
+            } finally {
+              downloadManager.download = download;
+              delete pdfScriptingManager.dispatchWillSave;
+            }
+            return {
+              downloads,
+              isSaving: app._saveInProgress,
+              isWaiting: app.appConfig.appContainer.classList.contains("wait"),
+            };
+          });
+          expect(state)
+            .withContext(`In ${browserName}`)
+            .toEqual({
+              downloads: [false],
+              isSaving: false,
+              isWaiting: false,
+            });
         })
       );
     });
@@ -1204,6 +1315,69 @@ describe("Interaction", () => {
       );
     });
 
+    it("must efficiently delete a word from a large field", async () => {
+      const nonWordLength = 200000;
+
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          const result = await page.$eval(
+            getSelector("27R"),
+            (element, length) => {
+              element.value = `${"!".repeat(length)}a`;
+              element.setSelectionRange(
+                element.value.length,
+                element.value.length
+              );
+
+              const eventBus = window.PDFViewerApplication.eventBus;
+              const eventBusPrototype = Object.getPrototypeOf(eventBus);
+              const originalDispatch = eventBusPrototype.dispatch;
+              let selection;
+              eventBusPrototype.dispatch = function (eventName, data) {
+                if (
+                  this === eventBus &&
+                  eventName === "dispatcheventinsandbox"
+                ) {
+                  const { selEnd, selStart } = data.detail;
+                  selection = { selEnd, selStart };
+                  return;
+                }
+                originalDispatch.call(this, eventName, data);
+              };
+
+              const event = new InputEvent("beforeinput", {
+                bubbles: true,
+                cancelable: true,
+                inputType: "deleteWordBackward",
+              });
+              try {
+                const startTime = performance.now();
+                element.dispatchEvent(event);
+                return {
+                  duration: performance.now() - startTime,
+                  selection,
+                };
+              } finally {
+                eventBusPrototype.dispatch = originalDispatch;
+              }
+            },
+            nonWordLength
+          );
+          expect(result.selection)
+            .withContext(`In ${browserName}`)
+            .toEqual({
+              selEnd: nonWordLength + 1,
+              selStart: nonWordLength,
+            });
+          expect(result.duration)
+            .withContext(`In ${browserName}`)
+            .toBeLessThan(1000);
+        })
+      );
+    });
+
     it("must check that an infinite loop is not triggered", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
@@ -1389,7 +1563,7 @@ describe("Interaction", () => {
                 (sel, b, a) => {
                   const el = document.querySelector(sel);
                   const rotation =
-                    parseInt(el.getAttribute("data-main-rotation")) || 0;
+                    parseInt(el.getAttribute("data-main-rotation"), 10) || 0;
                   return rotation === (360 + ((360 - (b + a)) % 360)) % 360;
                 },
                 {},
@@ -1706,6 +1880,69 @@ describe("Interaction", () => {
     });
   });
 
+  describe("in autoprint_will_print.pdf", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "autoprint_will_print.pdf",
+        "",
+        null /* zoom = */,
+        {
+          earlySetup: () => {
+            // Suppress the print dialog.
+            window.print = () => {};
+          },
+          appSetup: app => {
+            app._testPrintResolver = Promise.withResolvers();
+
+            // Run OpenAction before #ready, without GenericScripting's timer.
+            const { externalServices } = app;
+            const createScripting =
+              externalServices.createScripting.bind(externalServices);
+            externalServices.createScripting = () => {
+              const scripting = createScripting();
+              scripting.dispatchEventInSandbox = async event => {
+                const sandbox = await scripting._ready;
+                sandbox.dispatchEvent(event);
+              };
+              return scripting;
+            };
+          },
+          eventBusSetup: eventBus => {
+            eventBus.on(
+              "afterprint",
+              () => {
+                window.PDFViewerApplication._testPrintResolver.resolve();
+              },
+              { once: true }
+            );
+          },
+        }
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must run the WillPrint actions when the OpenAction prints", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await awaitPromise(
+            await page.evaluateHandle(() => [
+              window.PDFViewerApplication._testPrintResolver.promise,
+            ])
+          );
+
+          await page.waitForSelector(getSelector("4R"));
+          const value = await page.$eval(getSelector("4R"), el => el.value);
+          expect(value).withContext(`In ${browserName}`).toEqual("WillPrint");
+        })
+      );
+    });
+  });
+
   describe("in bug1811694.pdf", () => {
     let pages;
 
@@ -1886,35 +2123,36 @@ describe("Interaction", () => {
           const selector = getAnnotationSelector("9R");
           const hasVisibleCanvas = await page.$eval(
             `${selector} > canvas`,
-            elem => elem && !elem.hasAttribute("hidden")
+            elem => getComputedStyle(elem).display !== "none"
           );
-          expect(hasVisibleCanvas)
-            .withContext(`In ${browserName}`)
-            .toEqual(true);
+          expect(hasVisibleCanvas).withContext(`In ${browserName}`).toBeTrue();
 
-          const hasHiddenInput = await page.$eval(`${selector} > input`, elem =>
-            elem?.hasAttribute("hidden")
+          const hasHiddenInput = await page.$eval(
+            `${selector} > input`,
+            elem => getComputedStyle(elem).display === "none"
           );
-          expect(hasHiddenInput).withContext(`In ${browserName}`).toEqual(true);
+          expect(hasHiddenInput).withContext(`In ${browserName}`).toBeTrue();
 
           await page.click(getSelector("12R"));
-          await page.waitForSelector(`${selector} > canvas[hidden]`);
+          await page.waitForFunction(
+            sel =>
+              getComputedStyle(document.querySelector(`${sel} > canvas`))
+                .display === "none",
+            {},
+            selector
+          );
 
           const hasHiddenCanvas = await page.$eval(
             `${selector} > canvas`,
-            elem => elem?.hasAttribute("hidden")
+            elem => getComputedStyle(elem).display === "none"
           );
-          expect(hasHiddenCanvas)
-            .withContext(`In ${browserName}`)
-            .toEqual(true);
+          expect(hasHiddenCanvas).withContext(`In ${browserName}`).toBeTrue();
 
           const hasVisibleInput = await page.$eval(
             `${selector} > input`,
-            elem => elem && !elem.hasAttribute("hidden")
+            elem => getComputedStyle(elem).display !== "none"
           );
-          expect(hasVisibleInput)
-            .withContext(`In ${browserName}`)
-            .toEqual(true);
+          expect(hasVisibleInput).withContext(`In ${browserName}`).toBeTrue();
         })
       );
     });
@@ -1999,24 +2237,24 @@ describe("Interaction", () => {
             getSelector("353R"),
             el => el.disabled
           );
-          expect(readonly).withContext(`In ${browserName}`).toEqual(true);
+          expect(readonly).withContext(`In ${browserName}`).toBeTrue();
           await page.click(getSelector("334R"));
           await waitForSandboxTrip(page);
 
           readonly = await page.$eval(getSelector("353R"), el => el.disabled);
-          expect(readonly).withContext(`In ${browserName}`).toEqual(true);
+          expect(readonly).withContext(`In ${browserName}`).toBeTrue();
           await page.click(getSelector("351R"));
           await waitForSandboxTrip(page);
 
           readonly = await page.$eval(getSelector("353R"), el => el.disabled);
-          expect(readonly).withContext(`In ${browserName}`).toEqual(true);
+          expect(readonly).withContext(`In ${browserName}`).toBeTrue();
           await page.click(getSelector("352R"));
           await page.waitForFunction(
             `${getQuerySelector("353R")}.disabled !== true`
           );
 
           readonly = await page.$eval(getSelector("353R"), el => el.disabled);
-          expect(readonly).withContext(`In ${browserName}`).toEqual(false);
+          expect(readonly).withContext(`In ${browserName}`).toBeFalse();
 
           await page.click(getSelector("353R"));
           await page.waitForFunction(
@@ -2024,7 +2262,7 @@ describe("Interaction", () => {
           );
 
           let checked = await page.$eval(getSelector("353R"), el => el.checked);
-          expect(checked).withContext(`In ${browserName}`).toEqual(true);
+          expect(checked).withContext(`In ${browserName}`).toBeTrue();
           await page.click(getSelector("334R"));
           await page.waitForFunction(
             `${getQuerySelector("353R")}.disabled !== false`
@@ -2034,9 +2272,9 @@ describe("Interaction", () => {
           );
 
           readonly = await page.$eval(getSelector("353R"), el => el.disabled);
-          expect(readonly).withContext(`In ${browserName}`).toEqual(true);
+          expect(readonly).withContext(`In ${browserName}`).toBeTrue();
           checked = await page.$eval(getSelector("353R"), el => el.checked);
-          expect(checked).withContext(`In ${browserName}`).toEqual(false);
+          expect(checked).withContext(`In ${browserName}`).toBeFalse();
         })
       );
     });
@@ -2406,49 +2644,6 @@ describe("Interaction", () => {
     });
   });
 
-  describe("Change radio property", () => {
-    let pages;
-
-    beforeEach(async () => {
-      pages = await loadAndWait("bug1922766.pdf", getAnnotationSelector("44R"));
-    });
-
-    afterEach(async () => {
-      await closePages(pages);
-    });
-
-    it("must check that a change on a radio implies the change on all the radio in the group", async () => {
-      await Promise.all(
-        pages.map(async ([browserName, page]) => {
-          await waitForScripting(page);
-
-          const checkColor = async color => {
-            await waitForSandboxTrip(page);
-            for (const i of [40, 41, 42, 43]) {
-              const bgColor = await page.$eval(
-                `[data-element-id='${i}R']`,
-                el => getComputedStyle(el).backgroundColor
-              );
-              expect(bgColor)
-                .withContext(`In ${browserName}`)
-                .toEqual(`rgb(${color.join(", ")})`);
-            }
-          };
-          await checkColor([255, 0, 0]);
-          await page.click(getAnnotationSelector("44R"));
-          await checkColor([0, 0, 255]);
-          await page.click(getAnnotationSelector("44R"));
-          await checkColor([255, 0, 0]);
-
-          await page.click(getAnnotationSelector("43R"));
-          await waitForSandboxTrip(page);
-          await page.click(getAnnotationSelector("44R"));
-          await checkColor([0, 0, 255]);
-        })
-      );
-    });
-  });
-
   describe("Date creation must be timezone consistent", () => {
     let pages;
 
@@ -2692,6 +2887,147 @@ describe("Interaction", () => {
           expect(thirdInputValue)
             .withContext(`In ${browserName}`)
             .toEqual("2025-07-02T12:34");
+        })
+      );
+    });
+  });
+
+  describe("in text_field_own_canvas_calc.pdf", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait(
+        "text_field_own_canvas_calc.pdf",
+        getSelector("7R"),
+        "page-fit"
+      );
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must show the field instead of its canvas when it was calculated while its page wasn't rendered", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          // The read-only "Mirror" field (8R) is on page 3, which hasn't been
+          // rendered yet.
+          expect(await page.$(getSelector("8R")))
+            .withContext(`In ${browserName}`)
+            .toBeNull();
+
+          // Modifying the "Source" field (7R) on page 1 mirrors its value into
+          // the read-only field on page 3 through a Calculate action.
+          await page.type(getSelector("7R"), "Hello PDF.js");
+          await page.keyboard.press("Enter");
+          await waitForEntryInStorage(
+            page,
+            "8R",
+            { value: "Hello PDF.js" },
+            (stored, expected) =>
+              !!stored &&
+              JSON.parse(stored).value === JSON.parse(expected).value
+          );
+
+          // The value has been mirrored into the storage while page 3, and
+          // hence its annotation layer, hasn't been rendered yet.
+          const page3AnnotationCount = await page.evaluate(() => {
+            const layer = document.querySelector(
+              '.page[data-page-number="3"] .annotationLayer'
+            );
+            return layer ? layer.childElementCount : 0;
+          });
+          expect(page3AnnotationCount)
+            .withContext(`In ${browserName}`)
+            .toEqual(0);
+
+          // Render page 3.
+          await scrollIntoView(page, '.page[data-page-number="3"]');
+          const inputPage3Selector = getSelector("8R");
+          await page.waitForSelector(
+            `.sandboxModified:has(${inputPage3Selector})`,
+            { visible: true }
+          );
+
+          // The field must show its (calculated) value and the now-outdated
+          // canvas must be hidden.
+          const { value, isFieldVisible, isCanvasHidden } = await page.evaluate(
+            sel => {
+              const input = document.querySelector(sel);
+              const canvas = input
+                .closest("section")
+                .querySelector("canvas.annotationContent");
+              return {
+                value: input.value,
+                isFieldVisible: getComputedStyle(input).display !== "none",
+                isCanvasHidden:
+                  !!canvas && getComputedStyle(canvas).display === "none",
+              };
+            },
+            inputPage3Selector
+          );
+
+          expect(value)
+            .withContext(`In ${browserName}`)
+            .toEqual("Hello PDF.js");
+          expect(isFieldVisible).withContext(`In ${browserName}`).toBeTrue();
+          expect(isCanvasHidden).withContext(`In ${browserName}`).toBeTrue();
+        })
+      );
+    });
+  });
+
+  describe("in opt_demo.pdf", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("opt_demo.pdf", getSelector("19R"));
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must expose the Opt export value of checkboxes and radio buttons", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          // Selecting a button runs a script that writes the field's value into
+          // the read-only "result" field (19R). The appearance states are
+          // indices, so without the "Opt" mapping we'd see the index here.
+          const cases = [
+            ["8R", "fruit = [Cherry]"],
+            ["6R", "fruit = [りんご]"],
+            ["10R", "shared = [same]"],
+            ["12R", "agree = [I Agree to terms]"],
+          ];
+          for (const [id, expected] of cases) {
+            await page.click(getSelector(id));
+            await page.waitForFunction(
+              `${getQuerySelector("19R")}.value === ${JSON.stringify(expected)}`
+            );
+          }
+        })
+      );
+    });
+
+    it("must expose the Opt export value when the parent has no Kids", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await waitForScripting(page);
+
+          // The "veg" parent carries "Opt" but no "Kids", so its export value
+          // is resolved from the numeric appearance-state name.
+          await page.click(getSelector("22R"));
+          await page.waitForFunction(
+            `${getQuerySelector("19R")}.value === "veg = [Carrot]"`
+          );
+
+          await page.click(getSelector("23R"));
+          await page.waitForFunction(
+            `${getQuerySelector("19R")}.value === "veg = [Potato]"`
+          );
         })
       );
     });

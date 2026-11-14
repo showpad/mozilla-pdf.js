@@ -14,7 +14,7 @@
  */
 
 .sidebar {
-  --sidebar-bg-color: light-dark(#fff, #23222b);
+  --sidebar-bg-color: var(--background-color-box, light-dark(#fff, #23222b));
   --sidebar-border-color: light-dark(
     rgb(21 20 26 / 0.1),
     rgb(251 251 254 / 0.1)
@@ -30,13 +30,27 @@
   --sidebar-width: 239px;
   --resizer-width: 4px;
   --resizer-shift: calc(0px - var(--resizer-width) - 2px);
-  --resizer-hover-bg-color: light-dark(#0062fa, #00cadb);
+  --resizer-hover-bg-color: var(
+    --color-accent-primary,
+    light-dark(#0062fa, #00cadb)
+  );
+
+  /* Style the sidebar as a Nova panel. Keep this before forced-colors. */
+  /*#if MOZCENTRAL*/
+  @media -moz-pref("pdfjs.enableNova") and -moz-pref("browser.nova.enabled") {
+    --sidebar-border-color: var(--border-color-deemphasized);
+    --sidebar-box-shadow: var(--box-shadow-level-2);
+    --sidebar-border-radius: var(--panel-border-radius);
+  }
+  /*#endif*/
 
   @media screen and (forced-colors: active) {
-    --sidebar-bg-color: Canvas;
+    --sidebar-bg-color: var(--background-color-box, Canvas);
     --sidebar-border-color: CanvasText;
     --sidebar-box-shadow: none;
-    --resizer-hover-bg-color: CanvasText;
+    /* Painted on the Canvas sidebar, so --text-color rather than the accent
+       (which is ButtonText in Firefox HCM). */
+    --resizer-hover-bg-color: var(--text-color, CanvasText);
   }
 
   border-radius: var(--sidebar-border-radius);
@@ -76,6 +90,14 @@
       background-color: var(--resizer-hover-bg-color);
       outline: none;
     }
+
+    /* Match Firefox's Nova splitter: use its full width and rounded ends. */
+    /*#if MOZCENTRAL*/
+    @media -moz-pref("pdfjs.enableNova") and -moz-pref("browser.nova.enabled") {
+      border-inline-width: 0;
+      border-radius: var(--border-radius-large);
+    }
+    /*#endif*/
   }
 
   &.resizing {

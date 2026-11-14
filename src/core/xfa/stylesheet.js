@@ -26,10 +26,9 @@ class Stylesheet extends XFAObject {
 
 class StylesheetNamespace {
   static [$buildXFAObject](name, attributes) {
-    if (StylesheetNamespace.hasOwnProperty(name)) {
-      return StylesheetNamespace[name](attributes);
-    }
-    return undefined;
+    return Object.hasOwn(StylesheetNamespace, name)
+      ? StylesheetNamespace[name](attributes)
+      : undefined;
   }
 
   static stylesheet(attributes) {

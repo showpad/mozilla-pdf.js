@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 
+import { AnnotationEditorType } from "../../src/shared/util.js";
 import { buildGetDocumentParams } from "./test_utils.js";
 import { getDocument } from "../../src/display/api.js";
 
@@ -107,6 +108,43 @@ describe("struct tree", function () {
       );
       await loadingTask.destroy();
     });
+  });
+
+  it("parses table cell spans from attribute arrays (issue 18090)", async function () {
+    // In this fixture, table and layout attribute dictionaries are separate
+    // indirect objects referenced from the cells' `A` arrays.
+    const filename = "issue13132.pdf";
+    const params = buildGetDocumentParams(filename);
+    const loadingTask = getDocument(params);
+    const doc = await loadingTask.promise;
+    const spans = [];
+
+    function collect(node, pageNumber) {
+      if (node.rowSpan || node.colSpan) {
+        spans.push(
+          `${pageNumber}:${node.role}:${node.rowSpan ?? 1}x${node.colSpan ?? 1}`
+        );
+      }
+      for (const kid of node.children || []) {
+        collect(kid, pageNumber);
+      }
+    }
+
+    for (const pageNumber of [1, 4]) {
+      const page = await doc.getPage(pageNumber);
+      collect(await page.getStructTree(), pageNumber);
+    }
+    expect(spans).toEqual([
+      "1:TD:1x5",
+      "1:TD:1x5",
+      "1:TH:1x3",
+      "1:TH:1x4",
+      "4:TD:1x2",
+      "4:TH:3x1",
+      "4:TD:2x1",
+    ]);
+
+    await loadingTask.destroy();
   });
 
   it("parses structure with a figure and its bounding box", async function () {
@@ -300,6 +338,7 @@ describe("struct tree", function () {
       },
       struct
     );
+    await loadingTask.destroy();
   });
 
   it("should collect all list and table items in StructTree", async function () {
@@ -327,6 +366,191 @@ describe("struct tree", function () {
 
     const listItems = findNodes(tree, node => node.role === "LI");
     expect(listItems.length).toEqual(4);
+
+    await loadingTask.destroy();
+  });
+
+  it("parses structure without a ParentTree", async function () {
+    const loadingTask = getDocument(
+      buildGetDocumentParams("structure_no_parent_tree.pdf")
+    );
+    const pdfDoc = await loadingTask.promise;
+
+    const tree1 = await (await pdfDoc.getPage(1)).getStructTree();
+    expect(tree1).toEqual({
+      role: "Root",
+      children: [
+        {
+          role: "Document",
+          children: [
+            {
+              role: "P",
+              children: [{ type: "content", id: "p3R_mc0" }],
+            },
+            {
+              role: "Table",
+              children: [
+                {
+                  role: "TR",
+                  children: [
+                    {
+                      role: "TD",
+                      children: [{ type: "content", id: "p3R_mc1" }],
+                    },
+                    { role: "TD", children: [] },
+                  ],
+                },
+              ],
+            },
+            {
+              role: "P",
+              children: [{ type: "content", id: "p3R_mc2" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const tree2 = await (await pdfDoc.getPage(2)).getStructTree();
+    expect(tree2).toEqual({
+      role: "Root",
+      children: [
+        {
+          role: "Document",
+          children: [
+            {
+              role: "P",
+              children: [{ type: "content", id: "p4R_mc2" }],
+            },
+            {
+              role: "H1",
+              children: [{ type: "content", id: "p4R_mc0" }],
+            },
+            {
+              role: "Link",
+              children: [
+                { type: "annotation", id: "pdfjs_internal_id_20R" },
+                { type: "content", id: "p4R_mc1" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    await loadingTask.destroy();
+  });
+
+  it("parses form-local MCIDs with shared resources", async function () {
+    const loadingTask = getDocument(
+      buildGetDocumentParams("structure_form_xobject_mcid.pdf")
+    );
+    const pdfDoc = await loadingTask.promise;
+
+    // The pages share resources. The second page's MCR also overrides /Pg.
+    for (const [pageNumber, children] of [
+      [
+        1,
+        [
+          {
+            role: "P",
+            children: [{ type: "content", id: "p3R_x10R_mc0" }],
+          },
+          {
+            role: "H1",
+            children: [{ type: "content", id: "p3R_x11R_mc0" }],
+          },
+        ],
+      ],
+      [
+        2,
+        [
+          {
+            role: "H1",
+            alt: "Page two",
+            children: [{ type: "content", id: "p13R_x16R_mc0" }],
+          },
+        ],
+      ],
+    ]) {
+      const page = await pdfDoc.getPage(pageNumber);
+      expect(await page.getStructTree()).toEqual({
+        role: "Root",
+        children: [{ role: "Document", children }],
+      });
+      const { items } = await page.getTextContent({
+        includeMarkedContent: true,
+      });
+      expect(
+        items
+          .filter(item => item.type === "beginMarkedContentProps")
+          .map(item => item.id)
+      ).toEqual(children.flatMap(child => child.children.map(({ id }) => id)));
+    }
+
+    await loadingTask.destroy();
+  });
+
+  it("preserves annotation order beside form content after saving", async function () {
+    let loadingTask = getDocument(
+      buildGetDocumentParams("structure_form_xobject_mcid.pdf")
+    );
+    let pdfDoc = await loadingTask.promise;
+    const tree = await (await pdfDoc.getPage(1)).getStructTree();
+    const contentNodes = tree.children[0].children;
+    const notes = ["First note", "Second note"];
+
+    for (const [index, text] of notes.entries()) {
+      pdfDoc.annotationStorage.setValue(`pdfjs_internal_editor_${index}`, {
+        annotationType: AnnotationEditorType.FREETEXT,
+        pageIndex: 0,
+        rect: [10, 20 * index, 80, 20 * index + 15],
+        rotation: 0,
+        fontSize: 10,
+        color: [0, 0, 0],
+        value: text,
+        structTreeParentId: contentNodes[index].children[0].id,
+        accessibilityData: { type: "Note", alt: text },
+      });
+    }
+
+    const data = await pdfDoc.saveDocument();
+    await loadingTask.destroy();
+    loadingTask = getDocument({ data });
+    pdfDoc = await loadingTask.promise;
+    const page = await pdfDoc.getPage(1);
+    const annotationIds = new Map(
+      (await page.getAnnotations()).map(({ id, contentsObj }) => [
+        contentsObj.str,
+        `pdfjs_internal_id_${id}`,
+      ])
+    );
+    expect(await page.getStructTree()).toEqual({
+      role: "Root",
+      children: [
+        {
+          role: "Document",
+          children: [
+            contentNodes[0],
+            {
+              role: "Note",
+              alt: "First note",
+              children: [
+                { type: "annotation", id: annotationIds.get("First note") },
+              ],
+            },
+            contentNodes[1],
+            {
+              role: "Note",
+              alt: "Second note",
+              children: [
+                { type: "annotation", id: annotationIds.get("Second note") },
+              ],
+            },
+          ],
+        },
+      ],
+    });
 
     await loadingTask.destroy();
   });

@@ -19,6 +19,7 @@ import {
   AnnotationEditorType,
   AnnotationMode,
   AnnotationType,
+  createPromiseCapability,
   createValidAbsoluteUrl,
   FeatureTest,
   getUuid,
@@ -27,9 +28,11 @@ import {
   makeArr,
   makeMap,
   makeObj,
-  MathClamp,
+  makeSet,
+  noopFn,
   normalizeUnicode,
   OPS,
+  PasswordException,
   PasswordResponses,
   PermissionFlag,
   ResponseException,
@@ -40,24 +43,12 @@ import {
 } from "../../src/shared/util.js";
 import {
   applyOpacity,
-  CSSConstants,
-  fetchData,
   findContrastColor,
-  getFilenameFromUrl,
-  getPdfFilenameFromUrl,
   getRGB,
-  getXfaPageViewport,
-  isDataScheme,
-  isPdfFile,
-  noContextMenu,
+  getRGBA,
   OutputScale,
-  PDFDateString,
   PixelsPerInch,
   RenderingCancelledException,
-  renderRichText,
-  setLayerDimensions,
-  stopEvent,
-  SupportedImageMimeTypes,
 } from "../../src/display/display_utils.js";
 import {
   build,
@@ -66,6 +57,20 @@ import {
   PDFWorker,
   version,
 } from "../../src/display/api.js";
+import {
+  CSSConstants,
+  fetchData,
+  getFilenameFromUrl,
+  getPdfFilenameFromUrl,
+  isDataScheme,
+  isPdfFile,
+  noContextMenu,
+  PDFDateString,
+  renderRichText,
+  setLayerDimensions,
+  stopEvent,
+  SupportedImageMimeTypes,
+} from "../../src/display/dom_utils.js";
 import { AnnotationEditorLayer } from "../../src/display/editor/annotation_editor_layer.js";
 import { AnnotationEditorUIManager } from "../../src/display/editor/tools.js";
 import { AnnotationLayer } from "../../src/display/annotation_layer.js";
@@ -74,6 +79,7 @@ import { DOMSVGFactory } from "../../src/display/svg_factory.js";
 import { DrawLayer } from "../../src/display/draw_layer.js";
 import { GlobalWorkerOptions } from "../../src/display/worker_options.js";
 import { isValidExplicitDest } from "../../src/display/api_utils.js";
+import { MathClamp } from "../../src/shared/math_clamp.js";
 import { SignatureExtractor } from "../../src/display/editor/drawers/signaturedraw.js";
 import { TextLayer } from "../../src/display/text_layer.js";
 import { TextLayerImages } from "../../src/display/text_layer_images.js";
@@ -92,6 +98,7 @@ const expectedAPI = Object.freeze({
   applyOpacity,
   build,
   ColorPicker,
+  createPromiseCapability,
   createValidAbsoluteUrl,
   CSSConstants,
   DOMSVGFactory,
@@ -103,8 +110,8 @@ const expectedAPI = Object.freeze({
   getFilenameFromUrl,
   getPdfFilenameFromUrl,
   getRGB,
+  getRGBA,
   getUuid,
-  getXfaPageViewport,
   GlobalWorkerOptions,
   ImageKind,
   InvalidPDFException,
@@ -114,11 +121,14 @@ const expectedAPI = Object.freeze({
   makeArr,
   makeMap,
   makeObj,
+  makeSet,
   MathClamp,
   noContextMenu,
+  noopFn,
   normalizeUnicode,
   OPS,
   OutputScale,
+  PasswordException,
   PasswordResponses,
   PDFDataRangeTransport,
   PDFDateString,

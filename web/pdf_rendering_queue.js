@@ -41,14 +41,6 @@ class PDFRenderingQueue {
 
   printing = false;
 
-  constructor() {
-    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
-      Object.defineProperty(this, "hasViewer", {
-        value: () => !!this.#pdfViewer,
-      });
-    }
-  }
-
   /**
    * @param {PDFViewer} pdfViewer
    */
@@ -72,7 +64,7 @@ class PDFRenderingQueue {
   }
 
   /**
-   * @param {Object} currentlyVisiblePages
+   * @param {object} currentlyVisiblePages
    */
   renderHighestPriority(currentlyVisiblePages) {
     if (this.#idleTimeout) {
@@ -103,7 +95,7 @@ class PDFRenderingQueue {
   }
 
   /**
-   * @param {Object} visible
+   * @param {object} visible
    * @param {Array} views
    * @param {boolean} scrolledDown
    * @param {boolean} [preRenderExtra]
@@ -199,7 +191,6 @@ class PDFRenderingQueue {
    * Render a page or thumbnail view. This calls the appropriate function
    * based on the views state. If the view is already rendered it will return
    * `false`.
-   *
    * @param {RenderableView} view
    */
   renderView(view) {

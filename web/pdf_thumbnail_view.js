@@ -16,13 +16,13 @@
 // eslint-disable-next-line max-len
 /** @typedef {import("../src/display/optional_content_config").OptionalContentConfig} OptionalContentConfig */
 // eslint-disable-next-line max-len
-/** @typedef {import("../src/display/display_utils").PageViewport} PageViewport */
+/** @typedef {import("../src/display/page_viewport").PageViewport} PageViewport */
 /** @typedef {import("./event_utils").EventBus} EventBus */
 // eslint-disable-next-line max-len
 /** @typedef {import("./pdf_rendering_queue").PDFRenderingQueue} PDFRenderingQueue */
 
 import {
-  FeatureTest,
+  createPromiseCapability,
   OutputScale,
   RenderingCancelledException,
 } from "pdfjs-lib";
@@ -34,7 +34,7 @@ const MAX_NUM_SCALING_STEPS = 3;
 const THUMBNAIL_WIDTH = 126; // px
 
 /**
- * @typedef {Object} PDFThumbnailViewOptions
+ * @typedef {object} PDFThumbnailViewOptions
  * @property {HTMLDivElement} container - The viewer element.
  * @property {EventBus} eventBus - The application event bus.
  * @property {number} id - The thumbnail's unique ID (normally its number).
@@ -45,36 +45,26 @@ const THUMBNAIL_WIDTH = 126; // px
  * @property {PDFLinkService} linkService - The navigation/linking service.
  * @property {PDFRenderingQueue} renderingQueue - The rendering queue object.
  * @property {number} [maxCanvasPixels] - The maximum supported canvas size in
- *   total pixels, i.e. width * height. Use `-1` for no limit, or `0` for
- *   CSS-only zooming. The default value is 4096 * 8192 (32 mega-pixels).
+ *   total pixels, i.e. width * height. Use `-1` for no limit.
+ *   The default value is 4096 * 8192 (32 mega-pixels).
  * @property {number} [maxCanvasDim] - The maximum supported canvas dimension,
  *   in either width or height. Use `-1` for no limit.
  *   The default value is 32767.
- * @property {Object} [pageColors] - Overwrites background and foreground colors
+ * @property {object} [pageColors] - Overwrites background and foreground colors
  *   with user defined ones in order to improve readability in high contrast
  *   mode.
  */
 
-class TempImageFactory {
-  static getCanvas(width, height) {
-    let tempCanvas;
-    if (FeatureTest.isOffscreenCanvasSupported) {
-      tempCanvas = new OffscreenCanvas(width, height);
-    } else {
-      tempCanvas = document.createElement("canvas");
-      tempCanvas.width = width;
-      tempCanvas.height = height;
-    }
-
-    // Since this is a temporary canvas, we need to fill it with a white
-    // background ourselves. `#getPageDrawContext` uses CSS rules for this.
-    const ctx = tempCanvas.getContext("2d", { alpha: false });
-    ctx.save();
-    ctx.fillStyle = "rgb(255, 255, 255)";
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-    return [tempCanvas, ctx];
-  }
+function getTempCanvas(width, height) {
+  const canvas = new OffscreenCanvas(width, height);
+  // Since this is a temporary canvas, we need to fill it with a white
+  // background ourselves. `#getPageDrawContext` uses CSS rules for this.
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.save();
+  ctx.fillStyle = "rgb(255, 255, 255)";
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+  return [canvas, ctx];
 }
 
 class PDFThumbnailView extends RenderableView {
@@ -106,7 +96,7 @@ class PDFThumbnailView extends RenderableView {
     this.viewport = defaultViewport;
     this.pdfPageRotate = defaultViewport.rotation;
     this._optionalContentConfigPromise = optionalContentConfigPromise || null;
-    this.maxCanvasPixels = maxCanvasPixels ?? AppOptions.get("maxCanvasPixels");
+    this.maxCanvasPixels = maxCanvasPixels || AppOptions.get("maxCanvasPixels");
     this.maxCanvasDim = maxCanvasDim || AppOptions.get("maxCanvasDim");
     this.pageColors = pageColors || null;
 
@@ -185,12 +175,7 @@ class PDFThumbnailView extends RenderableView {
       "data-l10n-id",
       "pdfjs-views-manager-paste-button-after"
     );
-    pasteButton.setAttribute(
-      "data-l10n-args",
-      JSON.stringify({
-        page: this.pageLabel ?? this.id,
-      })
-    );
+    pasteButton.setAttribute("data-l10n-args", this.#getPageL10nArgs());
     const span = document.createElement("span");
     span.setAttribute("data-l10n-id", "pdfjs-views-manager-paste-button-label");
     pasteButton.append(span);
@@ -357,17 +342,13 @@ class PDFThumbnailView extends RenderableView {
     }
     const reducedCanvas = this.#reduceImage(canvas);
     const { imageContainer, image } = this;
-    const { promise, resolve } = Promise.withResolvers();
+    const { promise, resolve } = createPromiseCapability();
     reducedCanvas.toBlob(resolve);
     const blob = await promise;
     image.src = URL.createObjectURL(blob);
     image.setAttribute("data-l10n-id", "pdfjs-thumb-page-canvas");
     image.setAttribute("data-l10n-args", this.#getPageL10nArgs());
     imageContainer.classList.remove("missingThumbnailImage");
-    if (!FeatureTest.isOffscreenCanvasSupported) {
-      // Clean up the canvas element since it is no longer needed.
-      reducedCanvas.width = reducedCanvas.height = 0;
-    }
   }
 
   async draw() {
@@ -506,7 +487,7 @@ class PDFThumbnailView extends RenderableView {
     }
     // drawImage does an awful job of rescaling the image, doing it gradually.
     let [reducedWidth, reducedHeight] = this.#getReducedImageDims(canvas);
-    const [reducedImage, reducedImageCtx] = TempImageFactory.getCanvas(
+    const [reducedImage, reducedImageCtx] = getTempCanvas(
       reducedWidth,
       reducedHeight
     );

@@ -13,7 +13,14 @@
  * limitations under the License.
  */
 
-import { closePages, FSI, loadAndWait, PDI } from "./test_utils.mjs";
+import {
+  closePages,
+  FSI,
+  kbFocusNext,
+  loadAndWait,
+  PDI,
+  waitForTextToBe,
+} from "./test_utils.mjs";
 
 function fuzzyMatch(a, b, browserName, pixelFuzz = 3) {
   expect(a)
@@ -22,6 +29,16 @@ function fuzzyMatch(a, b, browserName, pixelFuzz = 3) {
   expect(a)
     .withContext(`In ${browserName}`)
     .toBeGreaterThan(b - pixelFuzz);
+}
+
+async function search(page, query, notFound = false) {
+  await page.click("#viewFindButton");
+  await page.waitForSelector("#findInput", { visible: true });
+  await page.type("#findInput", query);
+  await page.waitForSelector("#findInput:not([data-status='pending'])");
+  if (!notFound) {
+    await page.waitForSelector(".highlight");
+  }
 }
 
 describe("find bar", () => {
@@ -36,15 +53,13 @@ describe("find bar", () => {
       await closePages(pages);
     });
 
-    it("must highlight text in the right position", async () => {
+    it("must highlight search results in the right positions", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
+          await search(page, "a");
+
           // Highlight all occurrences of the letter A (case insensitive).
-          await page.click("#viewFindButton");
-          await page.waitForSelector("#findInput", { visible: true });
-          await page.type("#findInput", "a");
           await page.click("#findHighlightAll + label");
-          await page.waitForSelector(".textLayer .highlight");
 
           // The PDF file contains the text 'AB BA' in a monospace font on a
           // single line. Check if the two occurrences of A are highlighted.
@@ -84,9 +99,102 @@ describe("find bar", () => {
         })
       );
     });
+
+    it("must highlight search results using keyboard navigation", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await search(page, "a");
+
+          await kbFocusNext(page, ".toggleButton:has(#findHighlightAll)");
+          await page.keyboard.press("Enter");
+
+          const highlights = await page.$$(".textLayer .highlight");
+          expect(highlights.length).withContext(`In ${browserName}`).toEqual(2);
+        })
+      );
+    });
   });
 
-  describe("highlight all (XFA)", () => {
+  describe("search with no search results", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("find_all.pdf", ".textLayer", 100);
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must handle no search results being found", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await search(page, "nonexistent", /* notFound = */ true);
+
+          await waitForTextToBe(page, "#findMsg", "Phrase not found");
+        })
+      );
+    });
+  });
+
+  describe("search with multiple search results", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("find_all.pdf", ".textLayer", 100);
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must handle multiple search results being found", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await search(page, "a");
+
+          // Moving forward should update the find count, and message if
+          // wrapping occurs, correctly.
+          for (let i = 0; i < 3; i++) {
+            if (i > 0) {
+              await page.click("#findNextButton");
+              await page.waitForSelector("#findInput[data-status='']");
+            }
+
+            await waitForTextToBe(
+              page,
+              "#findResultsCount",
+              `${FSI}${(i % 2) + 1}${PDI} of ${FSI}2${PDI} matches`
+            );
+          }
+
+          await waitForTextToBe(
+            page,
+            "#findMsg",
+            "Reached end of document, continued from top"
+          );
+
+          // Moving backwards should also update the find count and message.
+          await page.click("#findPreviousButton");
+          await page.waitForSelector("#findInput[data-status='']");
+
+          await waitForTextToBe(
+            page,
+            "#findResultsCount",
+            `${FSI}2${PDI} of ${FSI}2${PDI} matches`
+          );
+
+          await waitForTextToBe(
+            page,
+            "#findMsg",
+            "Reached top of document, continued from bottom"
+          );
+        })
+      );
+    });
+  });
+
+  describe("search in the XFA layer", () => {
     let pages;
 
     beforeEach(async () => {
@@ -97,33 +205,23 @@ describe("find bar", () => {
       await closePages(pages);
     });
 
-    it("must search xfa correctly", async () => {
+    it("must find search results in the XFA layer", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          await page.click("#viewFindButton");
-          await page.waitForSelector("#findInput", { visible: true });
-          await page.type("#findInput", "preferences");
-          await page.waitForSelector("#findInput[data-status='']");
-          await page.waitForSelector(".xfaLayer .highlight");
-          await page.waitForFunction(
-            () => !!document.querySelector("#findResultsCount")?.textContent
+          await search(page, "preferences");
+
+          await waitForTextToBe(
+            page,
+            "#findResultsCount",
+            `${FSI}1${PDI} of ${FSI}1${PDI} match`
           );
-          const resultElement = await page.waitForSelector("#findResultsCount");
-          const resultText = await resultElement.evaluate(el => el.textContent);
-          expect(resultText).toEqual(`${FSI}1${PDI} of ${FSI}1${PDI} match`);
-          const selectedElement = await page.waitForSelector(
-            ".highlight.selected"
-          );
-          const selectedText = await selectedElement.evaluate(
-            el => el.textContent
-          );
-          expect(selectedText).toEqual("Preferences");
+          await waitForTextToBe(page, ".highlight.selected", "Preferences");
         })
       );
     });
   });
 
-  describe("issue19207.pdf", () => {
+  describe("scroll search results into view (CSS scaling)", () => {
     let pages;
 
     beforeEach(async () => {
@@ -134,23 +232,19 @@ describe("find bar", () => {
       await closePages(pages);
     });
 
-    it("must scroll to the search result text", async () => {
+    it("must scroll search results into view if CSS scaling is applied", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          // Search for "40"
-          await page.click("#viewFindButton");
-          await page.waitForSelector("#findInput", { visible: true });
-          await page.type("#findInput", "40");
+          await search(page, "40");
 
-          const highlight = await page.waitForSelector(".textLayer .highlight");
-
+          const highlight = await page.$(".textLayer .highlight");
           expect(await highlight.isIntersectingViewport()).toBeTrue();
         })
       );
     });
   });
 
-  describe("scrolls to the search result text for smaller viewports", () => {
+  describe("scroll search results into view (small viewport)", () => {
     let pages;
 
     beforeEach(async () => {
@@ -161,24 +255,22 @@ describe("find bar", () => {
       await closePages(pages);
     });
 
-    it("must scroll to the search result text", async () => {
+    it("must scroll search results into view if the viewport is small", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
           // Set a smaller viewport to simulate a mobile device
           await page.setViewport({ width: 350, height: 600 });
-          await page.click("#viewFindButton");
-          await page.waitForSelector("#findInput", { visible: true });
-          await page.type("#findInput", "productivity");
 
-          const highlight = await page.waitForSelector(".textLayer .highlight");
+          await search(page, "productivity");
 
+          const highlight = await page.$(".textLayer .highlight");
           expect(await highlight.isIntersectingViewport()).toBeTrue();
         })
       );
     });
   });
 
-  describe("Check that the search results are correctly visible in rotated PDFs (bug 2021392)", () => {
+  describe("scroll search results into view (rotated pages, bug 2021392)", () => {
     let pages;
 
     beforeEach(async () => {
@@ -193,13 +285,10 @@ describe("find bar", () => {
       await closePages(pages);
     });
 
-    it("must scroll each match into the viewport when navigating search results", async () => {
+    it("must scroll search results into view if the pages are rotated", async () => {
       await Promise.all(
         pages.map(async ([browserName, page]) => {
-          await page.click("#viewFindButton");
-          await page.waitForSelector("#findInput", { visible: true });
-          await page.type("#findInput", "hello");
-          await page.waitForSelector("#findInput[data-status='']");
+          await search(page, "hello");
 
           for (let i = 0; i < 5; i++) {
             if (i > 0) {
@@ -208,23 +297,66 @@ describe("find bar", () => {
             }
 
             // Verify we are on the expected match number.
-            const resultElement =
-              await page.waitForSelector("#findResultsCount");
-            const resultText = await resultElement.evaluate(
-              el => el.textContent
+            await waitForTextToBe(
+              page,
+              "#findResultsCount",
+              `${FSI}${i + 1}${PDI} of ${FSI}5${PDI} matches`
             );
-            expect(resultText)
-              .withContext(`In ${browserName}, match ${i + 1}`)
-              .toEqual(`${FSI}${i + 1}${PDI} of ${FSI}5${PDI} matches`);
 
             // The selected highlight must be visible in the viewport.
-            const selected = await page.waitForSelector(
-              ".textLayer .highlight.selected"
-            );
+            const selected = await page.$(".textLayer .highlight.selected");
             expect(await selected.isIntersectingViewport())
               .withContext(`In ${browserName}, match ${i + 1}`)
               .toBeTrue();
           }
+        })
+      );
+    });
+  });
+
+  describe("close the find bar", () => {
+    let pages;
+
+    beforeEach(async () => {
+      pages = await loadAndWait("find_all.pdf", ".textLayer", 100);
+    });
+
+    afterEach(async () => {
+      await closePages(pages);
+    });
+
+    it("must close the find bar using the toolbar button", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await search(page, "a");
+
+          let highlights = await page.$$(".textLayer .highlight");
+          expect(highlights.length).withContext(`In ${browserName}`).toEqual(1);
+
+          await page.click("#viewFindButton");
+          await page.waitForSelector("#findInput", { hidden: true });
+
+          // Closing the find bar should remove any highlights.
+          highlights = await page.$$(".textLayer .highlight");
+          expect(highlights.length).withContext(`In ${browserName}`).toEqual(0);
+        })
+      );
+    });
+
+    it("must close the find bar using the Escape key", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await search(page, "a");
+
+          let highlights = await page.$$(".textLayer .highlight");
+          expect(highlights.length).withContext(`In ${browserName}`).toEqual(1);
+
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("#findInput", { hidden: true });
+
+          // Closing the find bar should remove any highlights.
+          highlights = await page.$$(".textLayer .highlight");
+          expect(highlights.length).withContext(`In ${browserName}`).toEqual(0);
         })
       );
     });

@@ -74,7 +74,7 @@ class XFAFactory {
       this.pages = await this._createPagesHelper();
       this.dims = this.pages.children.map(c => {
         const { width, height } = c.attributes.style;
-        return [0, 0, parseInt(width), parseInt(height)];
+        return [0, 0, parseInt(width, 10), parseInt(height, 10)];
       });
     } catch (e) {
       warn(`XFA - an error occurred during layout: ${e}`);
@@ -107,11 +107,7 @@ class XFAFactory {
       }
     }
 
-    if (missingFonts.length > 0) {
-      return missingFonts;
-    }
-
-    return null;
+    return missingFonts.length > 0 ? missingFonts : null;
   }
 
   appendFonts(fonts, reallyMissingFonts) {
@@ -132,10 +128,7 @@ class XFAFactory {
   }
 
   static _createDocument(data) {
-    if (!data["/xdp:xdp"]) {
-      return data["xdp:xdp"];
-    }
-    return Object.values(data).join("");
+    return !data.get("/xdp:xdp") ? data.get("xdp:xdp") : data.values().join("");
   }
 
   static getRichTextAsHtml(rc) {
@@ -160,11 +153,9 @@ class XFAFactory {
       const { html } = result;
       const { attributes } = html;
       if (attributes) {
-        if (attributes.class) {
-          attributes.class = attributes.class.filter(
-            attr => !attr.startsWith("xfa")
-          );
-        }
+        attributes.class &&= attributes.class.filter(
+          attr => !attr.startsWith("xfa")
+        );
         attributes.dir = "auto";
       }
 

@@ -14,12 +14,8 @@
  */
 
 import { AnnotationEditorType, AnnotationPrefix } from "../../shared/util.js";
-import {
-  ColorScheme,
-  OutputScale,
-  PixelsPerInch,
-  SupportedImageMimeTypes,
-} from "../display_utils.js";
+import { ColorScheme, SupportedImageMimeTypes } from "../dom_utils.js";
+import { OutputScale, PixelsPerInch } from "../display_utils.js";
 import { AnnotationEditor } from "./editor.js";
 import { StampAnnotationElement } from "../annotation_layer.js";
 
@@ -67,7 +63,7 @@ class StampEditor extends AnnotationEditor {
 
   /** @inheritdoc */
   static isHandlingMimeForPasting(mime) {
-    return SupportedImageMimeTypes.includes(mime);
+    return SupportedImageMimeTypes.has(mime);
   }
 
   /** @inheritdoc */
@@ -238,7 +234,7 @@ class StampEditor extends AnnotationEditor {
       document.body.append(input);
     }
     input.type = "file";
-    input.accept = SupportedImageMimeTypes.join(",");
+    input.accept = SupportedImageMimeTypes.keys().join(",");
     const signal = this._uiManager._signal;
     this.#bitmapPromise = new Promise(resolve => {
       input.addEventListener(
@@ -386,7 +382,8 @@ class StampEditor extends AnnotationEditor {
   setCanvas(annotationElementId, canvas) {
     const { id: bitmapId, bitmap } = this._uiManager.imageManager.getFromCanvas(
       annotationElementId,
-      canvas
+      canvas,
+      this._initialData?.rotation
     );
     canvas.remove();
     if (bitmapId && this._uiManager.imageManager.isValidId(bitmapId)) {
@@ -483,17 +480,15 @@ class StampEditor extends AnnotationEditor {
       this.div.setAttribute("aria-description", this.#bitmapFileName);
     }
     if (!this.annotationElementId) {
-      this._uiManager.a11yAlert("pdfjs-editor-stamp-added-alert");
+      this._uiManager.a11yAlert(AnnotationEditor._l10nAlert.stamp);
     }
   }
 
   copyCanvas(maxDataDimension, maxPreviewDimension, createImageData = false) {
-    if (!maxDataDimension) {
-      // TODO: get this value from Firefox
-      //   (https://bugzilla.mozilla.org/show_bug.cgi?id=1908184)
-      // It's the maximum dimension that the AI can handle.
-      maxDataDimension = 224;
-    }
+    // TODO: get this value from Firefox
+    //   (https://bugzilla.mozilla.org/show_bug.cgi?id=1908184)
+    // It's the maximum dimension that the AI can handle.
+    maxDataDimension ||= 224;
 
     const { width: bitmapWidth, height: bitmapHeight } = this.#bitmap;
     const outputScale = new OutputScale();
@@ -624,19 +619,10 @@ class StampEditor extends AnnotationEditor {
       const prevHeight = newHeight;
 
       if (newWidth > 2 * width) {
-        // See bug 1820511 (Windows specific bug).
-        // TODO: once the above bug is fixed we could revert to:
-        // newWidth = Math.ceil(newWidth / 2);
-        newWidth =
-          newWidth >= 16384
-            ? Math.floor(newWidth / 2) - 1
-            : Math.ceil(newWidth / 2);
+        newWidth = Math.ceil(newWidth / 2);
       }
       if (newHeight > 2 * height) {
-        newHeight =
-          newHeight >= 16384
-            ? Math.floor(newHeight / 2) - 1
-            : Math.ceil(newHeight / 2);
+        newHeight = Math.ceil(newHeight / 2);
       }
 
       const offscreen = new OffscreenCanvas(newWidth, newHeight);
@@ -770,7 +756,8 @@ class StampEditor extends AnnotationEditor {
         delete data.canvas;
         ({ id: bitmapId, bitmap } = uiManager.imageManager.getFromCanvas(
           container.id,
-          canvas
+          canvas,
+          rotation
         ));
         canvas.remove();
       } else {
@@ -809,8 +796,7 @@ class StampEditor extends AnnotationEditor {
       };
     }
     const editor = await super.deserialize(data, parent, uiManager);
-    const { rect, bitmap, bitmapUrl, bitmapId, isSvg, accessibilityData } =
-      data;
+    const { bitmap, bitmapUrl, bitmapId, isSvg, accessibilityData } = data;
     if (missingCanvas) {
       uiManager.addMissingCanvas(data.id, editor);
       editor.#missingCanvas = true;
@@ -823,10 +809,6 @@ class StampEditor extends AnnotationEditor {
       editor.#bitmapUrl = bitmapUrl;
     }
     editor.#isSvg = isSvg;
-
-    const [parentWidth, parentHeight] = editor.pageDimensions;
-    editor.width = (rect[2] - rect[0]) / parentWidth;
-    editor.height = (rect[3] - rect[1]) / parentHeight;
 
     if (accessibilityData) {
       editor.altTextData = accessibilityData;
@@ -881,8 +863,17 @@ class StampEditor extends AnnotationEditor {
       if (changes.isSameAltText) {
         delete serialized.accessibilityData;
       } else {
-        serialized.accessibilityData.structParent =
-          this._initialData.structParent ?? -1;
+        const structParent = this._initialData.structParent ?? -1;
+        if (serialized.accessibilityData) {
+          serialized.accessibilityData.structParent = structParent;
+        } else if (structParent >= 0) {
+          // Clear the existing tag's alt text.
+          serialized.accessibilityData = {
+            type: "Figure",
+            alt: "",
+            structParent,
+          };
+        }
       }
       serialized.id = this.annotationElementId;
       delete serialized.bitmapId;

@@ -13,52 +13,53 @@
  * limitations under the License.
  */
 
-import { unreachable } from "../shared/util.js";
+import { assert, unreachable } from "../shared/util.js";
+import { CharCodeMap } from "./char_code_map.js";
 
 class ToUnicodeMap {
-  constructor(cmap = []) {
-    // The elements of this._map can be integers or strings, depending on how
+  #map;
+
+  /**
+   * @param {CharCodeMap} cmap
+   */
+  constructor(cmap) {
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+      assert(cmap instanceof CharCodeMap, "Must be a CharCodeMap.");
+    }
+    // The values of `this.#map` can be integers or strings, depending on how
     // `cmap` was created.
-    this._map = cmap;
+    this.#map = cmap;
   }
 
-  get length() {
-    return this._map.length;
+  get size() {
+    return this.#map.size;
   }
 
   forEach(callback) {
-    for (const charCode in this._map) {
-      callback(charCode, this._map[charCode].codePointAt(0));
-    }
+    this.#map.forEach((charCode, entry) => {
+      callback(charCode, entry.codePointAt(0));
+    });
   }
 
   has(i) {
-    return this._map[i] !== undefined;
+    return this.#map.has(i);
   }
 
   get(i) {
-    return this._map[i];
+    return this.#map.get(i);
   }
 
   charCodeOf(value) {
-    // `Array.prototype.indexOf` is *extremely* inefficient for arrays which
-    // are both very sparse and very large (see issue8372.pdf).
-    const map = this._map;
-    if (map.length <= 0x10000) {
-      return map.indexOf(value);
-    }
-    for (const charCode in map) {
-      if (map[charCode] === value) {
-        return charCode | 0;
-      }
-    }
-    return -1;
+    return this.#map.charCodeOf(value);
   }
 
+  /**
+   * @param {CharCodeMap} map
+   */
   amend(map) {
-    for (const charCode in map) {
-      this._map[charCode] = map[charCode];
-    }
+    map.forEach((charCode, entry) => {
+      this.#map.set(charCode, entry);
+    });
   }
 }
 
@@ -68,7 +69,7 @@ class IdentityToUnicodeMap {
     this.lastChar = lastChar;
   }
 
-  get length() {
+  get size() {
     return this.lastChar + 1 - this.firstChar;
   }
 
@@ -83,10 +84,9 @@ class IdentityToUnicodeMap {
   }
 
   get(i) {
-    if (this.firstChar <= i && i <= this.lastChar) {
-      return String.fromCharCode(i);
-    }
-    return undefined;
+    return this.firstChar <= i && i <= this.lastChar
+      ? String.fromCharCode(i)
+      : undefined;
   }
 
   charCodeOf(v) {

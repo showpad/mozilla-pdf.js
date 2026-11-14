@@ -36,8 +36,8 @@ if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("CHROME")) {
   // Run this code outside DOMContentLoaded to make sure that the URL
   // is rewritten as soon as possible.
   const queryString = document.location.search.slice(1);
-  const m = /(^|&)file=([^&]*)/.exec(queryString);
-  let defaultUrl = m ? decodeURIComponent(m[2]) : "";
+  const m = /(?:^|&)file=([^&]*)/.exec(queryString);
+  let defaultUrl = m ? decodeURIComponent(m[1]) : "";
   if (!defaultUrl && queryString.startsWith("DNR:")) {
     // Redirected via DNR, see registerPdfRedirectRule in pdfHandler.js.
     defaultUrl = queryString.slice(4);
@@ -63,7 +63,6 @@ const ChromeCom = {
   /**
    * Creates an event that the extension is listening for and will
    * asynchronously respond by calling the callback.
-   *
    * @param {string} action - The action to trigger.
    * @param {string} [data] - The data to send.
    * @param {Function} [callback] - Response callback that will be called with
@@ -87,7 +86,6 @@ const ChromeCom = {
 
   /**
    * Resolves a PDF file path and attempts to detects length.
-   *
    * @param {string} file - Absolute URL of PDF file.
    * @param {Function} callback - A callback with resolved URL and file length.
    */
@@ -272,11 +270,10 @@ let port;
 // 4. Page: Invoke callback.
 function setReferer(url, callback) {
   dnrRequestId ??= crypto.getRandomValues(new Uint32Array(1))[0] % 0x80000000;
-  if (!port) {
-    // The background page will accept the port, and keep adding the Referer
-    // request header to requests to |url| until the port is disconnected.
-    port = chrome.runtime.connect({ name: "chromecom-referrer" });
-  }
+  // The background page will accept the port, and keep adding the Referer
+  // request header to requests to |url| until the port is disconnected.
+  port ??= chrome.runtime.connect({ name: "chromecom-referrer" });
+
   port.onDisconnect.addListener(onDisconnect);
   port.onMessage.addListener(onMessage);
   // Initiate the information exchange.
@@ -439,7 +436,10 @@ class ExternalServices extends BaseExternalServices {
   }
 
   createScripting() {
-    return new GenericScripting(AppOptions.get("sandboxBundleSrc"));
+    return new GenericScripting(
+      AppOptions.get("sandboxBundleSrc"),
+      AppOptions.get("wasmUrl")
+    );
   }
 
   createSignatureStorage(eventBus, signal) {

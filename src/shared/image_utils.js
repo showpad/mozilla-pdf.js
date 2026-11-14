@@ -14,6 +14,7 @@
  */
 
 import { FeatureTest, ImageKind } from "./util.js";
+import { MathClamp } from "./math_clamp.js";
 
 function convertToRGBA(params) {
   switch (params.kind) {
@@ -84,8 +85,15 @@ function convertRGBToRGBA({
 }) {
   let i = 0;
   const len = width * height * 3;
-  const len32 = len >> 2;
-  const src32 = new Uint32Array(src.buffer, srcPos, len32);
+  const byteOffset = src.byteOffset + srcPos;
+  // Bound aligned 32-bit reads to the source view.
+  // The scalar loops treat missing bytes as zeros.
+  const len32 =
+    byteOffset % 4 === 0
+      ? Math.floor(MathClamp(src.length - srcPos, 0, len) / 4)
+      : 0;
+  const src32 =
+    len32 > 0 ? new Uint32Array(src.buffer, byteOffset, len32) : null;
   const alphaMask = FeatureTest.isLittleEndian ? 0xff000000 : 0xff;
 
   if (FeatureTest.isLittleEndian) {
@@ -102,7 +110,7 @@ function convertRGBToRGBA({
       dest[destPos + 3] = (s3 >>> 8) | alphaMask;
     }
 
-    for (let j = i * 4, jj = srcPos + len; j < jj; j += 3) {
+    for (let j = srcPos + i * 4, jj = srcPos + len; j < jj; j += 3) {
       dest[destPos++] =
         src[j] | (src[j + 1] << 8) | (src[j + 2] << 16) | alphaMask;
     }
@@ -118,7 +126,7 @@ function convertRGBToRGBA({
       dest[destPos + 3] = (s3 << 8) | alphaMask;
     }
 
-    for (let j = i * 4, jj = srcPos + len; j < jj; j += 3) {
+    for (let j = srcPos + i * 4, jj = srcPos + len; j < jj; j += 3) {
       dest[destPos++] =
         (src[j] << 24) | (src[j + 1] << 16) | (src[j + 2] << 8) | alphaMask;
     }
@@ -139,4 +147,9 @@ function grayToRGBA(src, dest) {
   }
 }
 
-export { convertBlackAndWhiteToRGBA, convertToRGBA, grayToRGBA };
+export {
+  convertBlackAndWhiteToRGBA,
+  convertRGBToRGBA,
+  convertToRGBA,
+  grayToRGBA,
+};

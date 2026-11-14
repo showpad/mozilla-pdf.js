@@ -30,7 +30,7 @@ describe("encodings", function () {
 
       for (const knownEncodingName of knownEncodingNames) {
         const encoding = getEncoding(knownEncodingName);
-        expect(Array.isArray(encoding)).toEqual(true);
+        expect(Array.isArray(encoding)).toBeTrue();
         expect(encoding.length).toEqual(256);
 
         for (const item of encoding) {
@@ -40,7 +40,7 @@ describe("encodings", function () {
     });
 
     it("fetches `null` for unknown encoding names", function () {
-      expect(getEncoding("FooBarEncoding")).toEqual(null);
+      expect(getEncoding("FooBarEncoding")).toBeNull();
     });
   });
 });

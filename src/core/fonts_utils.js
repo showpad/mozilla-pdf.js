@@ -98,68 +98,65 @@ function recoverGlyphName(name, glyphsUnicodeMap) {
   return name;
 }
 
+function buildMapping(baseEncoding, glyphNames) {
+  const map = new Map();
+  const { length } = baseEncoding;
+  for (let charCode = 0; charCode < length; charCode++) {
+    const glyphId = glyphNames.indexOf(baseEncoding[charCode]);
+    map.set(charCode, glyphId >= 0 ? glyphId : /* notdef = */ 0);
+  }
+  return map;
+}
+
 /**
  * Shared logic for building a char code to glyph id mapping for Type1 and
  * simple CFF fonts. See section 9.6.6.2 of the spec.
- * @param {Object} properties Font properties object.
- * @param {Object} builtInEncoding The encoding contained within the actual font
+ * @param {object} properties Font properties object.
+ * @param {object} builtInEncoding The encoding contained within the actual font
  *   data.
  * @param {Array} glyphNames Array of glyph names where the index is the
  *   glyph ID.
- * @returns {Object} A char code to glyph ID map.
+ * @returns {Map} A char code to glyph ID map.
  */
 function type1FontGlyphMapping(properties, builtInEncoding, glyphNames) {
-  const charCodeToGlyphId = Object.create(null);
-  let glyphId, charCode, baseEncoding;
-  const isSymbolicFont = !!(properties.flags & FontFlags.Symbolic);
+  let charCodeToGlyphId, glyphsUnicodeMap;
 
-  if (properties.isInternalFont) {
-    baseEncoding = builtInEncoding;
-    for (charCode = 0; charCode < baseEncoding.length; charCode++) {
-      glyphId = glyphNames.indexOf(baseEncoding[charCode]);
-      charCodeToGlyphId[charCode] = glyphId >= 0 ? glyphId : /* notdef = */ 0;
-    }
-  } else if (properties.baseEncodingName) {
+  if (properties.baseEncodingName) {
     // If a valid base encoding name was used, the mapping is initialized with
     // that.
-    baseEncoding = getEncoding(properties.baseEncodingName);
-    for (charCode = 0; charCode < baseEncoding.length; charCode++) {
-      glyphId = glyphNames.indexOf(baseEncoding[charCode]);
-      charCodeToGlyphId[charCode] = glyphId >= 0 ? glyphId : /* notdef = */ 0;
-    }
-  } else if (isSymbolicFont) {
+    charCodeToGlyphId = buildMapping(
+      getEncoding(properties.baseEncodingName),
+      glyphNames
+    );
+  } else if (properties.flags & FontFlags.Symbolic) {
     // For a symbolic font the encoding should be the fonts built-in encoding.
-    for (charCode in builtInEncoding) {
-      charCodeToGlyphId[charCode] = builtInEncoding[charCode];
+    charCodeToGlyphId = new Map();
+    for (const charCode in builtInEncoding) {
+      charCodeToGlyphId.set(+charCode, builtInEncoding[charCode]);
     }
   } else {
     // For non-symbolic fonts that don't have a base encoding the standard
     // encoding should be used.
-    baseEncoding = StandardEncoding;
-    for (charCode = 0; charCode < baseEncoding.length; charCode++) {
-      glyphId = glyphNames.indexOf(baseEncoding[charCode]);
-      charCodeToGlyphId[charCode] = glyphId >= 0 ? glyphId : /* notdef = */ 0;
-    }
+    charCodeToGlyphId = buildMapping(StandardEncoding, glyphNames);
   }
 
   // Lastly, merge in the differences.
-  const differences = properties.differences;
-  let glyphsUnicodeMap;
-  if (differences) {
-    for (charCode in differences) {
-      const glyphName = differences[charCode];
-      glyphId = glyphNames.indexOf(glyphName);
+  if (properties.differences) {
+    for (const [charCode, glyphName] of properties.differences) {
+      let glyphId = glyphNames.indexOf(glyphName);
 
       if (glyphId === -1) {
-        if (!glyphsUnicodeMap) {
-          glyphsUnicodeMap = getGlyphsUnicode();
-        }
+        glyphsUnicodeMap ??= getGlyphsUnicode();
+
         const standardGlyphName = recoverGlyphName(glyphName, glyphsUnicodeMap);
         if (standardGlyphName !== glyphName) {
           glyphId = glyphNames.indexOf(standardGlyphName);
         }
       }
-      charCodeToGlyphId[charCode] = glyphId >= 0 ? glyphId : /* notdef = */ 0;
+      charCodeToGlyphId.set(
+        charCode,
+        glyphId >= 0 ? glyphId : /* notdef = */ 0
+      );
     }
   }
   return charCodeToGlyphId;
@@ -206,6 +203,24 @@ const getVerticalPresentationForm = getLookupTableFactory(t => {
   t[0xff5b] = 0xfe37; // FULLWIDTH LEFT CURLY BRACKET
   t[0xff5d] = 0xfe38; // FULLWIDTH RIGHT CURLY BRACKET
 });
+
+// Rotation fallbacks for characters without encoded vertical forms.
+// Exclude U+FFE3: its vertical stroke is on the right in UAX #50, Table 3.
+const VERTICAL_ROTATED_CHARS = new Set([
+  0x2010, // HYPHEN
+  0x2015, // HORIZONTAL BAR
+  0x2016, // DOUBLE VERTICAL LINE
+  0x3018, // LEFT WHITE TORTOISE SHELL BRACKET
+  0x3019, // RIGHT WHITE TORTOISE SHELL BRACKET
+  0x301c, // WAVE DASH
+  0x30a0, // KATAKANA-HIRAGANA DOUBLE HYPHEN
+  0x30fc, // KATAKANA-HIRAGANA PROLONGED SOUND MARK
+  0xff1d, // FULLWIDTH EQUALS SIGN
+  0xff5c, // FULLWIDTH VERTICAL LINE
+  0xff5e, // FULLWIDTH TILDE
+  0xff5f, // FULLWIDTH LEFT WHITE PARENTHESIS
+  0xff60, // FULLWIDTH RIGHT WHITE PARENTHESIS
+]);
 
 // To disable Type3 compilation, set the value to `-1`.
 const MAX_SIZE_TO_COMPILE = 1000;
@@ -385,4 +400,5 @@ export {
   recoverGlyphName,
   SEAC_ANALYSIS_ENABLED,
   type1FontGlyphMapping,
+  VERTICAL_ROTATED_CHARS,
 };

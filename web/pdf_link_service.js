@@ -15,7 +15,12 @@
 
 /** @typedef {import("./event_utils").EventBus} EventBus */
 
-import { isValidExplicitDest } from "pdfjs-lib";
+/**
+ * @import { CatalogAttachmentContent } from "../src/core/catalog.js";
+ */
+
+import { isValidExplicitDest, PasswordException } from "pdfjs-lib";
+import { internalOpt } from "./internal_evt.js";
 import { parseQueryString } from "./ui_utils.js";
 
 const DEFAULT_LINK_REL = "noopener noreferrer nofollow";
@@ -29,7 +34,7 @@ const LinkTarget = {
 };
 
 /**
- * @typedef {Object} PDFLinkServiceOptions
+ * @typedef {object} PDFLinkServiceOptions
  * @property {EventBus} eventBus - The application event bus.
  * @property {number} [externalLinkTarget] - Specifies the `target` attribute
  *   for external links. Must use one of the values from {LinkTarget}.
@@ -129,7 +134,6 @@ class PDFLinkService {
 
   /**
    * This method will, when available, also update the browser history.
-   *
    * @param {string|Array} dest - The named, or explicit, PDF destination.
    */
   async goToDestination(dest) {
@@ -192,7 +196,7 @@ class PDFLinkService {
     });
 
     const ac = new AbortController();
-    this.eventBus._on(
+    this.eventBus.on(
       "textlayerrendered",
       evt => {
         if (evt.pageNumber === pageNumber) {
@@ -200,13 +204,12 @@ class PDFLinkService {
           ac.abort();
         }
       },
-      { signal: ac.signal }
+      { signal: ac.signal, ...internalOpt }
     );
   }
 
   /**
    * This method will, when available, also update the browser history.
-   *
    * @param {number|string} val - The page number, or page label.
    */
   goToPage(val) {
@@ -216,13 +219,11 @@ class PDFLinkService {
     const pageNumber =
       (typeof val === "string" && this.pdfViewer.pageLabelToPageNumber(val)) ||
       val | 0;
-    if (
-      !(
-        Number.isInteger(pageNumber) &&
-        pageNumber > 0 &&
-        pageNumber <= this.pagesCount
-      )
-    ) {
+    if (!(
+      Number.isInteger(pageNumber) &&
+      pageNumber > 0 &&
+      pageNumber <= this.pagesCount
+    )) {
       console.error(`PDFLinkService.goToPage: "${val}" is not a valid page.`);
       return;
     }
@@ -242,7 +243,7 @@ class PDFLinkService {
    * @param {number} pageNumber - The page number to scroll to.
    * @param {number} x - The x-coordinate to scroll to in page coordinates.
    * @param {number} y - The y-coordinate to scroll to in page coordinates.
-   * @param {Object} [options]
+   * @param {object} [options]
    */
   goToXY(pageNumber, x, y, options = {}) {
     this.pdfViewer.scrollPageIntoView({
@@ -251,6 +252,23 @@ class PDFLinkService {
       ignoreDestinationZoom: true,
       ...options,
     });
+  }
+
+  /**
+   * @param {string} id
+   *   Unique attachment identifier (required).
+   * @returns {Promise<CatalogAttachmentContent>}
+   *   Content.
+   */
+  async getAttachmentContent(id) {
+    try {
+      return await this.pdfDocument?.getAttachmentContent(id);
+    } catch (error) {
+      if (!(error instanceof PasswordException)) {
+        console.warn(`Unable to load attachment content: ${error}`);
+      }
+    }
+    return null;
   }
 
   /**
@@ -266,11 +284,21 @@ class PDFLinkService {
     const target = newWindow ? LinkTarget.BLANK : this.externalLinkTarget,
       rel = this.externalLinkRel;
 
+    // Strip userinfo (user:password@) from URLs used for display, to prevent
+    // phishing via hostname-spoofing (e.g. https://trusted.example@attacker.example/).
+    let displayUrl = url;
+    const parsedUrl = URL.parse(url);
+    if (parsedUrl?.username || parsedUrl?.password) {
+      parsedUrl.username = parsedUrl.password = "";
+      displayUrl = parsedUrl.href;
+    }
+
     if (this.externalLinkEnabled) {
-      link.href = link.title = url;
+      link.href = url;
+      link.title = displayUrl;
     } else {
       link.href = "";
-      link.title = `Disabled: ${url}`;
+      link.title = `Disabled: ${displayUrl}`;
       link.onclick = () => false;
     }
 
@@ -495,7 +523,7 @@ class PDFLinkService {
   }
 
   /**
-   * @param {Object} action
+   * @param {object} action
    */
   async executeSetOCGState(action) {
     if (!this.pdfDocument) {

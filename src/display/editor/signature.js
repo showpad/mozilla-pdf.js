@@ -68,6 +68,8 @@ class SignatureEditor extends DrawingEditor {
 
   #signatureUUID = null;
 
+  #isWaitingForSignature = false;
+
   static _type = "signature";
 
   static _editorType = AnnotationEditorType.SIGNATURE;
@@ -79,7 +81,7 @@ class SignatureEditor extends DrawingEditor {
     this._willKeepAspectRatio = true;
     this.#signatureData = params.signatureData || null;
     this.#description = null;
-    this.defaultL10nId = "pdfjs-editor-signature-editor1";
+    this.defaultL10nId = "pdfjs-editor-signature-editor2";
   }
 
   /** @inheritdoc */
@@ -134,6 +136,13 @@ class SignatureEditor extends DrawingEditor {
   }
 
   /** @inheritdoc */
+  onceAdded(focus) {
+    // Defer to addSignature so cancelling the dialog adds no undo command.
+    this.#isWaitingForSignature = this._drawId === null;
+    super.onceAdded(focus);
+  }
+
+  /** @inheritdoc */
   onScaleChanging() {
     if (this._drawId === null) {
       return;
@@ -157,6 +166,7 @@ class SignatureEditor extends DrawingEditor {
     }
 
     super.render();
+    this.#updateRoleForSelection();
 
     if (this._drawId === null) {
       if (this.#signatureData) {
@@ -207,6 +217,27 @@ class SignatureEditor extends DrawingEditor {
     return this.div;
   }
 
+  /** @inheritdoc */
+  select() {
+    super.select();
+    this.#updateRoleForSelection();
+  }
+
+  /** @inheritdoc */
+  unselect() {
+    super.unselect();
+    this.#updateRoleForSelection();
+  }
+
+  #updateRoleForSelection() {
+    if (this._uiManager._useButtonRoleForUnselectedSignatures) {
+      this.div?.setAttribute(
+        "role",
+        this.isSelected ? "application" : "button"
+      );
+    }
+  }
+
   setUuid(uuid) {
     this.#signatureUUID = uuid;
     this.addEditToolbar();
@@ -254,10 +285,9 @@ class SignatureEditor extends DrawingEditor {
 
   /** @inheritdoc */
   get toolbarButtons() {
-    if (this._uiManager.signatureManager) {
-      return [["editSignature", this._uiManager.signatureManager]];
-    }
-    return super.toolbarButtons;
+    return this._uiManager.signatureManager
+      ? [["editSignature", this._uiManager.signatureManager]]
+      : super.toolbarButtons;
   }
 
   addSignature(data, heightInPage, description, uuid) {
@@ -309,6 +339,11 @@ class SignatureEditor extends DrawingEditor {
     });
 
     this.div.hidden = false;
+
+    if (this.#isWaitingForSignature) {
+      this.#isWaitingForSignature = false;
+      this.parent.addUndoableEditor(this);
+    }
   }
 
   getFromImage(bitmap) {

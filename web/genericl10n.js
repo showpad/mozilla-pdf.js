@@ -29,10 +29,7 @@ function PLATFORM() {
   if (isMac) {
     return "macos";
   }
-  if (isAndroid) {
-    return "android";
-  }
-  return "other";
+  return isAndroid ? "android" : "other";
 }
 
 function createBundle(lang, text) {
@@ -66,9 +63,9 @@ class GenericL10n extends L10n {
 
   /**
    * Generate the bundles for Fluent.
-   * @param {String} defaultLang - The fallback language to use for
+   * @param {string} defaultLang - The fallback language to use for
    *   translations.
-   * @param {String} baseLang - The base language to use for translations.
+   * @param {string} baseLang - The base language to use for translations.
    */
   static async *#generateBundles(defaultLang, baseLang) {
     const { baseURL, paths } = await this.#getPaths();

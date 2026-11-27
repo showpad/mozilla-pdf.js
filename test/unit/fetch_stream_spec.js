@@ -63,8 +63,8 @@ describe("fetch_stream", function () {
     await read();
 
     expect(len).toEqual(pdfLength);
-    expect(isStreamingSupported).toEqual(true);
-    expect(isRangeSupported).toEqual(false);
+    expect(isStreamingSupported).toBeTrue();
+    expect(isRangeSupported).toBeFalse();
   });
 
   it("read ranges with streaming", async function () {
@@ -96,8 +96,8 @@ describe("fetch_stream", function () {
 
     const result1 = { value: 0 },
       result2 = { value: 0 };
-    const read = function (reader, lenResult) {
-      return reader.read().then(function (result) {
+    const read = (reader, lenResult) =>
+      reader.read().then(function (result) {
         if (result.done) {
           return undefined;
         }
@@ -105,18 +105,51 @@ describe("fetch_stream", function () {
         lenResult.value += result.value.byteLength;
         return read(reader, lenResult);
       });
-    };
 
     await Promise.all([
       read(rangeReader1, result1),
       read(rangeReader2, result2),
     ]);
 
-    expect(isStreamingSupported).toEqual(true);
-    expect(isRangeSupported).toEqual(true);
-    expect(fullReaderCancelled).toEqual(true);
+    expect(isStreamingSupported).toBeTrue();
+    expect(isRangeSupported).toBeTrue();
+    expect(fullReaderCancelled).toBeTrue();
     expect(result1.value).toEqual(rangeSize);
     expect(result2.value).toEqual(tailSize);
+  });
+
+  it("cancel after a failed read doesn't cause an unhandled rejection", async function () {
+    spyOn(globalThis, "fetch").and.callFake(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(new Error("Network error"));
+            },
+          }),
+          { status: 200 }
+        )
+    );
+    const stream = new PDFFetchStream({
+      url: getPdfUrl(),
+      rangeChunkSize: 32768,
+      disableStream: false,
+      disableRange: false,
+    });
+
+    const fullReader = stream.getFullReader();
+    const rangeReader = stream.getRangeReader(0, 32768);
+    await expectAsync(fullReader.read()).toBeRejectedWithError("Network error");
+    await expectAsync(rangeReader.read()).toBeRejectedWithError(
+      "Network error"
+    );
+
+    fullReader.cancel(new AbortException("Don't need fullReader."));
+    rangeReader.cancel(new AbortException("Don't need rangeReader."));
+    // Allow any unhandled rejections to be reported.
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
   });
 
   describe("Redirects", function () {

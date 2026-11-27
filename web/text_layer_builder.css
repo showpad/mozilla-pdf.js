@@ -22,6 +22,8 @@
   overflow: clip;
   opacity: 1;
   line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
   text-size-adjust: none;
   forced-color-adjust: none;
   transform-origin: 0 0;
@@ -38,6 +40,12 @@
     white-space: pre;
     cursor: text;
     transform-origin: 0% 0%;
+    user-select: text;
+  }
+
+  /* Show the glyph boxes of the text layer fonts, see `#textLayer=visible`. */
+  &.debugFonts :is(span, br) {
+    color: red;
   }
 
   /* We multiply the font size by --min-font-size, and then scale the text
@@ -47,6 +55,10 @@
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));
+
+  &.textLayerFonts {
+    font-variant-ligatures: none;
+  }
 
   > :not(.markedContent),
   .markedContent span:not(.markedContent) {
@@ -120,7 +132,15 @@
     background: rgba(0 0 255 / 0.25);
     /*#endif*/
     /* stylelint-enable declaration-block-no-duplicate-properties */
-    background: color-mix(in srgb, AccentColor, transparent 75%);
+    background: color-mix(in srgb, AccentColor, transparent 50%);
+    color: transparent;
+  }
+
+  &.selectionRendering {
+    ::selection {
+      background: transparent;
+      color: transparent;
+    }
   }
 
   /* Avoids https://github.com/mozilla/pdf.js/issues/13840 in Chrome */

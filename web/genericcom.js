@@ -16,6 +16,7 @@
 import { AppOptions } from "./app_options.js";
 import { BaseExternalServices } from "./external_services.js";
 import { BasePreferences } from "./preferences.js";
+import { createPromiseCapability } from "pdfjs-lib";
 import { GenericL10n } from "./genericl10n.js";
 import { GenericScripting } from "./generic_scripting.js";
 import { SignatureStorage } from "./generic_signature_storage.js";
@@ -39,16 +40,38 @@ class Preferences extends BasePreferences {
 }
 
 class ExternalServices extends BaseExternalServices {
+  constructor() {
+    super();
+
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+      // For testing purposes.
+      Object.defineProperty(this, "reportText", {
+        value: data => {
+          window._reportTextData = data;
+        },
+      });
+    }
+  }
+
   async createL10n() {
     return new GenericL10n(AppOptions.get("localeProperties")?.lang);
   }
 
   createScripting() {
-    return new GenericScripting(AppOptions.get("sandboxBundleSrc"));
+    return new GenericScripting(
+      AppOptions.get("sandboxBundleSrc"),
+      AppOptions.get("wasmUrl")
+    );
   }
 
   createSignatureStorage(eventBus, signal) {
     return new SignatureStorage(eventBus, signal);
+  }
+
+  createSignatureVerifier() {
+    return typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")
+      ? new FakeSignatureVerifier()
+      : null;
   }
 }
 
@@ -108,7 +131,7 @@ if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
       // The progress can be seen in the new alt-text dialog.
       this.hasProgress = true;
 
-      const { promise, resolve } = Promise.withResolvers();
+      const { promise, resolve } = createPromiseCapability();
       const total = 1e8;
       const end = 1.5 * total;
       const increment = 5e6;
@@ -148,6 +171,35 @@ if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
 
     toggleService(_name, enabled) {
       this.enableGuessAltText = enabled;
+    }
+  };
+
+  // eslint-disable-next-line no-var
+  var FakeSignatureVerifier = class {
+    async verify(signature) {
+      if (signature.signatureType === null) {
+        return {
+          status: "unknown",
+          errorCode: "SUBFILTER_NOT_SUPPORTED",
+          message: signature.subFilter,
+          certificate: null,
+          documentModifiedAfterSigning: !signature.coversWholeDocument,
+          modificationsAfterSignature: signature.modificationsAfterSignature,
+        };
+      }
+
+      return {
+        status: "unknown",
+        errorCode: "EMPTY_RESPONSE",
+        message: null,
+        certificate: null,
+        documentModifiedAfterSigning: !signature.coversWholeDocument,
+        modificationsAfterSignature: signature.modificationsAfterSignature,
+      };
+    }
+
+    async viewCertificate(certificate) {
+      return false;
     }
   };
 }

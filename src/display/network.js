@@ -13,7 +13,12 @@
  * limitations under the License.
  */
 
-import { assert, stringToBytes, warn } from "../shared/util.js";
+import {
+  assert,
+  createPromiseCapability,
+  stringToBytes,
+  warn,
+} from "../shared/util.js";
 import {
   BasePDFStream,
   BasePDFStreamRangeReader,
@@ -25,6 +30,7 @@ import {
   ensureResponseOrigin,
   extractFilenameFromHeader,
   getResponseOrigin,
+  trimHeadersEnd,
   validateRangeRequestCapabilities,
 } from "./network_utils.js";
 import { endRequests } from "./transport_stream.js";
@@ -140,7 +146,7 @@ class PDFNetworkStream extends BasePDFStream {
     const chunk = getArrayBuffer(xhr.response);
     if (xhrStatus === PARTIAL_CONTENT_RESPONSE) {
       const rangeHeader = xhr.getResponseHeader("Content-Range");
-      if (/bytes (\d+)-(\d+)\/(\d+)/.test(rangeHeader)) {
+      if (/bytes \d+-\d+\/\d+/.test(rangeHeader)) {
         pendingRequest.onDone(chunk);
       } else {
         warn(`Missing or invalid "Content-Range" header.`);
@@ -208,9 +214,7 @@ class PDFNetworkStreamReader extends BasePDFStreamReader {
     const rawResponseHeaders = fullRequestXhr.getAllResponseHeaders();
     const responseHeaders = new Headers(
       rawResponseHeaders
-        ? rawResponseHeaders
-            .trimStart()
-            .replace(/[^\S ]+$/, "") // Not `trimEnd`, to keep regular spaces.
+        ? trimHeadersEnd(rawResponseHeaders.trimStart())
             .split(/[\r\n]+/)
             .map(x => {
               const [key, ...val] = x.split(": ");
@@ -285,7 +289,7 @@ class PDFNetworkStreamReader extends BasePDFStreamReader {
     if (this._done) {
       return { value: undefined, done: true };
     }
-    const capability = Promise.withResolvers();
+    const capability = createPromiseCapability();
     this._requests.push(capability);
     return capability.promise;
   }
@@ -369,7 +373,7 @@ class PDFNetworkStreamRangeReader extends BasePDFStreamRangeReader {
     if (this._done) {
       return { value: undefined, done: true };
     }
-    const capability = Promise.withResolvers();
+    const capability = createPromiseCapability();
     this._requests.push(capability);
     return capability.promise;
   }

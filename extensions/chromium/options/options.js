@@ -62,7 +62,7 @@ Promise.all([
     var prefNames = Object.keys(schema);
     var renderPreferenceFunctions = {};
     // Render options
-    prefNames.forEach(function (prefName) {
+    prefNames.forEach(prefName => {
       var prefSchema = schema[prefName];
       if (!prefSchema.title) {
         // Don't show preferences if the title is missing.
@@ -105,7 +105,7 @@ Promise.all([
     document.getElementById("reset-button").onclick = function () {
       userPrefs = {};
       storageArea.remove(prefNames, function () {
-        renderedPrefNames.forEach(function (prefName) {
+        renderedPrefNames.forEach(prefName => {
           renderPreferenceFunctions[prefName](getPrefValue(prefName));
         });
       });
@@ -120,7 +120,7 @@ Promise.all([
         prefs = managedPrefs;
       }
       if (prefs) {
-        renderedPrefNames.forEach(function (prefName) {
+        renderedPrefNames.forEach(prefName => {
           var prefChanges = changes[prefName];
           if (prefChanges) {
             if ("newValue" in prefChanges) {
@@ -168,7 +168,7 @@ function renderEnumPref(shortDescription, prefName) {
   var select = wrapper.querySelector("select");
   select.onchange = function () {
     var pref = {};
-    pref[prefName] = parseInt(this.value);
+    pref[prefName] = parseInt(this.value, 10);
     storageArea.set(pref);
   };
   wrapper.querySelector("span").textContent = shortDescription;
@@ -192,7 +192,7 @@ function renderDefaultZoomValue(shortDescription) {
   document.getElementById("settings-boxes").append(wrapper);
 
   function renderPreference(value) {
-    value = value || "auto";
+    value ||= "auto";
     select.value = value;
     var customOption = select.querySelector("option.custom-zoom");
     if (select.selectedIndex === -1 && value) {

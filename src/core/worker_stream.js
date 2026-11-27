@@ -18,6 +18,7 @@ import {
   BasePDFStreamRangeReader,
   BasePDFStreamReader,
 } from "../shared/base_pdf_stream.js";
+import { noopFn } from "../shared/util.js";
 
 class PDFWorkerStream extends BasePDFStream {
   constructor(source) {
@@ -55,7 +56,7 @@ class PDFWorkerStreamReader extends BasePDFStreamReader {
   }
 
   cancel(reason) {
-    this._reader.cancel(reason);
+    this._reader.cancel(reason).catch(noopFn);
   }
 }
 
@@ -75,14 +76,13 @@ class PDFWorkerStreamRangeReader extends BasePDFStreamRangeReader {
 
   async read() {
     const { value, done } = await this._reader.read();
-    if (done) {
-      return { value: undefined, done: true };
-    }
-    return { value: value.buffer, done: false };
+    return done
+      ? { value: undefined, done: true }
+      : { value: value.buffer, done: false };
   }
 
   cancel(reason) {
-    this._reader.cancel(reason);
+    this._reader.cancel(reason).catch(noopFn);
   }
 }
 

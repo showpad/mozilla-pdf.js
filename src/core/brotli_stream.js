@@ -13,11 +13,13 @@
  * limitations under the License.
  */
 
-import { BrotliDecode } from "../../external/brotli/decode.js";
 import { DecodeStream } from "./decode_stream.js";
+import { makeBrotliDecode } from "../../external/brotli/decode.js";
 import { Stream } from "./stream.js";
 
 class BrotliStream extends DecodeStream {
+  static #decode = null;
+
   #isAsync = true;
 
   constructor(stream, maybeLength) {
@@ -29,9 +31,9 @@ class BrotliStream extends DecodeStream {
 
   readBlock() {
     // TODO: add some telemetry to measure how often we fallback here.
-    // Get all bytes from the input stream
     const bytes = this.stream.getBytes();
-    const decodedData = BrotliDecode(
+    BrotliStream.#decode ??= makeBrotliDecode();
+    const decodedData = BrotliStream.#decode(
       new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)
     );
 
@@ -49,10 +51,7 @@ class BrotliStream extends DecodeStream {
     if (!data) {
       return this.getBytes(length);
     }
-    if (data.length <= length) {
-      return data;
-    }
-    return data.subarray(0, length);
+    return data.length <= length ? data : data.subarray(0, length);
   }
 
   async asyncGetBytes() {

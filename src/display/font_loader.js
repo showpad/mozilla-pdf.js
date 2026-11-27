@@ -15,17 +15,21 @@
 
 import {
   assert,
+  createPromiseCapability,
   FeatureTest,
   isNodeJS,
   shadow,
-  string32,
-  unreachable,
   warn,
 } from "../shared/util.js";
 import { makePathFromDrawOPS } from "./display_utils.js";
+import { serializeFontFamily } from "../shared/css_utils.js";
 
 class FontLoader {
-  #systemFonts = new Set();
+  #nativeFontFaces = new Set();
+
+  #systemFonts = new Map();
+
+  #styleSheet = null;
 
   constructor({
     ownerDocument = globalThis.document,
@@ -33,119 +37,243 @@ class FontLoader {
   }) {
     this._document = ownerDocument;
 
-    this.nativeFontFaces = new Set();
     this.styleElement =
       typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")
         ? styleElement
         : null;
 
-    if (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) {
+    if (
+      typeof PDFJSDev === "undefined" ||
+      !PDFJSDev.test("MOZCENTRAL || WORKER_THREAD")
+    ) {
       this.loadingRequests = [];
       this.loadTestFontId = 0;
     }
   }
 
   addNativeFontFace(nativeFontFace) {
-    this.nativeFontFaces.add(nativeFontFace);
+    this.#nativeFontFaces.add(nativeFontFace);
     this._document.fonts.add(nativeFontFace);
   }
 
   removeNativeFontFace(nativeFontFace) {
-    this.nativeFontFaces.delete(nativeFontFace);
+    this.#nativeFontFaces.delete(nativeFontFace);
     this._document.fonts.delete(nativeFontFace);
   }
 
+  static async loadBinaryFontFace(fontSet, fontFace) {
+    fontSet.add(fontFace);
+    try {
+      // A FontFace created from binary data starts loading on construction.
+      await fontFace.loaded;
+    } catch (reason) {
+      fontSet.delete(fontFace);
+      throw reason;
+    }
+  }
+
   insertRule(rule) {
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      throw new Error("Not implemented: insertRule");
+    }
+
+    const styleSheet = this.#getStyleSheet();
+    styleSheet.insertRule(rule, styleSheet.cssRules.length);
+  }
+
+  #getStyleSheet() {
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      throw new Error("Not implemented: #getStyleSheet");
+    }
+
+    if (this.#styleSheet) {
+      return this.#styleSheet;
+    }
+
+    // Constructable stylesheets aren't blocked by CSP inline-style checks.
+    // Use the constructor from the document's own window, since
+    // `this._document` may belong to a different window (e.g. a print iframe)
+    // and a constructable stylesheet can only be adopted by the document it was
+    // created for.
+    const StyleSheet =
+      this._document.defaultView?.CSSStyleSheet || globalThis.CSSStyleSheet;
+    if (!this.styleElement && StyleSheet) {
+      const { adoptedStyleSheets } = this._document;
+      if (adoptedStyleSheets) {
+        const styleSheet = new StyleSheet();
+        adoptedStyleSheets.push(styleSheet);
+        return (this.#styleSheet = styleSheet);
+      }
+    }
+
     if (!this.styleElement) {
       this.styleElement = this._document.createElement("style");
       this._document.documentElement
         .getElementsByTagName("head")[0]
         .append(this.styleElement);
     }
-    const styleSheet = this.styleElement.sheet;
-    styleSheet.insertRule(rule, styleSheet.cssRules.length);
+    return (this.#styleSheet = this.styleElement.sheet);
   }
 
   clear() {
-    for (const nativeFontFace of this.nativeFontFaces) {
+    for (const nativeFontFace of this.#nativeFontFaces) {
       this._document.fonts.delete(nativeFontFace);
     }
-    this.nativeFontFaces.clear();
+    this.#nativeFontFaces.clear();
     this.#systemFonts.clear();
 
-    if (this.styleElement) {
-      // Note: ChildNode.remove doesn't throw if the parentNode is undefined.
-      this.styleElement.remove();
-      this.styleElement = null;
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      return;
     }
+    if (this.#styleSheet) {
+      const { adoptedStyleSheets } = this._document;
+      if (adoptedStyleSheets?.includes(this.#styleSheet)) {
+        this._document.adoptedStyleSheets = adoptedStyleSheets.filter(
+          styleSheet => styleSheet !== this.#styleSheet
+        );
+      }
+      this.#styleSheet = null;
+    }
+    this.styleElement?.remove();
+    this.styleElement = null;
   }
 
-  async loadSystemFont({
+  #systemFont(info, probe = false) {
+    const family = probe ? `${info.loadedName}_probe` : info.loadedName;
+    return this.#systemFonts.getOrInsertComputed(family, () => {
+      const face = new FontFace(
+        family,
+        info.src,
+        probe ? { ...info.style, sizeAdjust: "0%" } : info.style
+      );
+      if (!probe) {
+        this.addNativeFontFace(face);
+      }
+      const entry = {
+        loaded: face.load().catch(() => {
+          if (this.#systemFonts.get(family) === entry) {
+            this.#systemFonts.delete(family);
+            if (!probe) {
+              this.removeNativeFontFace(face);
+              warn(
+                `Cannot load system font: ${info.baseFontName}, installing it could help to improve PDF rendering.`
+              );
+            }
+          }
+          return null;
+        }),
+      };
+      return entry;
+    });
+  }
+
+  async #loadSystemFont({
     systemFontInfo: info,
     disableFontFace,
     _inspectFont,
   }) {
-    if (!info || this.#systemFonts.has(info.loadedName)) {
-      return;
+    assert(!disableFontFace, "Cannot load a disabled system font.");
+    const entry = this.#systemFont(info);
+    if ((await entry.loaded) && _inspectFont && !entry.inspected) {
+      entry.inspected = true;
+      _inspectFont(info);
     }
-    assert(
-      !disableFontFace,
-      "loadSystemFont shouldn't be called when `disableFontFace` is set."
-    );
+  }
 
-    if (this.isFontLoadingAPISupported) {
-      const { loadedName, src, style } = info;
-      const fontFace = new FontFace(loadedName, src, style);
-      this.addNativeFontFace(fontFace);
-      try {
-        await fontFace.load();
-        this.#systemFonts.add(loadedName);
-        _inspectFont?.(info);
-      } catch {
-        warn(
-          `Cannot load system font: ${info.baseFontName}, installing it could help to improve PDF rendering.`
-        );
+  async hasSystemFontGlyphs({ systemFontInfo: info, codePoints }) {
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      throw new Error("Not implemented: hasSystemFontGlyphs");
+    }
 
-        this.removeNativeFontFace(fontFace);
+    if (!this.isFontLoadingAPISupported) {
+      return false;
+    }
+    try {
+      // Start the rendering face and its zero-size probe together. Setting
+      // sizeAdjust after loading a face doesn't update its metrics everywhere.
+      const rendering = this.#systemFont(info);
+      const probe = this.#systemFont(info, true);
+      const [face, probeFace] = await Promise.all([
+        rendering.loaded,
+        probe.loaded,
+      ]);
+      if (!face || probeFace?.sizeAdjust !== "0%") {
+        return false;
       }
+      const coverage = (probe.coverage ??= new Map());
+      const ctx = this._document.createElement("canvas").getContext("2d");
+      const fallback = this._document.createElement("canvas").getContext("2d");
+      fallback.font = "16px sans-serif";
+      function measure(cp) {
+        const char = String.fromCodePoint(cp);
+        // Controls aren't drawn, and Hellbox has no glyph for the Apple logo.
+        return (
+          /\p{Cc}/u.test(char) ||
+          cp === 0xf8ff ||
+          (ctx.measureText(char).width === 0 &&
+            fallback.measureText(char).width > 0)
+        );
+      }
+      this._document.fonts.add(probeFace);
+      try {
+        ctx.font = `16px "${probeFace.family}", sans-serif`;
+        return codePoints.every(cp =>
+          coverage.getOrInsertComputed(cp, measure)
+        );
+      } finally {
+        this._document.fonts.delete(probeFace);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  async #loadFontFace(font) {
+    const fontFace = font.createNativeFontFace();
+    if (!fontFace) {
       return;
     }
-
-    unreachable(
-      "Not implemented: loadSystemFont without the Font Loading API."
-    );
+    this.#nativeFontFaces.add(fontFace);
+    try {
+      await FontLoader.loadBinaryFontFace(this._document.fonts, fontFace);
+    } catch (ex) {
+      warn(`Failed to load font '${fontFace.family}': '${ex}'.`);
+      this.#nativeFontFaces.delete(fontFace);
+      if (!font.missingFile) {
+        // Use paths when an embedded or replacement font fails to load.
+        font.disableFontFace = true;
+        throw ex;
+      }
+    }
   }
 
   async bind(font) {
     // Add the font to the DOM only once; skip if the font is already loaded.
-    if (font.attached || (font.missingFile && !font.systemFontInfo)) {
+    if (
+      font.attached ||
+      (font.missingFile && !font.systemFontInfo && !font.generatedFontName)
+    ) {
       return;
     }
     font.attached = true;
 
-    if (font.systemFontInfo) {
-      await this.loadSystemFont(font);
+    if (this.isFontLoadingAPISupported) {
+      if (font.systemFontInfo) {
+        // Load a system font and its generated fallback in parallel.
+        await Promise.all([
+          this.#loadSystemFont(font),
+          this.#loadFontFace(font),
+        ]);
+      } else {
+        await this.#loadFontFace(font);
+      }
       return;
     }
 
-    if (this.isFontLoadingAPISupported) {
-      const nativeFontFace = font.createNativeFontFace();
-      if (nativeFontFace) {
-        this.addNativeFontFace(nativeFontFace);
-        try {
-          await nativeFontFace.loaded;
-        } catch (ex) {
-          warn(`Failed to load font '${nativeFontFace.family}': '${ex}'.`);
-
-          // When font loading failed, fall back to the built-in font renderer.
-          font.disableFontFace = true;
-          throw ex;
-        }
-      }
-      return; // The font was, asynchronously, loaded.
-    }
-
     // !this.isFontLoadingAPISupported
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      throw new Error("Not implemented: DOM font loading");
+    }
     const rule = font.createFontFaceRule();
     if (rule) {
       this.insertRule(rule);
@@ -153,27 +281,19 @@ class FontLoader {
       if (this.isSyncFontLoadingSupported) {
         return; // The font was, synchronously, loaded.
       }
-      if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-        throw new Error("Not implemented: async font loading");
-      }
-      await new Promise(resolve => {
-        const request = this._queueLoadingCallback(resolve);
-        this._prepareFontLoadEvent(font, request);
-      });
+      await this.#testFontLoaded(font);
       // The font was, asynchronously, loaded.
     }
   }
 
   get isFontLoadingAPISupported() {
-    const hasFonts = !!this._document?.fonts;
-    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
-      return shadow(
-        this,
-        "isFontLoadingAPISupported",
-        hasFonts && !this.styleElement
-      );
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
+      this.styleElement
+    ) {
+      return shadow(this, "isFontLoadingAPISupported", false);
     }
-    return shadow(this, "isFontLoadingAPISupported", hasFonts);
+    return shadow(this, "isFontLoadingAPISupported", !!this._document?.fonts);
   }
 
   get isSyncFontLoadingSupported() {
@@ -191,9 +311,12 @@ class FontLoader {
     );
   }
 
-  _queueLoadingCallback(callback) {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-      throw new Error("Not implemented: _queueLoadingCallback");
+  #testFontLoaded(font) {
+    if (
+      typeof PDFJSDev !== "undefined" &&
+      PDFJSDev.test("MOZCENTRAL || WORKER_THREAD")
+    ) {
+      throw new Error("Not implemented: #testFontLoaded");
     }
 
     function completeRequest() {
@@ -203,28 +326,21 @@ class FontLoader {
       // Sending all completed requests in order of how they were queued.
       while (loadingRequests.length > 0 && loadingRequests[0].done) {
         const otherRequest = loadingRequests.shift();
-        setTimeout(otherRequest.callback, 0);
+        setTimeout(otherRequest.resolve, 0);
       }
     }
 
     const { loadingRequests } = this;
+    const { promise, resolve } = createPromiseCapability();
     const request = {
       done: false,
-      complete: completeRequest,
-      callback,
+      resolve,
     };
     loadingRequests.push(request);
-    return request;
-  }
-
-  get _loadTestFont() {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-      throw new Error("Not implemented: _loadTestFont");
-    }
 
     // This is a CFF font with 1 glyph for '.' that fills its entire width
     // and height.
-    const testFont = atob(
+    this._loadTestFont ??= atob(
       "T1RUTwALAIAAAwAwQ0ZGIDHtZg4AAAOYAAAAgUZGVE1lkzZwAAAEHAAAABxHREVGABQA" +
         "FQAABDgAAAAeT1MvMlYNYwkAAAEgAAAAYGNtYXABDQLUAAACNAAAAUJoZWFk/xVFDQAA" +
         "ALwAAAA2aGhlYQdkA+oAAAD0AAAAJGhtdHgD6AAAAAAEWAAAAAZtYXhwAAJQAAAAARgA" +
@@ -248,13 +364,6 @@ class FontLoader {
         "Dov6fAH6fAT+fPp8+nwHDosMCvm1Cvm1DAz6fBQAAAAAAAABAAAAAMmJbzEAAAAAzgTj" +
         "FQAAAADOBOQpAAEAAAAAAAAADAAUAAQAAAABAAAAAgABAAAAAAAAAAAD6AAAAAAAAA=="
     );
-    return shadow(this, "_loadTestFont", testFont);
-  }
-
-  _prepareFontLoadEvent(font, request) {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
-      throw new Error("Not implemented: _prepareFontLoadEvent");
-    }
 
     /** Hack begin */
     // There's currently no event when a font has finished downloading so the
@@ -268,6 +377,14 @@ class FontLoader {
         (data.charCodeAt(offset + 1) << 16) |
         (data.charCodeAt(offset + 2) << 8) |
         (data.charCodeAt(offset + 3) & 0xff)
+      );
+    }
+    function string32(value) {
+      return String.fromCharCode(
+        (value >> 24) & 0xff,
+        (value >> 16) & 0xff,
+        (value >> 8) & 0xff,
+        value & 0xff
       );
     }
     function spliceString(s, offset, remove, insert) {
@@ -348,14 +465,16 @@ class FontLoader {
 
     isFontReady(loadTestFontId, () => {
       div.remove();
-      request.complete();
+      completeRequest();
     });
     /** Hack end */
+
+    return promise;
   }
 }
 
 class FontFaceObject {
-  compiledGlyphs = Object.create(null);
+  #compiledPaths = new Map();
 
   #fontData;
 
@@ -381,71 +500,91 @@ class FontFaceObject {
     }
   }
 
-  createNativeFontFace() {
-    if (!this.data || this.disableFontFace) {
-      return null;
-    }
-    let nativeFontFace;
-    if (!this.cssFontInfo) {
-      nativeFontFace = new FontFace(this.loadedName, this.data, {});
-    } else {
-      const css = {
-        weight: this.cssFontInfo.fontWeight,
-      };
+  #getFontFaceProperties() {
+    const { generatedFontName } = this;
+    let family = generatedFontName || this.loadedName;
+    const css = Object.create(null);
+    if (generatedFontName) {
+      // Match CanvasGraphics.setFont; these outlines already include the style.
+      css.style = this.italic ? "italic" : "normal";
+      css.weight = "normal";
+      if (this.black) {
+        css.weight = "900";
+      } else if (this.bold) {
+        css.weight = "bold";
+      }
+    } else if (this.cssFontInfo) {
+      family = serializeFontFamily(this.cssFontInfo.fontFamily);
+      css.weight = this.cssFontInfo.fontWeight;
       if (this.cssFontInfo.italicAngle) {
         css.style = `oblique ${this.cssFontInfo.italicAngle}deg`;
       }
-      nativeFontFace = new FontFace(
-        this.cssFontInfo.fontFamily,
-        this.data,
-        css
-      );
     }
 
-    this._inspectFont?.(this);
+    return { family, css };
+  }
+
+  createNativeFontFace() {
+    const { data } = this; // Get `data` just once, since it's not shadowed.
+    if (!data || this.disableFontFace) {
+      return null;
+    }
+    const { family, css } = this.#getFontFaceProperties();
+    const nativeFontFace = new FontFace(family, data, css);
+
+    if (!this.generatedFontName) {
+      this._inspectFont?.(this);
+    }
     return nativeFontFace;
   }
 
   createFontFaceRule() {
-    if (!this.data || this.disableFontFace) {
+    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("WORKER_THREAD")) {
+      throw new Error("Not implemented: createFontFaceRule");
+    }
+
+    const { data } = this; // Get `data` just once, since it's not shadowed.
+    if (!data || this.disableFontFace) {
       return null;
     }
     // Add the @font-face rule to the document.
-    const url = `url(data:${this.mimetype};base64,${this.data.toBase64()});`;
-    let rule;
-    if (!this.cssFontInfo) {
-      rule = `@font-face {font-family:"${this.loadedName}";src:${url}}`;
-    } else {
-      let css = `font-weight: ${this.cssFontInfo.fontWeight};`;
-      if (this.cssFontInfo.italicAngle) {
-        css += `font-style: oblique ${this.cssFontInfo.italicAngle}deg;`;
-      }
-      rule = `@font-face {font-family:"${this.cssFontInfo.fontFamily}";${css}src:${url}}`;
+    const url = `url(data:${this.mimetype};base64,${data.toBase64()});`;
+    const { family, css } = this.#getFontFaceProperties();
+    // The font family can originate from the PDF document, hence it must be
+    // serialized as a <string> to prevent arbitrary rule injection.
+    let rule = `@font-face {font-family:${serializeFontFamily(family)};`;
+    for (const [property, value] of Object.entries(css)) {
+      rule += `font-${property}: ${value};`;
     }
+    rule += `src:${url}}`;
 
-    this._inspectFont?.(this, url);
+    if (!this.generatedFontName) {
+      this._inspectFont?.(this, url);
+    }
     return rule;
   }
 
   getPathGenerator(objs, character) {
-    if (this.compiledGlyphs[character] !== undefined) {
-      return this.compiledGlyphs[character];
+    let path = this.#compiledPaths.get(character);
+    if (path) {
+      return path;
     }
 
-    const objId = this.loadedName + "_path_" + character;
+    const objId = `${this.loadedName}_path_${character}`;
     let cmds;
     try {
       cmds = objs.get(objId);
     } catch (ex) {
       warn(`getPathGenerator - ignoring character: "${ex}".`);
     }
-    const path = makePathFromDrawOPS(cmds?.path);
+    path = makePathFromDrawOPS(cmds?.path);
 
     if (!this.fontExtraProperties) {
-      // Remove the raw path-string, since we don't need it anymore.
+      // Remove the raw path-data, since we don't need it anymore.
       objs.delete(objId);
     }
-    return (this.compiledGlyphs[character] = path);
+    this.#compiledPaths.set(character, path);
+    return path;
   }
 
   get black() {
@@ -492,18 +631,6 @@ class FontFaceObject {
     return this.#fontData.vertical;
   }
 
-  get ascent() {
-    return this.#fontData.ascent;
-  }
-
-  get defaultWidth() {
-    return this.#fontData.defaultWidth;
-  }
-
-  get descent() {
-    return this.#fontData.descent;
-  }
-
   get bbox() {
     return this.#fontData.bbox;
   }
@@ -516,16 +643,16 @@ class FontFaceObject {
     return this.#fontData.fallbackName;
   }
 
+  get generatedFontName() {
+    return this.#fontData.generatedFontName;
+  }
+
   get loadedName() {
     return this.#fontData.loadedName;
   }
 
   get mimetype() {
-    return this.#fontData.mimetype;
-  }
-
-  get name() {
-    return this.#fontData.name;
+    return this.missingFile ? null : "font/opentype";
   }
 
   get data() {
@@ -542,10 +669,6 @@ class FontFaceObject {
 
   get systemFontInfo() {
     return this.#fontData.systemFontInfo;
-  }
-
-  get defaultVMetrics() {
-    return this.#fontData.defaultVMetrics;
   }
 }
 

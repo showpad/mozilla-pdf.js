@@ -14,6 +14,7 @@
  */
 
 import { DecodeStream } from "./decode_stream.js";
+import { Util } from "../shared/util.js";
 
 class LZWStream extends DecodeStream {
   constructor(str, maybeLength, earlyChange) {
@@ -30,15 +31,12 @@ class LZWStream extends DecodeStream {
       codeLength: 9,
       nextCode: 258,
       dictionaryValues: new Uint8Array(maxLzwDictionarySize),
-      dictionaryLengths: new Uint16Array(maxLzwDictionarySize),
+      dictionaryLengths: new Uint16Array(maxLzwDictionarySize).fill(1, 0, 256),
       dictionaryPrevCodes: new Uint16Array(maxLzwDictionarySize),
       currentSequence: new Uint8Array(maxLzwDictionarySize),
       currentSequenceLength: 0,
     };
-    for (let i = 0; i < 256; ++i) {
-      lzwState.dictionaryValues[i] = i;
-      lzwState.dictionaryLengths[i] = 1;
-    }
+    lzwState.dictionaryValues.set(Util.identity0to256Map, 0);
     this.lzwState = lzwState;
   }
 
@@ -65,11 +63,7 @@ class LZWStream extends DecodeStream {
     let estimatedDecodedSize = blockSize * 2;
     let i, j, q;
 
-    const lzwState = this.lzwState;
-    if (!lzwState) {
-      return; // eof was found
-    }
-
+    const { lzwState } = this;
     const earlyChange = lzwState.earlyChange;
     let nextCode = lzwState.nextCode;
     const dictionaryValues = lzwState.dictionaryValues;

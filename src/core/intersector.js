@@ -76,28 +76,24 @@ class SingleIntersector {
 
     if (this.#lastIntersectingQuadIndex >= 0) {
       const i = this.#lastIntersectingQuadIndex;
-      if (
-        !(
-          quadPoints[i] >= x ||
-          quadPoints[i + 2] <= x ||
-          quadPoints[i + 5] >= y ||
-          quadPoints[i + 1] <= y
-        )
-      ) {
+      if (!(
+        quadPoints[i] >= x ||
+        quadPoints[i + 2] <= x ||
+        quadPoints[i + 5] >= y ||
+        quadPoints[i + 1] <= y
+      )) {
         return true;
       }
       this.#lastIntersectingQuadIndex = -1;
     }
 
     for (let i = 0, ii = quadPoints.length; i < ii; i += 8) {
-      if (
-        !(
-          quadPoints[i] >= x ||
-          quadPoints[i + 2] <= x ||
-          quadPoints[i + 5] >= y ||
-          quadPoints[i + 1] <= y
-        )
-      ) {
+      if (!(
+        quadPoints[i] >= x ||
+        quadPoints[i + 2] <= x ||
+        quadPoints[i + 5] >= y ||
+        quadPoints[i + 1] <= y
+      )) {
         this.#lastIntersectingQuadIndex = i;
         return true;
       }
@@ -112,7 +108,9 @@ class SingleIntersector {
     }
 
     if (this.#extraChars.length > 0) {
-      this.#text.push(this.#extraChars.join(""));
+      for (const char of this.#extraChars) {
+        this.#text.push(char);
+      }
       this.#extraChars.length = 0;
     }
     this.#text.push(glyph);
@@ -192,11 +190,7 @@ class Intersector {
       const h = Math.floor((iMax - iMin) / STEPS);
       for (let i = iMin; i <= iMin + h * STEPS; i += STEPS) {
         for (let j = 0; j <= w; j++) {
-          let existing = this.#grid[i + j];
-          if (!existing) {
-            this.#grid[i + j] = existing = [];
-          }
-          existing.push(intersector);
+          (this.#grid[i + j] ??= []).push(intersector);
         }
       }
     }
@@ -208,9 +202,12 @@ class Intersector {
     return i + j * STEPS;
   }
 
-  addGlyph(transform, width, height, glyph) {
-    const x = transform[4] + width / 2;
-    const y = transform[5] + height / 2;
+  /**
+   * @param {number} x
+   * @param {number} y - The point of the glyph to intersect.
+   * @param {string} glyph
+   */
+  addGlyph(x, y, glyph) {
     if (x < this.#minX || y < this.#minY || x > this.#maxX || y > this.#maxY) {
       return;
     }

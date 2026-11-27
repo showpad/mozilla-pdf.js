@@ -58,8 +58,8 @@ describe("node_stream", function () {
 
     await Promise.all([read(), promise]);
 
-    expect(isStreamingSupported).toEqual(false);
-    expect(isRangeSupported).toEqual(false);
+    expect(isStreamingSupported).toBeFalse();
+    expect(isRangeSupported).toBeFalse();
     expect(len).toEqual(pdfLength);
   });
 
@@ -95,15 +95,14 @@ describe("node_stream", function () {
 
     const result1 = { value: 0 },
       result2 = { value: 0 };
-    const read = function (reader, lenResult) {
-      return reader.read().then(function (result) {
+    const read = (reader, lenResult) =>
+      reader.read().then(function (result) {
         if (result.done) {
           return undefined;
         }
         lenResult.value += result.value.byteLength;
         return read(reader, lenResult);
       });
-    };
 
     await Promise.all([
       read(range1Reader, result1),
@@ -113,9 +112,9 @@ describe("node_stream", function () {
 
     expect(result1.value).toEqual(rangeSize);
     expect(result2.value).toEqual(tailSize);
-    expect(isStreamingSupported).toEqual(false);
-    expect(isRangeSupported).toEqual(true);
-    expect(fullReaderCancelled).toEqual(true);
+    expect(isStreamingSupported).toBeFalse();
+    expect(isRangeSupported).toBeTrue();
+    expect(fullReaderCancelled).toBeTrue();
   });
 
   it("read filesystem pdf files (smaller than two range requests)", async function () {
@@ -150,8 +149,33 @@ describe("node_stream", function () {
 
     await Promise.all([read(), promise]);
 
-    expect(isStreamingSupported).toEqual(false);
-    expect(isRangeSupported).toEqual(false);
+    expect(isStreamingSupported).toBeFalse();
+    expect(isRangeSupported).toBeFalse();
     expect(len).toEqual(smallLength);
+  });
+
+  it("cancel after a failed read doesn't cause an unhandled rejection", async function () {
+    // We point the stream at a directory instead of at a PDF file on purpose.
+    // Opening a directory succeeds, but reading from it fails (with EISDIR),
+    // so both the full reader and the range reader end up with an errored
+    // stream.
+    const stream = new PDFNodeStream({
+      url: new URL("./test/pdfs/", cwdURL),
+      rangeChunkSize: 65536,
+      disableStream: false,
+      disableRange: false,
+    });
+
+    const fullReader = stream.getFullReader();
+    const rangeReader = stream.getRangeReader(0, 65536);
+    await expectAsync(fullReader.read()).toBeRejected();
+    await expectAsync(rangeReader.read()).toBeRejected();
+
+    fullReader.cancel(new AbortException("Don't need fullReader."));
+    rangeReader.cancel(new AbortException("Don't need rangeReader."));
+    // Allow any unhandled rejections to be reported.
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
   });
 });

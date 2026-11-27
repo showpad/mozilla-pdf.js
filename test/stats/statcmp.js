@@ -1,11 +1,6 @@
-/* eslint-disable import/no-commonjs */
-
-import { createRequire } from "module";
+import { mean, welchTTest } from "./welch_ttest.js";
 import fs from "fs";
 import { parseArgs } from "node:util";
-
-const require = createRequire(import.meta.url);
-const ttest = require("ttest");
 
 const VALID_GROUP_BYS = ["browser", "pdf", "page", "round", "stat"];
 
@@ -53,8 +48,8 @@ function group(stats, groupBy) {
  */
 function flatten(stats) {
   let rows = [];
-  stats.forEach(function (curStat) {
-    curStat.stats.forEach(function (s) {
+  stats.forEach(curStat => {
+    curStat.stats.forEach(s => {
       rows.push({
         browser: curStat.browser,
         page: curStat.page,
@@ -70,16 +65,6 @@ function flatten(stats) {
     rows = rows.filter(s => s.stat === "Overall");
   }
   return rows;
-}
-
-function pad(s, length, dir /* default: 'right' */) {
-  s = "" + s;
-  const spaces = new Array(Math.max(0, length - s.length + 1)).join(" ");
-  return dir === "left" ? spaces + s : s + spaces;
-}
-
-function mean(array) {
-  return array.reduce((a, b) => a + b, 0) / array.length;
 }
 
 /* Comparator for row key sorting. */
@@ -102,16 +87,7 @@ function compareRow(a, b) {
 }
 
 /*
- * Dump various stats in a table to compare the baseline and current results.
- * T-test Refresher:
- * If I understand t-test correctly, p is the probability that we'll observe
- * another test that is as extreme as the current result assuming the null
- * hypothesis is true. P is NOT the probability of the null hypothesis. The null
- * hypothesis in this case is that the baseline and current results will be the
- * same. It is generally accepted that you can reject the null hypothesis if the
- * p-value is less than 0.05. So if p < 0.05 we can reject the results are the
- * same which doesn't necessarily mean the results are faster/slower but it can
- * be implied.
+ * Compare timings; label changes when the two-sided Welch p-value is < 0.05.
  */
 function stat(baseline, current) {
   const baselineGroup = group(baseline, options.groupBy);
@@ -121,10 +97,14 @@ function stat(baseline, current) {
   keys.sort(compareRow);
 
   const labels = options.groupBy.slice(0);
-  labels.push("Count", "Baseline(ms)", "Current(ms)", "+/-", "% ");
-  if (ttest) {
-    labels.push("Result(P<.05)");
-  }
+  labels.push(
+    "Count",
+    "Baseline(ms)",
+    "Current(ms)",
+    "+/-",
+    "% ",
+    "Result(P<.05)"
+  );
   const rows = [];
   // collect rows and measure column widths
   const width = labels.map(s => s.length);
@@ -140,16 +120,14 @@ function stat(baseline, current) {
       "" + Math.round(currentMean - baselineMean),
       ((100 * (currentMean - baselineMean)) / baselineMean).toFixed(2)
     );
-    if (ttest) {
-      const p =
-        baselineGroup[key].length < 2
-          ? 1
-          : ttest(baselineGroup[key], currentGroup[key]).pValue();
-      if (p < 0.05) {
-        row.push(currentMean < baselineMean ? "faster" : "slower");
-      } else {
-        row.push("");
-      }
+    const p =
+      baselineGroup[key].length < 2
+        ? 1
+        : welchTTest(baselineGroup[key], currentGroup[key]);
+    if (p < 0.05) {
+      row.push(currentMean < baselineMean ? "faster" : "slower");
+    } else {
+      row.push("");
     }
     for (let i = 0; i < row.length; i++) {
       width[i] = Math.max(width[i], row[i].length);
@@ -158,7 +136,7 @@ function stat(baseline, current) {
   }
 
   // add horizontal line
-  const hline = width.map(w => new Array(w + 1).join("-"));
+  const hline = width.map(w => "-".repeat(w));
   rows.splice(1, 0, hline);
 
   // print output
@@ -166,7 +144,8 @@ function stat(baseline, current) {
   const groupCount = options.groupBy.length;
   for (const row of rows) {
     for (let i = 0; i < row.length; i++) {
-      row[i] = pad(row[i], width[i], i < groupCount ? "right" : "left");
+      row[i] =
+        i < groupCount ? row[i].padEnd(width[i]) : row[i].padStart(width[i]);
     }
     console.log(row.join(" | "));
   }

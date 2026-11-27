@@ -18,7 +18,6 @@ import {
   escapePDFName,
   getRotationMatrix,
   numberToString,
-  stringToUTF16HexString,
 } from "./core_utils.js";
 import { Dict, Name } from "./primitives.js";
 import {
@@ -26,20 +25,23 @@ import {
   LINE_FACTOR,
   OPS,
   shadow,
+  Util,
   warn,
 } from "../shared/util.js";
+import { Stream, StringStream } from "./stream.js";
 import { ColorSpaceUtils } from "./colorspace_utils.js";
 import { EvaluatorPreprocessor } from "./evaluator.js";
 import { LocalColorSpaceCache } from "./image_utils.js";
 import { PDFFunctionFactory } from "./function.js";
-import { StringStream } from "./stream.js";
+import { stringToUTF16HexString } from "./string_utils.js";
 
 class DefaultAppearanceEvaluator extends EvaluatorPreprocessor {
-  constructor(str) {
+  constructor(str, xref) {
     super(new StringStream(str));
+    this.xref = xref;
   }
 
-  parse() {
+  async parse() {
     const operation = {
       fn: 0,
       args: [],
@@ -78,9 +80,11 @@ class DefaultAppearanceEvaluator extends EvaluatorPreprocessor {
           case OPS.setFillGray:
             ColorSpaceUtils.gray.getRgbItem(args, 0, result.fontColor, 0);
             break;
-          case OPS.setFillCMYKColor:
-            ColorSpaceUtils.cmyk.getRgbItem(args, 0, result.fontColor, 0);
+          case OPS.setFillCMYKColor: {
+            const cmyk = await ColorSpaceUtils.getCmyk(this.xref);
+            cmyk.getRgbItem(args, 0, result.fontColor, 0);
             break;
+          }
         }
       }
     } catch (reason) {
@@ -92,22 +96,29 @@ class DefaultAppearanceEvaluator extends EvaluatorPreprocessor {
 }
 
 // Parse DA to extract font and color information.
-function parseDefaultAppearance(str) {
-  return new DefaultAppearanceEvaluator(str).parse();
+function parseDefaultAppearance(str, xref) {
+  return new DefaultAppearanceEvaluator(str, xref).parse();
 }
 
 class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
-  constructor(stream, evaluatorOptions, xref, globalColorSpaceCache) {
-    super(stream);
-    this.stream = stream;
-    this.evaluatorOptions = evaluatorOptions;
+  constructor(stream, xref, globalColorSpaceCache) {
+    // Parse a copy, since the stream can be shared and parsing is async.
+    let bytes;
+    try {
+      bytes = stream.getBytes();
+    } catch (reason) {
+      warn(`parseAppearanceStream - ignoring errors: "${reason}".`);
+      bytes = new Uint8Array(0);
+    }
+    stream.reset();
+    super(new Stream(bytes, 0, bytes.length, stream.dict));
     this.xref = xref;
     this.globalColorSpaceCache = globalColorSpaceCache;
 
     this.resources = stream.dict?.get("Resources");
   }
 
-  parse() {
+  async parse() {
     const operation = {
       fn: 0,
       args: [],
@@ -145,7 +156,8 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
             result = stack.pop() || result;
             break;
           case OPS.setTextMatrix:
-            result.scaleFactor *= Math.hypot(args[0], args[1]);
+            const tm = Util.transform(this.stateManager.state.ctm, args);
+            result.scaleFactor *= Math.hypot(tm[0], tm[1]);
             break;
           case OPS.setFont:
             const [fontName, fontSize] = args;
@@ -153,11 +165,11 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
               result.fontName = fontName.name;
             }
             if (typeof fontSize === "number" && fontSize > 0) {
-              result.fontSize = fontSize * result.scaleFactor;
+              result.fontSize = fontSize;
             }
             break;
           case OPS.setFillColorSpace:
-            result.fillColorSpace = ColorSpaceUtils.parse({
+            result.fillColorSpace = await ColorSpaceUtils.parse({
               cs: args[0],
               xref: this.xref,
               resources: this.resources,
@@ -176,13 +188,19 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
           case OPS.setFillGray:
             ColorSpaceUtils.gray.getRgbItem(args, 0, result.fontColor, 0);
             break;
-          case OPS.setFillCMYKColor:
-            ColorSpaceUtils.cmyk.getRgbItem(args, 0, result.fontColor, 0);
+          case OPS.setFillCMYKColor: {
+            const cmyk = await ColorSpaceUtils.getCmyk(this.xref);
+            cmyk.getRgbItem(args, 0, result.fontColor, 0);
             break;
+          }
           case OPS.showText:
           case OPS.showSpacedText:
           case OPS.nextLineShowText:
           case OPS.nextLineSetSpacingShowText:
+            // The font (Tf) and the text matrix (Tm) can be set in any order,
+            // so the scale factor is applied here, when text is actually shown
+            // and both are known to be in effect.
+            result.fontSize *= result.scaleFactor;
             breakLoop = true;
             break;
         }
@@ -190,7 +208,6 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
     } catch (reason) {
       warn(`parseAppearanceStream - ignoring errors: "${reason}".`);
     }
-    this.stream.reset();
     delete result.scaleFactor;
     delete result.fillColorSpace;
 
@@ -202,25 +219,19 @@ class AppearanceStreamEvaluator extends EvaluatorPreprocessor {
   }
 
   get _pdfFunctionFactory() {
-    const pdfFunctionFactory = new PDFFunctionFactory({
-      xref: this.xref,
-      isEvalSupported: this.evaluatorOptions.isEvalSupported,
-    });
-    return shadow(this, "_pdfFunctionFactory", pdfFunctionFactory);
+    return shadow(
+      this,
+      "_pdfFunctionFactory",
+      new PDFFunctionFactory({ xref: this.xref })
+    );
   }
 }
 
 // Parse appearance stream to extract font and color information.
 // It returns the font properties used to render the first text object.
-function parseAppearanceStream(
-  stream,
-  evaluatorOptions,
-  xref,
-  globalColorSpaceCache
-) {
+function parseAppearanceStream(stream, xref, globalColorSpaceCache) {
   return new AppearanceStreamEvaluator(
     stream,
-    evaluatorOptions,
     xref,
     globalColorSpaceCache
   ).parse();
@@ -246,6 +257,8 @@ function createDefaultAppearance({ fontSize, fontName, fontColor }) {
 }
 
 class FakeUnicodeFont {
+  static #fontNameId = 1;
+
   constructor(xref, fontFamily) {
     this.xref = xref;
     this.widths = null;
@@ -256,11 +269,8 @@ class FakeUnicodeFont {
     const canvas = new OffscreenCanvas(1, 1);
     this.ctxMeasure = canvas.getContext("2d", { willReadFrequently: true });
 
-    if (!FakeUnicodeFont._fontNameId) {
-      FakeUnicodeFont._fontNameId = 1;
-    }
     this.fontName = Name.get(
-      `InvalidPDFjsFont_${fontFamily}_${FakeUnicodeFont._fontNameId++}`
+      `InvalidPDFjsFont_${fontFamily}_${FakeUnicodeFont.#fontNameId++}`
     );
   }
 
@@ -426,10 +436,7 @@ class FakeUnicodeFont {
       [w, h] = [h, w];
     }
 
-    let hscale = 1;
-    if (maxWidth > w) {
-      hscale = w / maxWidth;
-    }
+    const hscale = maxWidth > w ? w / maxWidth : 1;
     let vscale = 1;
     const lineHeight = LINE_FACTOR * fontSize;
     const lineDescent = LINE_DESCENT_FACTOR * fontSize;
@@ -487,10 +494,7 @@ class FakeUnicodeFont {
       appearanceStreamDict.set("Matrix", matrix);
     }
 
-    const ap = new StringStream(appearance);
-    ap.dict = appearanceStreamDict;
-
-    return ap;
+    return new StringStream(appearance, appearanceStreamDict);
   }
 }
 

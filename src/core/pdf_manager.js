@@ -13,22 +13,25 @@
  * limitations under the License.
  */
 
-import { CmykICCBasedCS, IccColorSpace } from "./icc_colorspace.js";
 import {
   createValidAbsoluteUrl,
   FeatureTest,
   unreachable,
   warn,
 } from "../shared/util.js";
+import {
+  MissingDataException,
+  XRefEntryException,
+  XRefParseException,
+} from "./core_utils.js";
 import { ChunkedStreamManager } from "./chunked_stream.js";
 import { ImageResizer } from "./image_resizer.js";
-import { JBig2CCITTFaxWasmImage } from "./jbig2_ccittFax_wasm.js";
-import { JpegStream } from "./jpeg_stream.js";
-import { JpxImage } from "./jpx.js";
-import { MissingDataException } from "./core_utils.js";
-import { OperatorList } from "./operator_list.js";
 import { PDFDocument } from "./document.js";
 import { Stream } from "./stream.js";
+
+/**
+ * @typedef { LocalPdfManager | NetworkPdfManager } PdfManager
+ */
 
 function parseDocBaseUrl(url) {
   if (url) {
@@ -72,31 +75,9 @@ class BasePdfManager {
     evaluatorOptions.isImageDecoderSupported &&=
       FeatureTest.isImageDecoderSupported;
 
-    // Set up a one-shot callback so evaluators can notify the main thread that
-    // WebGPU-acceleratable content was found. The flag ensures the message is
-    // sent at most once per document.
-    if (evaluatorOptions.enableWebGPU) {
-      let prepareWebGPUSent = false;
-      evaluatorOptions.prepareWebGPU = () => {
-        if (!prepareWebGPUSent) {
-          prepareWebGPUSent = true;
-          handler.send("PrepareWebGPU", null);
-        }
-      };
-    }
-    delete evaluatorOptions.enableWebGPU;
     this.evaluatorOptions = Object.freeze(evaluatorOptions);
-
-    // Initialize image-options once per document.
-    ImageResizer.setOptions(evaluatorOptions);
-    JpegStream.setOptions(evaluatorOptions);
-    OperatorList.setOptions(evaluatorOptions);
-
-    const options = { ...evaluatorOptions, handler };
-    JpxImage.setOptions(options);
-    IccColorSpace.setOptions(options);
-    CmykICCBasedCS.setOptions(options);
-    JBig2CCITTFaxWasmImage.setOptions(options);
+    this.binaryDataContext = { handler, options: this.evaluatorOptions };
+    this.imageResizer = new ImageResizer(this.evaluatorOptions);
   }
 
   get docId() {
@@ -115,20 +96,37 @@ class BasePdfManager {
     return this.ensure(this.pdfDocument, prop, args);
   }
 
-  ensureXRef(prop, args) {
-    return this.ensure(this.pdfDocument.xref, prop, args);
-  }
-
   ensureCatalog(prop, args) {
     return this.ensure(this.pdfDocument.catalog, prop, args);
   }
 
-  getPage(pageIndex) {
-    return this.pdfDocument.getPage(pageIndex);
+  async initDocument(recoveryMode) {
+    await this.ensureDoc("checkHeader");
+    await this.ensureDoc("parseStartXRef");
+    await this.ensureDoc("parse", [recoveryMode]);
+
+    if (this.enableXfa) {
+      try {
+        await this.ensureDoc("loadXfaFactory");
+      } catch (reason) {
+        if (reason instanceof XRefEntryException && !recoveryMode) {
+          await this.cleanup();
+          throw new XRefParseException();
+        }
+        warn(`Cannot load XFA data: "${reason}".`);
+      }
+    }
+
+    // Check that at least the first page can be successfully loaded,
+    // since otherwise the XRef table is definitely not valid.
+    await this.ensureDoc("checkFirstPage", [recoveryMode]);
+    // Check that the last page can be successfully loaded, to ensure that
+    // `numPages` is correct, and fallback to walking the entire /Pages-tree.
+    await this.ensureDoc("checkLastPage", [recoveryMode]);
   }
 
-  fontFallback(id, handler) {
-    return this.pdfDocument.fontFallback(id, handler);
+  getPage(pageIndex) {
+    return this.pdfDocument.getPage(pageIndex);
   }
 
   cleanup(manuallyTriggered = false) {
@@ -151,13 +149,19 @@ class BasePdfManager {
     unreachable("Abstract method `sendProgressiveData` called");
   }
 
+  /**
+   * Set password.
+   * @param {string} password
+   *   New password.
+   * @returns {undefined}
+   *   Nothing.
+   */
   updatePassword(password) {
     this._password = password;
+    this.pdfDocument.xref.encrypt?.setPassword(password);
   }
 
-  terminate(reason) {
-    unreachable("Abstract method `terminate` called");
-  }
+  terminate(reason) {}
 }
 
 class LocalPdfManager extends BasePdfManager {
@@ -171,21 +175,12 @@ class LocalPdfManager extends BasePdfManager {
 
   async ensure(obj, prop, args) {
     const value = obj[prop];
-    if (typeof value === "function") {
-      return value.apply(obj, args);
-    }
-    return value;
-  }
-
-  requestRange(begin, end) {
-    return Promise.resolve();
+    return typeof value === "function" ? value.apply(obj, args) : value;
   }
 
   requestLoadedStream(noFetch = false) {
     return this._loadedStreamPromise;
   }
-
-  terminate(reason) {}
 }
 
 class NetworkPdfManager extends BasePdfManager {
@@ -204,10 +199,7 @@ class NetworkPdfManager extends BasePdfManager {
   async ensure(obj, prop, args) {
     try {
       const value = obj[prop];
-      if (typeof value === "function") {
-        return value.apply(obj, args);
-      }
-      return value;
+      return typeof value === "function" ? await value.apply(obj, args) : value;
     } catch (ex) {
       if (!(ex instanceof MissingDataException)) {
         throw ex;
@@ -230,6 +222,7 @@ class NetworkPdfManager extends BasePdfManager {
   }
 
   terminate(reason) {
+    super.terminate(reason);
     this.streamManager.abort(reason);
   }
 }

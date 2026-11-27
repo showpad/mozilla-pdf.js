@@ -34,7 +34,6 @@
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-/* globals jasmineRequire */
 
 // Modified jasmine's boot.js file to load PDF.js libraries async.
 
@@ -46,6 +45,7 @@ async function initializePDFJS(callback) {
   await Promise.all(
     [
       "pdfjs-test/font/font_core_spec.js",
+      "pdfjs-test/font/font_glyf_spec.js",
       "pdfjs-test/font/font_os2_spec.js",
       "pdfjs-test/font/font_post_spec.js",
       "pdfjs-test/font/font_fpgm_spec.js",
@@ -56,14 +56,7 @@ async function initializePDFJS(callback) {
 }
 
 (function () {
-  window.jasmine = jasmineRequire.core(jasmineRequire);
-
-  jasmineRequire.html(jasmine);
-
   const env = jasmine.getEnv();
-
-  const jasmineInterface = jasmineRequire.interface(jasmine, env);
-  extend(window, jasmineInterface);
 
   // Runner Parameters
   const urls = new jasmine.HtmlReporterV2Urls();
@@ -82,13 +75,6 @@ async function initializePDFJS(callback) {
 
   // Sets longer timeout.
   jasmine.DEFAULT_TIMEOUT_INTERVAL = 30000;
-
-  function extend(destination, source) {
-    for (const property in source) {
-      destination[property] = source[property];
-    }
-    return destination;
-  }
 
   function fontTestInit() {
     initializePDFJS(function () {

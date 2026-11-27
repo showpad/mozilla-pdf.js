@@ -15,6 +15,7 @@
 
 import {
   DrawOPS,
+  F32_BBOX_INIT,
   ImageKind,
   OPS,
   RenderingIntentFlag,
@@ -520,8 +521,10 @@ addState(
     const [, [buffer], minMax] = args;
 
     if (minMax) {
-      Util.scaleMinMax(transform, minMax);
-      for (let k = 0, kk = buffer.length; k < kk; ) {
+      const newBBox = F32_BBOX_INIT.slice();
+      Util.axialAlignedBoundingBox(minMax, transform, newBBox);
+      minMax.set(newBBox);
+      for (let k = 0, kk = buffer.length; k < kk;) {
         switch (buffer[k++]) {
           case DrawOPS.moveTo:
           case DrawOPS.lineTo:
@@ -562,14 +565,14 @@ class NullOptimizer {
 }
 
 class QueueOptimizer extends NullOptimizer {
-  constructor(queue) {
+  constructor(queue, isOffscreenCanvasSupported) {
     super(queue);
     this.state = null;
     this.context = {
       iCurr: 0,
       fnArray: queue.fnArray,
       argsArray: queue.argsArray,
-      isOffscreenCanvasSupported: OperatorList.isOffscreenCanvasSupported,
+      isOffscreenCanvasSupported,
     };
     this.match = null;
     this.lastProcessed = 0;
@@ -653,24 +656,22 @@ class OperatorList {
   // Close to chunk size.
   static CHUNK_SIZE_ABOUT = this.CHUNK_SIZE - 5;
 
-  static isOffscreenCanvasSupported = false;
-
-  constructor(intent = 0, streamSink) {
+  constructor(
+    intent = 0,
+    streamSink,
+    { isOffscreenCanvasSupported = false } = {}
+  ) {
     this._streamSink = streamSink;
     this.fnArray = [];
     this.argsArray = [];
-    this.optimizer =
-      streamSink && !(intent & RenderingIntentFlag.OPLIST)
-        ? new QueueOptimizer(this)
-        : new NullOptimizer(this);
+    this.isStreamingToRenderer =
+      !!streamSink && !(intent & RenderingIntentFlag.OPLIST);
+    this.optimizer = this.isStreamingToRenderer
+      ? new QueueOptimizer(this, isOffscreenCanvasSupported)
+      : new NullOptimizer(this);
     this.dependencies = new Set();
-    this._totalLength = 0;
     this.weight = 0;
     this._resolved = streamSink ? null : Promise.resolve();
-  }
-
-  static setOptions({ isOffscreenCanvasSupported }) {
-    this.isOffscreenCanvasSupported = isOffscreenCanvasSupported;
   }
 
   get length() {
@@ -679,14 +680,6 @@ class OperatorList {
 
   get ready() {
     return this._resolved || this._streamSink.ready;
-  }
-
-  /**
-   * @type {number} The total length of the entire operator list, since
-   *                `this.length === 0` after flushing.
-   */
-  get totalLength() {
-    return this._totalLength + this.length;
   }
 
   addOp(fn, args) {
@@ -799,8 +792,6 @@ class OperatorList {
 
   flush(lastChunk = false, separateAnnots = null) {
     this.optimizer.flush();
-    const length = this.length;
-    this._totalLength += length;
 
     this._streamSink.enqueue(
       {
@@ -808,7 +799,7 @@ class OperatorList {
         argsArray: this.argsArray,
         lastChunk,
         separateAnnots,
-        length,
+        length: this.length,
       },
       1,
       this._transfers
@@ -822,4 +813,40 @@ class OperatorList {
   }
 }
 
-export { OperatorList };
+/**
+ * A subclass of OperatorList that checks whether added group or pattern
+ * operations require being drawn in isolation (i.e. on a separate canvas).
+ * A group/pattern needs isolation when it uses non-default compositing
+ * (blend mode) or a soft mask. The result is exposed via `needsIsolation`.
+ *
+ * `hasSoftMask` separately flags the use of a soft mask: unlike a plain blend
+ * mode, which a non-isolated group can apply directly against its backdrop, a
+ * soft mask always requires a real intermediate canvas (see bug 1873345).
+ */
+class CheckedOperatorList extends OperatorList {
+  needsIsolation = false;
+
+  hasSoftMask = false;
+
+  addOp(fn, args) {
+    if (!this.needsIsolation || !this.hasSoftMask) {
+      if (fn === OPS.beginGroup) {
+        // Propagate isolation only if the nested group itself needs it.
+        this.needsIsolation ||= args[0].needsIsolation;
+        this.hasSoftMask ||= args[0].hasSoftMask;
+      } else if (fn === OPS.setGState) {
+        for (const [key, val] of args[0]) {
+          if (key === "BM" && val !== "source-over") {
+            this.needsIsolation = true;
+          } else if (key === "SMask" && val !== false) {
+            this.needsIsolation = true;
+            this.hasSoftMask = true;
+          }
+        }
+      }
+    }
+    super.addOp(fn, args);
+  }
+}
+
+export { CheckedOperatorList, OperatorList };

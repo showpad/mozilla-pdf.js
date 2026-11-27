@@ -43,7 +43,7 @@ function extractFtlIds(ftlPath) {
   const lines = readFileSync(ftlPath, "utf8").split("\n");
   const ids = [];
   for (const line of lines) {
-    const match = line.match(/^([a-zA-Z][a-zA-Z0-9-]*)\s*=/);
+    const match = line.match(/^([a-z][a-z0-9-]*)\s*=/i);
     if (match) {
       ids.push(match[1]);
     }
@@ -112,7 +112,6 @@ function isUsed(id, sources) {
  * gap. The prefix must appear immediately followed by `${` in a template
  * literal; the suffix (if non-empty) must also appear in the same file.
  * Minimum length guards prevent matches on trivially short fragments.
- *
  * @param {string} id - Message ID to test.
  * @param {{ path: string, content: string }[]} sources
  * @returns {{ path: string, line: number } | null} Location of the first

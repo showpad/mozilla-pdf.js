@@ -292,11 +292,12 @@ class PDFPageDetailView extends BasePDFPageView {
     const renderingPromise = this._drawCanvas(
       this._getRenderingContext(canvas, transform),
       () => {
-        // If the rendering is cancelled, keep the old canvas visible.
-        this.canvas?.remove();
+        // Preserve the previous canvas on cancellation.
+        this._resetCanvas();
         this.canvas = prevCanvas;
       },
       () => {
+        this.pageView._refreshAnnotationLayer();
         this.dispatchPageRendered(
           /* cssTransform */ false,
           /* isDetailView */ true

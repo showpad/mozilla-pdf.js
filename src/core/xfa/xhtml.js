@@ -81,11 +81,11 @@ const StyleMapping = new Map([
   ["kerning-mode", value => (value === "none" ? "none" : "normal")],
   [
     "xfa-font-horizontal-scale",
-    value => `scaleX(${Math.max(0, parseInt(value) / 100).toFixed(2)})`,
+    value => `scaleX(${Math.max(0, parseInt(value, 10) / 100).toFixed(2)})`,
   ],
   [
     "xfa-font-vertical-scale",
-    value => `scaleY(${Math.max(0, parseInt(value) / 100).toFixed(2)})`,
+    value => `scaleY(${Math.max(0, parseInt(value, 10) / 100).toFixed(2)})`,
   ],
   ["xfa-spacerun", ""],
   ["xfa-tab-stops", ""],
@@ -134,8 +134,7 @@ function mapStyle(styleStr, node, richText) {
         ? `${style[key]} ${newValue}`
         : newValue;
     } else {
-      style[key.replaceAll(/-([a-zA-Z])/g, (_, x) => x.toUpperCase())] =
-        newValue;
+      style[key.replaceAll(/-([a-z])/gi, (_, x) => x.toUpperCase())] = newValue;
     }
   }
 
@@ -237,8 +236,7 @@ class XhtmlObject extends XmlObject {
     }
   }
 
-  [$pushGlyphs](measure, mustPop = true) {
-    const xfaFont = Object.create(null);
+  [$pushGlyphs](measure, mustPop = true, xfaFont = Object.create(null)) {
     const margin = {
       top: NaN,
       bottom: NaN,
@@ -266,7 +264,7 @@ class XhtmlObject extends XmlObject {
           xfaFont.letterSpacing = getMeasurement(value);
           break;
         case "margin":
-          const values = value.split(/ \t/).map(x => getMeasurement(x));
+          const values = value.split(/ \t/).map(getMeasurement);
           switch (values.length) {
             case 1:
               margin.top =
@@ -375,9 +373,7 @@ class B extends XhtmlObject {
   }
 
   [$pushGlyphs](measure) {
-    measure.pushFont({ weight: "bold" });
-    super[$pushGlyphs](measure);
-    measure.popFont();
+    super[$pushGlyphs](measure, /* mustPop = */ true, { weight: "bold" });
   }
 }
 
@@ -465,9 +461,7 @@ class I extends XhtmlObject {
   }
 
   [$pushGlyphs](measure) {
-    measure.pushFont({ posture: "italic" });
-    super[$pushGlyphs](measure);
-    measure.popFont();
+    super[$pushGlyphs](measure, /* mustPop = */ true, { posture: "italic" });
   }
 }
 
@@ -497,10 +491,7 @@ class P extends XhtmlObject {
 
   [$text]() {
     const siblings = this[$getParent]()[$getChildren]();
-    if (siblings.at(-1) === this) {
-      return super[$text]();
-    }
-    return super[$text]() + "\n";
+    return siblings.at(-1) === this ? super[$text]() : super[$text]() + "\n";
   }
 }
 
@@ -530,10 +521,9 @@ class Ul extends XhtmlObject {
 
 class XhtmlNamespace {
   static [$buildXFAObject](name, attributes) {
-    if (XhtmlNamespace.hasOwnProperty(name)) {
-      return XhtmlNamespace[name](attributes);
-    }
-    return undefined;
+    return Object.hasOwn(XhtmlNamespace, name)
+      ? XhtmlNamespace[name](attributes)
+      : undefined;
   }
 
   static a(attributes) {

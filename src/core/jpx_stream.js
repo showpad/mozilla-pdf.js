@@ -13,22 +13,24 @@
  * limitations under the License.
  */
 
-import { shadow, unreachable } from "../shared/util.js";
 import { DecodeStream } from "./decode_stream.js";
 import { JpxImage } from "./jpx.js";
+import { shadow } from "../shared/util.js";
 
 /**
  * For JPEG 2000's we use a library to decode these images and
  * the stream behaves like all the other DecodeStreams.
  */
 class JpxStream extends DecodeStream {
-  constructor(stream, maybeLength, params) {
+  #pdfManager;
+
+  constructor(stream, maybeLength, pdfManager) {
     super(maybeLength);
 
     this.stream = stream;
     this.dict = stream.dict;
     this.maybeLength = maybeLength;
-    this.params = params;
+    this.#pdfManager = pdfManager;
   }
 
   get bytes() {
@@ -41,10 +43,6 @@ class JpxStream extends DecodeStream {
     // directly insert all of its data into `this.buffer`.
   }
 
-  readBlock(decoderOptions) {
-    unreachable("JpxStream.readBlock");
-  }
-
   get isAsyncDecoder() {
     return true;
   }
@@ -54,7 +52,11 @@ class JpxStream extends DecodeStream {
       return this.buffer;
     }
     bytes ||= this.bytes;
-    this.buffer = await JpxImage.decode(bytes, decoderOptions);
+    this.buffer = await JpxImage.instance.decode(
+      this.#pdfManager.binaryDataContext,
+      bytes,
+      decoderOptions
+    );
     this.bufferLength = this.buffer.length;
     this.eof = true;
 

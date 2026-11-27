@@ -36,24 +36,42 @@ const MAX_ERROR = 128;
 class ImageResizer {
   static #goodSquareLength = MIN_IMAGE_DIM;
 
-  static #isImageDecoderSupported = FeatureTest.isImageDecoderSupported;
+  #isImageDecoderSupported;
 
-  constructor(imgData, isMask) {
-    this._imgData = imgData;
-    this._isMask = isMask;
+  #maxArea;
+
+  constructor({
+    canvasMaxAreaInBytes = -1,
+    isImageDecoderSupported = false,
+  } = {}) {
+    // Convert the byte limit to RGBA pixels.
+    this.#maxArea =
+      canvasMaxAreaInBytes < 0 ? null : Math.floor(canvasMaxAreaInBytes / 4);
+    this.#isImageDecoderSupported = isImageDecoderSupported;
   }
 
   static get canUseImageDecoder() {
     return shadow(
       this,
       "canUseImageDecoder",
-      this.#isImageDecoderSupported
-        ? ImageDecoder.isTypeSupported("image/bmp")
-        : Promise.resolve(false)
+      ImageDecoder.isTypeSupported("image/bmp")
     );
   }
 
-  static needsToBeResized(width, height) {
+  needsToBeResized(width, height) {
+    if (this.#maxArea === null) {
+      return ImageResizer.#needsToBeResized(width, height);
+    }
+    if (width <= MIN_IMAGE_DIM && height <= MIN_IMAGE_DIM) {
+      return false;
+    }
+    const { MAX_DIM } = this;
+    return (
+      width > MAX_DIM || height > MAX_DIM || width * height > this.#maxArea
+    );
+  }
+
+  static #needsToBeResized(width, height) {
     if (width <= this.#goodSquareLength && height <= this.#goodSquareLength) {
       return false;
     }
@@ -91,33 +109,40 @@ class ImageResizer {
       MAX_ERROR,
       0
     );
-    const maxArea = (this.MAX_AREA = this.#goodSquareLength ** 2);
+    const maxArea = this.#goodSquareLength ** 2;
+    this._hasMaxArea = true;
+    shadow(this, "MAX_AREA", maxArea);
 
     return area > maxArea;
   }
 
-  static getReducePowerForJPX(width, height, componentsCount) {
-    const area = width * height;
-    // The maximum memory we've in the wasm runtime is 2GB.
-    // Each component is 4 bytes and we can't allocate all the memory just for
-    // the buffers so we limit the size to 1GB / (componentsCount * 4).
-    // We could use more than 2GB by setting MAXIMUM_MEMORY but it would take
-    // too much time to decode a big image.
-    const maxJPXArea = 2 ** 30 / (componentsCount * 4);
-    if (!this.needsToBeResized(width, height)) {
-      if (area > maxJPXArea) {
-        // The image is too large, we need to rescale it.
-        return Math.ceil(Math.log2(area / maxJPXArea));
-      }
+  // Return the power-of-two reduction exponent for canvas and area limits.
+  getReducePower(width, height, maxArea = Infinity) {
+    if (
+      !Number.isInteger(width) ||
+      width <= 0 ||
+      !Number.isInteger(height) ||
+      height <= 0
+    ) {
       return 0;
+    }
+    const area = width * height;
+    if (!this.needsToBeResized(width, height)) {
+      return area > maxArea ? Math.ceil(Math.log2(area / maxArea)) : 0;
     }
     const { MAX_DIM, MAX_AREA } = this;
     const minFactor = Math.max(
       width / MAX_DIM,
       height / MAX_DIM,
-      Math.sqrt(area / Math.min(maxJPXArea, MAX_AREA))
+      Math.sqrt(area / Math.min(maxArea, MAX_AREA))
     );
-    return Math.ceil(Math.log2(minFactor));
+    return Math.max(0, Math.ceil(Math.log2(minFactor)));
+  }
+
+  getReducePowerForJPX(width, height, componentsCount) {
+    // Budget 1 GiB of OpenJPEG's 2 GiB Wasm heap for four-byte component
+    // samples.
+    return this.getReducePower(width, height, 2 ** 30 / (componentsCount * 4));
   }
 
   static get MAX_DIM() {
@@ -137,22 +162,12 @@ class ImageResizer {
     );
   }
 
-  static set MAX_AREA(area) {
-    if (area >= 0) {
-      this._hasMaxArea = true;
-      shadow(this, "MAX_AREA", area);
-    }
+  get MAX_DIM() {
+    return ImageResizer.MAX_DIM;
   }
 
-  static setOptions({
-    canvasMaxAreaInBytes = -1,
-    isImageDecoderSupported = false,
-  }) {
-    if (!this._hasMaxArea) {
-      // Divide by 4 to have the value in pixels.
-      this.MAX_AREA = canvasMaxAreaInBytes >> 2;
-    }
-    this.#isImageDecoderSupported = isImageDecoderSupported;
+  get MAX_AREA() {
+    return this.#maxArea ?? ImageResizer.MAX_AREA;
   }
 
   static _areGoodDims(width, height) {
@@ -193,27 +208,25 @@ class ImageResizer {
     return start;
   }
 
-  static async createImage(imgData, isMask = false) {
-    return new ImageResizer(imgData, isMask)._createImage();
-  }
-
-  async _createImage() {
-    const { _imgData: imgData } = this;
+  async createImage(imgData, isMask = false) {
     const { width, height } = imgData;
 
     if (width * height * 4 > MAX_INT_32) {
       // The resulting RGBA image is too large.
       // We just rescale the data.
-      const result = this.#rescaleImageData();
+      const result = this._rescaleImageData(imgData, isMask);
       if (result) {
         return result;
       }
     }
 
-    const data = this._encodeBMP();
+    const data = this._encodeBMP(imgData, isMask);
     let decoder, imagePromise;
 
-    if (await ImageResizer.canUseImageDecoder) {
+    if (
+      this.#isImageDecoderSupported &&
+      (await ImageResizer.canUseImageDecoder)
+    ) {
       decoder = new ImageDecoder({
         data,
         type: "image/bmp",
@@ -227,7 +240,7 @@ class ImageResizer {
           // It's a bit unfortunate to create the BMP twice but we shouldn't be
           // here in the first place.
           return createImageBitmap(
-            new Blob([this._encodeBMP().buffer], {
+            new Blob([this._encodeBMP(imgData, isMask).buffer], {
               type: "image/bmp",
             })
           );
@@ -243,7 +256,7 @@ class ImageResizer {
       );
     }
 
-    const { MAX_AREA, MAX_DIM } = ImageResizer;
+    const { MAX_AREA, MAX_DIM } = this;
     const minFactor = Math.max(
       width / MAX_DIM,
       height / MAX_DIM,
@@ -271,11 +284,8 @@ class ImageResizer {
       const prevWidth = newWidth;
       const prevHeight = newHeight;
 
-      // See bug 1820511 (Windows specific bug).
-      // TODO: once the above bug is fixed we could revert to:
-      // newWidth = Math.floor(newWidth / 2);
-      newWidth = Math.floor(newWidth / step) - 1;
-      newHeight = Math.floor(newHeight / step) - 1;
+      newWidth = Math.floor(newWidth / step);
+      newHeight = Math.floor(newHeight / step);
 
       const canvas = new OffscreenCanvas(newWidth, newHeight);
       const ctx = canvas.getContext("2d");
@@ -304,22 +314,21 @@ class ImageResizer {
     return imgData;
   }
 
-  #rescaleImageData() {
-    const { _imgData: imgData } = this;
+  _rescaleImageData(imgData, isMask, maxSize = MAX_INT_32) {
     const { data, width, height, kind } = imgData;
     const rgbaSize = width * height * 4;
-    // K is such as width * height * 4 / 2 ** K <= 2 ** 31 - 1
-    const K = Math.ceil(Math.log2(rgbaSize / MAX_INT_32));
+    // Choose K so rgbaSize / 2 ** K <= maxSize.
+    const K = Math.ceil(Math.log2(rgbaSize / maxSize));
     const newWidth = width >> K;
     const newHeight = height >> K;
     let rgbaData;
     let maxHeight = height;
 
-    // We try to allocate the buffer with the maximum size but it can fail.
+    // Try allocating the full RGBA buffer.
     try {
       rgbaData = new Uint8Array(rgbaSize);
     } catch {
-      // n is such as 2 ** n - 1 > width * height * 4
+      // Try smaller buffers until an allocation succeeds.
       let n = Math.floor(Math.log2(rgbaSize + 1));
 
       while (true) {
@@ -332,6 +341,14 @@ class ImageResizer {
       }
 
       maxHeight = Math.floor((2 ** n - 1) / (width * 4));
+      if (maxHeight === 0) {
+        // No RGBA row fits in the buffer.
+        return null;
+      }
+      if (maxHeight >= 4) {
+        // Keep RGB chunk offsets divisible by 4.
+        maxHeight -= maxHeight % 4;
+      }
       const newSize = width * maxHeight * 4;
       if (newSize < rgbaData.length) {
         rgbaData = new Uint8Array(newSize);
@@ -343,29 +360,30 @@ class ImageResizer {
 
     let srcPos = 0;
     let newIndex = 0;
-    const step = Math.ceil(height / maxHeight);
-    const remainder = height % maxHeight === 0 ? height : height % maxHeight;
-    for (let k = 0; k < step; k++) {
-      const h = k < step - 1 ? maxHeight : remainder;
+    // Sample every 2 ** K rows, independent of chunk boundaries.
+    const lastRow = newHeight << K;
+    let row = 0;
+    for (let y = 0; y < height; y += maxHeight) {
+      const h = Math.min(maxHeight, height - y);
       ({ srcPos } = convertToRGBA({
         kind,
         src: data,
         dest: src32,
         width,
         height: h,
-        inverseDecode: this._isMask,
+        inverseDecode: isMask,
         srcPos,
       }));
 
-      for (let i = 0, ii = h >> K; i < ii; i++) {
-        const buf = src32.subarray((i << K) * width);
+      for (const end = Math.min(y + h, lastRow); row < end; row += 1 << K) {
+        const buf = src32.subarray((row - y) * width);
         for (let j = 0; j < newWidth; j++) {
           dest32[newIndex++] = buf[j << K];
         }
       }
     }
 
-    if (ImageResizer.needsToBeResized(newWidth, newHeight)) {
+    if (this.needsToBeResized(newWidth, newHeight)) {
       imgData.data = dest32;
       imgData.width = newWidth;
       imgData.height = newHeight;
@@ -389,9 +407,9 @@ class ImageResizer {
     return imgData;
   }
 
-  _encodeBMP() {
-    const { width, height, kind } = this._imgData;
-    let data = this._imgData.data;
+  _encodeBMP(imgData, isMask) {
+    const { width, height, kind } = imgData;
+    let { data } = imgData;
     let bitPerPixel;
     let colorTable = new Uint8Array(0);
     let maskTable = colorTable;
@@ -404,7 +422,7 @@ class ImageResizer {
       case ImageKind.GRAYSCALE_1BPP: {
         bitPerPixel = 1;
         colorTable = new Uint8Array(
-          this._isMask
+          isMask
             ? [255, 255, 255, 255, 0, 0, 0, 0]
             : [0, 0, 0, 0, 255, 255, 255, 255]
         );

@@ -15,34 +15,82 @@
 
 /** @typedef {import("./event_utils").EventBus} EventBus */
 
+import {
+  createPromiseCapability,
+  getUuid,
+  makeArr,
+  noopFn,
+  shadow,
+} from "pdfjs-lib";
 import { apiPageLayoutToViewerModes } from "./ui_utils.js";
+import { internalOpt } from "./internal_evt.js";
 import { RenderingStates } from "./renderable_view.js";
-import { shadow } from "pdfjs-lib";
+
+// Events eligible to carry a user gesture's activation token.
+const ACTIVATION_EVENTS = new Set(["Action", "Mouse Down", "Mouse Up"]);
+
+// Events eligible for a dialog when triggered by a trusted, non-scripted event.
+const DIALOG_EVENTS = new Set([
+  ...ACTIVATION_EVENTS,
+  "Blur",
+  "Focus",
+  "Keystroke",
+  "Validate",
+]);
+
+// Commands which can't change what is under the pointer: any other one, even
+// unknown, is treated as a possible layout change.
+const STATIC_COMMANDS = new Set([
+  "SaveAs",
+  "WillPrintFinished",
+  "WillSaveFinished",
+  "clear",
+  "error",
+  "print",
+  "println",
+  "sandboxTripEnd",
+]);
+// Layout-change guard: a gesture starting sooner than this after a script
+// changed the layout isn't honored, like `security.notification_enable_delay`
+// in Firefox.
+const LAYOUT_CHANGE_DELAY = 500; // ms
 
 /**
- * @typedef {Object} PDFScriptingManagerOptions
+ * @typedef {object} PDFScriptingManagerOptions
  * @property {EventBus} eventBus - The application event bus.
  * @property {string} [sandboxBundleSrc] - The path and filename of the
  *   scripting bundle.
- * @property {Object} [externalServices] - The factory that is used when
+ * @property {object} [externalServices] - The factory that is used when
  *   initializing scripting; must contain a `createScripting` method.
  *   PLEASE NOTE: Primarily intended for the default viewer use-case.
- * @property {function} [docProperties] - The function that is used to lookup
+ * @property {Function} [docProperties] - The function that is used to lookup
  *   the necessary document properties.
  */
 
 class PDFScriptingManager {
+  // The activations, by token, of the events being dispatched in the sandbox.
+  #activations = new Map();
+
   #closeCapability = null;
+
+  #consumedGestureId = 0;
 
   #destroyCapability = null;
 
   #docProperties = null;
 
-  #eventAbortController = null;
+  #eventAC = null;
 
   #eventBus = null;
 
   #externalServices = null;
+
+  #gesture = { id: 0, time: -Infinity, type: "" };
+
+  // null while the layout-change animation-frame callback is pending.
+  #lastLayoutChange = -Infinity;
+
+  #objectIds = null;
 
   #pdfDocument = null;
 
@@ -50,9 +98,13 @@ class PDFScriptingManager {
 
   #ready = false;
 
+  // OpenAction can print before #ready is set.
+  #sandboxCreated = false;
+
   #scripting = null;
 
-  #willPrintCapability = null;
+  // Pending requests per event name, resolved in order by "...Finished".
+  #pendingDocEvents = new Map();
 
   /**
    * @param {PDFScriptingManagerOptions} options
@@ -61,6 +113,23 @@ class PDFScriptingManager {
     this.#eventBus = eventBus;
     this.#externalServices = externalServices;
     this.#docProperties = docProperties;
+
+    // Annotations report possible layout changes and request permission for
+    // actions such as printing, saving, or following links.
+    eventBus.on(
+      "sandboxlayoutchange",
+      () => this.#markLayoutChange(),
+      internalOpt
+    );
+    eventBus.on(
+      "useractivationrequest",
+      request => {
+        request.allowed =
+          !this.#scripting ||
+          this.#consumeGesture(this.#getActivation(request));
+      },
+      internalOpt
+    );
 
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("TESTING")) {
       Object.defineProperty(this, "sandboxTrip", {
@@ -103,6 +172,18 @@ class PDFScriptingManager {
     if (pdfDocument !== this.#pdfDocument) {
       return; // The document was closed while the data resolved.
     }
+
+    // Collect the ids of every field annotation, so that any sandbox message
+    // targeting an unknown id can be ignored.
+    if (objects) {
+      this.#objectIds = new Set();
+      for (const fields of objects.values()) {
+        for (const { id } of fields) {
+          this.#objectIds.add(id);
+        }
+      }
+    }
+
     try {
       this.#scripting = this.#initScripting();
     } catch (error) {
@@ -113,27 +194,99 @@ class PDFScriptingManager {
     }
     const eventBus = this.#eventBus;
 
-    this.#eventAbortController = new AbortController();
-    const { signal } = this.#eventAbortController;
+    this.#eventAC = new AbortController();
+    const evtOpts = { signal: this.#eventAC.signal, ...internalOpt };
 
-    eventBus._on(
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("COMPONENTS")) &&
+      this.#externalServices.addScriptingWindowListener
+    ) {
+      // The default viewer already handles adding/removing of DOM events,
+      // hence limit this to only the viewer components.
+      window.addEventListener(
+        "updatefromsandbox",
+        event => {
+          eventBus.dispatch("updatefromsandbox", {
+            source: window,
+            detail: event.detail,
+          });
+        },
+        { signal: this.#eventAC.signal }
+      );
+    }
+
+    eventBus.on(
       "updatefromsandbox",
       event => {
         if (event?.source === window) {
           this.#updateFromSandbox(event.detail);
         }
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "dispatcheventinsandbox",
-      event => {
-        this.#scripting?.dispatchEventInSandbox(event.detail);
+      info => {
+        const { detail, originalEvent, scripted } = info;
+        this.#dispatchEventInSandbox(
+          {
+            ...detail,
+            scripted: !!scripted,
+            allowDialog:
+              !!originalEvent?.isTrusted &&
+              !scripted &&
+              DIALOG_EVENTS.has(detail?.name),
+          },
+          ACTIVATION_EVENTS.has(detail?.name) ? this.#getActivation(info) : null
+        );
       },
-      { signal }
+      evtOpts
     );
 
-    eventBus._on(
+    // Everything which comes from the sandbox is untrusted, hence the user
+    // gestures are tracked here.
+    const listenerOpts = {
+      capture: true,
+      passive: true,
+      signal: this.#eventAC.signal,
+    };
+    const startGesture = (event, type) => {
+      if (event.isTrusted) {
+        this.#gesture = {
+          id: this.#gesture.id + 1,
+          time: event.timeStamp,
+          type,
+        };
+      }
+    };
+    window.addEventListener(
+      "pointerdown",
+      event => startGesture(event, "pointer"),
+      listenerOpts
+    );
+    window.addEventListener(
+      "mousedown",
+      event => {
+        if (event.isTrusted && this.#gesture.type === "pointer") {
+          this.#gesture.type = "mouse"; // Same gesture as the pointerdown.
+        } else {
+          // E.g. assistive technology, which clicks without any pointerdown.
+          startGesture(event, "mouse");
+        }
+      },
+      listenerOpts
+    );
+    window.addEventListener(
+      "keydown",
+      event => {
+        if (!event.repeat) {
+          startGesture(event, "key");
+        }
+      },
+      listenerOpts
+    );
+
+    eventBus.on(
       "pagechanging",
       ({ pageNumber, previous }) => {
         if (pageNumber === previous) {
@@ -142,9 +295,9 @@ class PDFScriptingManager {
         this.#dispatchPageClose(previous);
         this.#dispatchPageOpen(pageNumber);
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "pagerendered",
       ({ pageNumber }) => {
         if (!this._pageOpenPending.has(pageNumber)) {
@@ -155,9 +308,9 @@ class PDFScriptingManager {
         }
         this.#dispatchPageOpen(pageNumber);
       },
-      { signal }
+      evtOpts
     );
-    eventBus._on(
+    eventBus.on(
       "pagesdestroy",
       async () => {
         await this.#dispatchPageClose(this.#pdfViewer.currentPageNumber);
@@ -169,7 +322,7 @@ class PDFScriptingManager {
 
         this.#closeCapability?.resolve();
       },
-      { signal }
+      evtOpts
     );
 
     try {
@@ -190,6 +343,9 @@ class PDFScriptingManager {
           actions: docActions,
         },
       });
+      if (pdfDocument === this.#pdfDocument) {
+        this.#sandboxCreated = true;
+      }
 
       eventBus.dispatch("sandboxcreated", { source: this });
     } catch (error) {
@@ -199,10 +355,11 @@ class PDFScriptingManager {
       return;
     }
 
-    await this.#scripting?.dispatchEventInSandbox({
-      id: "doc",
-      name: "Open",
-    });
+    // Allow at most one print command during the document Open dispatch.
+    await this.#dispatchEventInSandbox(
+      { id: "doc", name: "Open", allowDialog: true },
+      { isOpen: true }
+    );
     await this.#dispatchPageOpen(
       this.#pdfViewer.currentPageNumber,
       /* initialize = */ true
@@ -216,44 +373,152 @@ class PDFScriptingManager {
     });
   }
 
-  async dispatchWillSave() {
-    return this.#scripting?.dispatchEventInSandbox({
-      id: "doc",
-      name: "WillSave",
+  /**
+   * Dispatch an event with an activation token, if any. Keep the token until
+   * dispatch settles, unless a command consumes it first.
+   * @param {object} detail - The event to dispatch.
+   * @param {object | null} [activation] - The user gesture which caused the
+   *   event, i.e. `{ gestureId }`, or `{ isOpen: true }` for the Open event.
+   * @returns {Promise<void>}
+   */
+  async #dispatchEventInSandbox(detail, activation = null) {
+    if (!activation) {
+      await this.#scripting?.dispatchEventInSandbox(detail);
+      return;
+    }
+    const token = getUuid();
+    this.#activations.set(token, activation);
+    try {
+      await this.#scripting?.dispatchEventInSandbox({
+        ...detail,
+        activation: token,
+      });
+    } finally {
+      this.#activations.delete(token);
+    }
+  }
+
+  /**
+   * Get the activation of the current user gesture, if the DOM event which
+   * triggers an action can be considered as caused by the user.
+   * @param {object} info
+   * @param {Event} [info.originalEvent] - The DOM event.
+   * @param {boolean} [info.scriptFocused] - Whether the event target is marked
+   *   as script-focused.
+   * @returns {object | null} The activation, i.e. `{ gestureId }`, or null.
+   */
+  #getActivation({ originalEvent, scriptFocused }) {
+    const { id, time, type } = this.#gesture;
+    if (
+      !originalEvent?.isTrusted ||
+      navigator.userActivation?.isActive !== true ||
+      // The script may have just changed what is under the pointer.
+      this.#lastLayoutChange === null ||
+      time - this.#lastLayoutChange < LAYOUT_CHANGE_DELAY ||
+      // The script may have focused the element the user is typing on.
+      (type === "key" && scriptFocused)
+    ) {
+      return null;
+    }
+    return { gestureId: id };
+  }
+
+  /**
+   * Consume a user gesture, shared by sandbox commands and annotation actions.
+   * Each gesture can be consumed at most once.
+   * @param {object | null} activation - The activation, i.e. `{ gestureId }`.
+   * @returns {boolean} Whether the action is allowed.
+   */
+  #consumeGesture(activation) {
+    if (!activation || activation.gestureId <= this.#consumedGestureId) {
+      return false;
+    }
+    this.#consumedGestureId = activation.gestureId;
+    return true;
+  }
+
+  /**
+   * Consume the activation of the event whose handling sent the command.
+   * @param {string} token - The token received with the command.
+   * @param {boolean} allowOpen - Whether the Open event can run the command.
+   * @returns {boolean} Whether the command is allowed.
+   */
+  #consumeActivation(token, allowOpen) {
+    const activation = this.#activations.get(token);
+    if (!activation) {
+      return false;
+    }
+    this.#activations.delete(token);
+    return activation.isOpen ? allowOpen : this.#consumeGesture(activation);
+  }
+
+  /**
+   * Record a possible layout change. Reject gestures starting before the
+   * pending animation-frame callback runs or within the delay after it runs.
+   */
+  #markLayoutChange() {
+    if (this.#lastLayoutChange === null) {
+      return;
+    }
+    this.#lastLayoutChange = null;
+    // The delay starts once the script yields, at the next animation frame.
+    // Deferred changes (e.g. focus) are reported again once applied, since
+    // that frame can precede them.
+    requestAnimationFrame(() => {
+      this.#lastLayoutChange = performance.now();
     });
+  }
+
+  async dispatchWillSave() {
+    return this.#dispatchDocEventAndWait("WillSave");
   }
 
   async dispatchDidSave() {
     return this.#scripting?.dispatchEventInSandbox({
       id: "doc",
       name: "DidSave",
+      allowDialog: true,
     });
   }
 
   async dispatchWillPrint() {
-    if (!this.#scripting) {
+    return this.#dispatchDocEventAndWait("WillPrint");
+  }
+
+  async #dispatchDocEventAndWait(name) {
+    if (!this.#scripting || !this.#sandboxCreated) {
+      // Don't wait for a reply before sandbox creation.
       return;
     }
-    await this.#willPrintCapability?.promise;
-    this.#willPrintCapability = Promise.withResolvers();
+    // Queue before dispatch to handle synchronous replies and overlaps.
+    const capability = createPromiseCapability();
+    const pendingEvents = this.#pendingDocEvents.getOrInsertComputed(
+      name,
+      makeArr
+    );
+    pendingEvents.push(capability);
     try {
       await this.#scripting.dispatchEventInSandbox({
         id: "doc",
-        name: "WillPrint",
+        name,
+        allowDialog: true,
       });
     } catch (ex) {
-      this.#willPrintCapability.resolve();
-      this.#willPrintCapability = null;
+      const index = pendingEvents.indexOf(capability);
+      if (index >= 0) {
+        pendingEvents.splice(index, 1);
+      }
       throw ex;
     }
 
-    await this.#willPrintCapability.promise;
+    await capability.promise;
   }
 
   async dispatchDidPrint() {
     return this.#scripting?.dispatchEventInSandbox({
       id: "doc",
       name: "DidPrint",
+      allowDialog: true,
     });
   }
 
@@ -287,6 +552,9 @@ class PDFScriptingManager {
 
     const { id, siblings, command, value } = detail;
     if (!id) {
+      if (!STATIC_COMMANDS.has(command)) {
+        this.#markLayoutChange();
+      }
       if (
         typeof PDFJSDev !== "undefined" &&
         PDFJSDev.test("TESTING") &&
@@ -315,8 +583,22 @@ class PDFScriptingManager {
           pdfViewer.currentPageNumber = value + 1;
           break;
         case "print":
-          await pdfViewer.pagesPromise;
-          this.#eventBus.dispatch("print", { source: this });
+        case "SaveAs":
+          if (
+            !this.#consumeActivation(detail.activation, command === "print")
+          ) {
+            break;
+          }
+          if (command === "print") {
+            try {
+              await pdfViewer.pagesPromise;
+            } catch {
+              break; // The document was closed, or failed to load.
+            }
+          }
+          this.#eventBus.dispatch(command === "print" ? "print" : "download", {
+            source: this,
+          });
           break;
         case "println":
           console.log(value);
@@ -325,9 +607,6 @@ class PDFScriptingManager {
           if (!isInPresentationMode) {
             pdfViewer.currentScaleValue = value;
           }
-          break;
-        case "SaveAs":
-          this.#eventBus.dispatch("download", { source: this });
           break;
         case "FirstPage":
           pdfViewer.currentPageNumber = 1;
@@ -352,9 +631,11 @@ class PDFScriptingManager {
           }
           break;
         case "WillPrintFinished":
-          this.#willPrintCapability?.resolve();
-          this.#willPrintCapability = null;
+        case "WillSaveFinished": {
+          const name = command.slice(0, -"Finished".length);
+          this.#pendingDocEvents.get(name)?.shift()?.resolve();
           break;
+        }
       }
       return;
     }
@@ -367,6 +648,9 @@ class PDFScriptingManager {
 
     const ids = siblings ? [id, ...siblings] : [id];
     for (const elementId of ids) {
+      if (!this.#objectIds?.has(elementId)) {
+        continue;
+      }
       const element = document.querySelector(
         `[data-element-id="${elementId}"]`
       );
@@ -384,7 +668,7 @@ class PDFScriptingManager {
       visitedPages = this._visitedPages;
 
     if (initialize) {
-      this.#closeCapability = Promise.withResolvers();
+      this.#closeCapability = createPromiseCapability();
     }
     if (!this.#closeCapability) {
       return; // Scripting isn't fully initialized yet.
@@ -446,7 +730,7 @@ class PDFScriptingManager {
   }
 
   #initScripting() {
-    this.#destroyCapability = Promise.withResolvers();
+    this.#destroyCapability = createPromiseCapability();
 
     if (this.#scripting) {
       throw new Error("#initScripting: Scripting already exists.");
@@ -455,6 +739,9 @@ class PDFScriptingManager {
   }
 
   async #destroyScripting() {
+    this.#objectIds = null;
+    this.#sandboxCreated = false;
+
     if (!this.#scripting) {
       this.#pdfDocument = null;
 
@@ -468,9 +755,8 @@ class PDFScriptingManager {
           // Avoid the scripting/sandbox-destruction hanging indefinitely.
           setTimeout(resolve, 1000);
         }),
-      ]).catch(() => {
-        // Ignore any errors, to ensure that the sandbox is always destroyed.
-      });
+      ]).catch(noopFn); // Ignore any errors, to ensure that the sandbox is always destroyed.
+
       this.#closeCapability = null;
     }
     this.#pdfDocument = null;
@@ -479,15 +765,20 @@ class PDFScriptingManager {
       await this.#scripting.destroySandbox();
     } catch {}
 
-    this.#willPrintCapability?.reject(new Error("Scripting destroyed."));
-    this.#willPrintCapability = null;
+    for (const pendingEvents of this.#pendingDocEvents.values()) {
+      for (const capability of pendingEvents) {
+        capability.reject(new Error("Scripting destroyed."));
+      }
+    }
+    this.#pendingDocEvents.clear();
 
-    this.#eventAbortController?.abort();
-    this.#eventAbortController = null;
+    this.#eventAC?.abort();
+    this.#eventAC = null;
 
     this._pageOpenPending.clear();
     this._visitedPages.clear();
 
+    this.#activations.clear();
     this.#scripting = null;
     this.#ready = false;
 

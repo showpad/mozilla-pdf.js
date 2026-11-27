@@ -15,6 +15,14 @@
 
 // Integration tests for the simple viewer (test/components/).
 
+function getSelector(id) {
+  return `[data-element-id="${id}"]`;
+}
+
+function getAnnotationSelector(id) {
+  return `[data-annotation-id="${id}"]`;
+}
+
 describe("Simple viewer", () => {
   describe("TextLayerBuilder without abortSignal", () => {
     let pages;
@@ -51,6 +59,116 @@ describe("Simple viewer", () => {
             () => document.querySelectorAll(".textLayer span").length
           );
           expect(count).withContext(`In ${browserName}`).toBeGreaterThan(0);
+        })
+      );
+    });
+  });
+
+  describe("Two viewers with separate abortSignals", () => {
+    let pages;
+
+    beforeEach(async () => {
+      const origin = new URL(global.integrationBaseUrl).origin;
+      pages = await Promise.all(
+        global.integrationSessions.map(async session => {
+          const page = await session.browser.newPage();
+          await page.goto(`${origin}/test/components/two-viewers.html`);
+          await page.bringToFront();
+          return [session.name, page];
+        })
+      );
+    });
+
+    afterEach(async () => {
+      await Promise.all(pages.map(([, page]) => page.close()));
+    });
+
+    // Returns a handle to the function that destroys the viewer.
+    function initializeViewer(page, index) {
+      return page.evaluateHandle(i => window.initializeViewer(i), index);
+    }
+
+    async function checkSelection(browserName, page, index) {
+      const textLayerSelector = `#viewerContainer${index} [data-page-number='1'] .textLayer`;
+      await page.click(`${textLayerSelector} span`);
+
+      // The .selecting class is removed on pointerup by the global listener
+      const count = await page.evaluate(
+        () => document.querySelectorAll(".textLayer.selecting").length
+      );
+      expect(count).withContext(`In ${browserName}`).toEqual(0);
+    }
+
+    it("must keep handling text selection in the second viewer after the first one is destroyed", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const destroyHandle = await initializeViewer(page, 0);
+          await initializeViewer(page, 1);
+          await destroyHandle.evaluate(destroy => destroy());
+          await checkSelection(browserName, page, 1);
+        })
+      );
+    });
+
+    it("must keep handling text selection in the first viewer after the second one is destroyed", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await initializeViewer(page, 0);
+          const destroyHandle = await initializeViewer(page, 1);
+          await destroyHandle.evaluate(destroy => destroy());
+          await checkSelection(browserName, page, 0);
+        })
+      );
+    });
+
+    it("must handle text selection in a viewer created after another one was destroyed", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          const destroyHandle = await initializeViewer(page, 0);
+          await destroyHandle.evaluate(destroy => destroy());
+          await initializeViewer(page, 1);
+          await checkSelection(browserName, page, 1);
+        })
+      );
+    });
+  });
+
+  describe("Scripting support with evaljs.pdf", () => {
+    let pages;
+
+    beforeEach(async () => {
+      const origin = new URL(global.integrationBaseUrl).origin;
+      pages = await Promise.all(
+        global.integrationSessions.map(async session => {
+          const page = await session.browser.newPage();
+          await page.goto(
+            `${origin}/test/components/simple-viewer.html` +
+              `?file=/test/pdfs/evaljs.pdf`
+          );
+          await page.bringToFront();
+          await page.waitForSelector(getSelector("55R"));
+          await page.waitForFunction(
+            "window.pdfScriptingManager?.ready === true"
+          );
+          return [session.name, page];
+        })
+      );
+    });
+
+    afterEach(async () => {
+      await Promise.all(pages.map(([, page]) => page.close()));
+    });
+
+    it("must evaluate JavaScript entered in the input field", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await page.type(getSelector("55R"), "1 + 1");
+          await page.click(getAnnotationSelector("57R"));
+          await page.waitForFunction(
+            `document.querySelector('${getSelector("56R")}').value !== ""`
+          );
+          const text = await page.$eval(getSelector("56R"), el => el.value);
+          expect(text).withContext(`In ${browserName}`).toEqual("2");
         })
       );
     });

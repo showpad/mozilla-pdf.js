@@ -34,7 +34,7 @@ async function docProperties(pdfDocument) {
 }
 
 class GenericScripting {
-  constructor(sandboxBundleSrc) {
+  constructor(sandboxBundleSrc, wasmUrl) {
     this._ready = new Promise((resolve, reject) => {
       const sandbox =
         typeof PDFJSDev === "undefined"
@@ -42,7 +42,9 @@ class GenericScripting {
           : __raw_import__(sandboxBundleSrc);
       sandbox
         .then(pdfjsSandbox => {
-          resolve(pdfjsSandbox.QuickJSSandbox());
+          resolve(
+            pdfjsSandbox.QuickJSSandbox(new URL(wasmUrl, location.href).href)
+          );
         })
         .catch(reject);
     });
@@ -53,9 +55,17 @@ class GenericScripting {
     sandbox.create(data);
   }
 
+  /**
+   * @param {object} event - The event to dispatch.
+   * @returns {Promise<void>} Resolved after the synchronous sandbox dispatch,
+   *   without waiting for timers scheduled by the script.
+   */
   async dispatchEventInSandbox(event) {
     const sandbox = await this._ready;
-    setTimeout(() => sandbox.dispatchEvent(event), 0);
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+    sandbox.dispatchEvent(event);
   }
 
   async destroySandbox() {

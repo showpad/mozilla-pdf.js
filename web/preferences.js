@@ -47,7 +47,10 @@ class BasePreferences {
       }
     );
 
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) {
+    if (
+      typeof PDFJSDev === "undefined" ||
+      PDFJSDev.test("(TESTING && !LIB) || MOZCENTRAL")
+    ) {
       window.addEventListener(
         "updatedPreference",
         async ({ detail: { name, value } }) => {
@@ -60,7 +63,7 @@ class BasePreferences {
 
   /**
    * Stub function for writing preferences to storage.
-   * @param {Object} prefObj The preferences that should be written to storage.
+   * @param {object} prefObj The preferences that should be written to storage.
    * @returns {Promise} A promise that is resolved when the preference values
    *                    have been written.
    */
@@ -70,7 +73,7 @@ class BasePreferences {
 
   /**
    * Stub function for reading preferences from storage.
-   * @param {Object} prefObj The preferences that should be read from storage.
+   * @param {object} prefObj The preferences that should be read from storage.
    * @returns {Promise} A promise that is resolved with an {Object} containing
    *                    the preferences that have been read.
    */

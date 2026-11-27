@@ -18,8 +18,13 @@
 
 // eslint-disable-next-line no-restricted-syntax
 export class SandboxSupportBase {
+  // Viewer-supplied state for the current synchronous dispatch. The activation
+  // token is removed from the event sent to the sandbox and attached to its
+  // document commands. Dialog permission can be consumed once per dispatch.
+  #dispatch = null;
+
   /**
-   * @param {DOMWindow} - win
+   * @param {DOMWindow} win
    */
   constructor(win) {
     this.win = win;
@@ -38,40 +43,68 @@ export class SandboxSupportBase {
   }
 
   /**
-   * @param {Object} val - Export a value in the sandbox.
+   * @param {object} val - Export a value in the sandbox.
    */
   exportValueToSandbox(val) {
     throw new Error("Not implemented");
   }
 
   /**
-   * @param {Object} val - Import a value from the sandbox.
+   * @param {object} val - Import a value from the sandbox.
    */
   importValueFromSandbox(val) {
     throw new Error("Not implemented");
   }
 
   /**
-   * @param {String} errorMessage - Create an error in the sandbox.
+   * @param {string} errorMessage - Create an error in the sandbox.
    */
   createErrorForSandbox(errorMessage) {
     throw new Error("Not implemented");
   }
 
   /**
-   * @param {String} name - Name of the function to call in the sandbox
-   * @param {Array<Object>} args - Arguments of the function.
+   * @param {string} name - Name of the function to call in the sandbox
+   * @param {Array<object>} args - Arguments of the function.
    */
   callSandboxFunction(name, args) {
     if (!this.commFun) {
       return;
+    }
+    const dispatch = this.#dispatch;
+    this.#dispatch = null;
+    if (name === "dispatchEvent" && args) {
+      const { activation = null, ...event } = args;
+      args = event;
+      this.#dispatch = {
+        activation,
+        canShowDialog: event.allowDialog === true,
+      };
     }
     try {
       args = this.exportValueToSandbox(args);
       this.commFun(name, args);
     } catch (e) {
       this.win.console.error(e);
+    } finally {
+      this.#dispatch = dispatch;
     }
+  }
+
+  /**
+   * Consume the permission to show a dialog for the event being handled.
+   * @param {...any} args - The arguments of the dialog, which must be strings.
+   * @returns {boolean} Whether the dialog can be shown.
+   */
+  #consumeDialog(...args) {
+    if (
+      !this.#dispatch?.canShowDialog ||
+      args.some(arg => typeof arg !== "string")
+    ) {
+      return false;
+    }
+    this.#dispatch.canShowDialog = false;
+    return true;
   }
 
   createSandboxExternals() {
@@ -125,23 +158,16 @@ export class SandboxSupportBase {
         this.timeoutIds.delete(callbackId);
       },
       alert: cMsg => {
-        if (typeof cMsg !== "string") {
-          return;
+        if (this.#consumeDialog(cMsg)) {
+          this.win.alert(cMsg);
         }
-        this.win.alert(cMsg);
       },
-      confirm: cMsg => {
-        if (typeof cMsg !== "string") {
-          return false;
-        }
-        return this.win.confirm(cMsg);
-      },
-      prompt: (cQuestion, cDefault) => {
-        if (typeof cQuestion !== "string" || typeof cDefault !== "string") {
-          return null;
-        }
-        return this.win.prompt(cQuestion, cDefault);
-      },
+      confirm: cMsg =>
+        this.#consumeDialog(cMsg) ? this.win.confirm(cMsg) : false,
+      prompt: (cQuestion, cDefault) =>
+        this.#consumeDialog(cQuestion, cDefault)
+          ? this.win.prompt(cQuestion, cDefault)
+          : null,
       parseURL: cUrl => {
         const url = new this.win.URL(cUrl);
         const props = [
@@ -166,6 +192,10 @@ export class SandboxSupportBase {
       send: data => {
         if (!data) {
           return;
+        }
+        const activation = this.#dispatch?.activation ?? null;
+        if (!data.id && (activation || "activation" in data)) {
+          data = { ...data, activation };
         }
         const event = new this.win.CustomEvent("updatefromsandbox", {
           detail: this.importValueFromSandbox(data),

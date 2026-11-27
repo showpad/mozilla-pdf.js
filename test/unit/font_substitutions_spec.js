@@ -18,14 +18,12 @@ import { getFontSubstitution } from "../../src/core/font_substitutions.js";
 
 describe("getFontSubstitution", function () {
   const idFactory = createIdFactory(0);
-  const localFontPath = "/tmp/";
 
   it("should substitute an unknown font", () => {
     const fontName = "Foo";
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -49,7 +47,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -73,7 +70,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -97,7 +93,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -121,7 +116,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -145,7 +139,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Helvetica",
       "TrueType"
@@ -161,8 +154,7 @@ describe("getFontSubstitution", function () {
           "local(A030),local(TeX Gyre Heros),local(FreeSans)," +
           "local(DejaVu Sans),local(Albany),local(Bitstream Vera Sans)," +
           "local(Arial Unicode MS),local(Microsoft Sans Serif)," +
-          "local(Apple Symbols),local(Cantarell)," +
-          "url(/tmp/LiberationSans-Regular.ttf)",
+          "local(Apple Symbols),local(Cantarell)",
         style: {
           style: "normal",
           weight: "normal",
@@ -177,7 +169,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Helvetica-Oblique",
       "TrueType"
@@ -196,7 +187,7 @@ describe("getFontSubstitution", function () {
           "local(DejaVu Sans Italic),local(Albany Italic)," +
           "local(Bitstream Vera Sans Italic),local(Arial Unicode MS Italic)," +
           "local(Microsoft Sans Serif Italic),local(Apple Symbols Italic)," +
-          "local(Cantarell Italic),url(/tmp/LiberationSans-Italic.ttf)",
+          "local(Cantarell Italic)",
         style: {
           style: "italic",
           weight: "normal",
@@ -211,7 +202,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Helvetica-Bold",
       "TrueType"
@@ -229,7 +219,7 @@ describe("getFontSubstitution", function () {
           "local(DejaVu Sans Bold),local(Albany Bold)," +
           "local(Bitstream Vera Sans Bold),local(Arial Unicode MS Bold)," +
           "local(Microsoft Sans Serif Bold),local(Apple Symbols Bold)," +
-          "local(Cantarell Bold),url(/tmp/LiberationSans-Bold.ttf)",
+          "local(Cantarell Bold)",
         style: {
           style: "normal",
           weight: "bold",
@@ -244,7 +234,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Helvetica-BoldOblique",
       "TrueType"
@@ -264,8 +253,7 @@ describe("getFontSubstitution", function () {
           "local(Bitstream Vera Sans Bold Italic)," +
           "local(Arial Unicode MS Bold Italic)," +
           "local(Microsoft Sans Serif Bold Italic)," +
-          "local(Apple Symbols Bold Italic),local(Cantarell Bold Italic)," +
-          "url(/tmp/LiberationSans-BoldItalic.ttf)",
+          "local(Apple Symbols Bold Italic),local(Cantarell Bold Italic)",
         style: {
           style: "italic",
           weight: "bold",
@@ -280,7 +268,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Times-Roman",
       "TrueType"
@@ -311,7 +298,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Times-Italic",
       "TrueType"
@@ -344,7 +330,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Times-Bold",
       "TrueType"
@@ -377,7 +362,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       "Times-BoldItalic",
       "TrueType"
@@ -410,7 +394,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -427,7 +410,7 @@ describe("getFontSubstitution", function () {
           "local(FreeSans),local(DejaVu Sans),local(Albany)," +
           "local(Bitstream Vera Sans),local(Arial Unicode MS)," +
           "local(Microsoft Sans Serif),local(Apple Symbols)," +
-          "local(Cantarell),url(/tmp/LiberationSans-Regular.ttf)",
+          "local(Cantarell)",
         style: {
           style: "normal",
           weight: "normal",
@@ -444,7 +427,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -463,7 +445,7 @@ describe("getFontSubstitution", function () {
           "local(DejaVu Sans Bold),local(Albany Bold)," +
           "local(Bitstream Vera Sans Bold),local(Arial Unicode MS Bold)," +
           "local(Microsoft Sans Serif Bold),local(Apple Symbols Bold)," +
-          "local(Cantarell Bold),url(/tmp/LiberationSans-Bold.ttf)",
+          "local(Cantarell Bold)",
         style: {
           style: "normal",
           weight: "bold",
@@ -480,7 +462,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -499,7 +480,7 @@ describe("getFontSubstitution", function () {
           "local(DejaVu Sans Bold),local(Albany Bold)," +
           "local(Bitstream Vera Sans Bold),local(Arial Unicode MS Bold)," +
           "local(Microsoft Sans Serif Bold),local(Apple Symbols Bold)," +
-          "local(Cantarell Bold),url(/tmp/LiberationSans-Bold.ttf)",
+          "local(Cantarell Bold)",
         style: {
           style: "normal",
           weight: "900",
@@ -516,7 +497,6 @@ describe("getFontSubstitution", function () {
     const fontSubstitution = getFontSubstitution(
       new Map(),
       idFactory,
-      localFontPath,
       fontName,
       undefined,
       "TrueType"
@@ -535,7 +515,7 @@ describe("getFontSubstitution", function () {
           "local(DejaVu Sans Bold),local(Albany Bold)," +
           "local(Bitstream Vera Sans Bold),local(Arial Unicode MS Bold)," +
           "local(Microsoft Sans Serif Bold),local(Apple Symbols Bold)," +
-          "local(Cantarell Bold),url(/tmp/LiberationSans-Bold.ttf)",
+          "local(Cantarell Bold)",
         style: {
           style: "normal",
           weight: "900",
@@ -544,6 +524,95 @@ describe("getFontSubstitution", function () {
     );
     expect(fontSubstitution.css).toMatch(
       /^"ArialBlack",g_d(\d+)_sf(\d+),sans-serif$/
+    );
+  });
+
+  it("should substitute HeiseiMin-W3", () => {
+    const fontName = "HeiseiMin-W3";
+    const fontSubstitution = getFontSubstitution(
+      new Map(),
+      idFactory,
+      fontName,
+      undefined,
+      "CIDFontType2"
+    );
+    expect(fontSubstitution).toEqual(
+      jasmine.objectContaining({
+        guessFallback: false,
+        baseFontName: "HeiseiMin-W3",
+        src:
+          "local(Hiragino Mincho ProN),local(Hiragino Mincho Pro)," +
+          "local(Yu Mincho),local(YuMincho),local(Source Han Serif JP)," +
+          "local(Noto Serif JP),local(Noto Serif CJK JP)," +
+          "local(IPAexMincho),local(IPAMincho),local(Takao Mincho)," +
+          "local(MS Mincho),local(MS PMincho)",
+        style: {
+          style: "normal",
+          weight: "normal",
+        },
+      })
+    );
+    expect(fontSubstitution.css).toMatch(
+      /^"HeiseiMin W3",g_d(\d+)_sf(\d+),serif$/
+    );
+  });
+
+  it("should substitute a Kozuka Mincho alias", () => {
+    const fontName = "KozMinPr6N-Regular";
+    const fontSubstitution = getFontSubstitution(
+      new Map(),
+      idFactory,
+      fontName,
+      undefined,
+      "CIDFontType0"
+    );
+    expect(fontSubstitution).toEqual(
+      jasmine.objectContaining({
+        guessFallback: false,
+        baseFontName: "KozMinPr6N-Regular",
+        src:
+          "local(Hiragino Mincho ProN),local(Hiragino Mincho Pro)," +
+          "local(Yu Mincho),local(YuMincho),local(Source Han Serif JP)," +
+          "local(Noto Serif JP),local(Noto Serif CJK JP)," +
+          "local(IPAexMincho),local(IPAMincho),local(Takao Mincho)," +
+          "local(MS Mincho),local(MS PMincho)",
+        style: {
+          style: "normal",
+          weight: "normal",
+        },
+      })
+    );
+    expect(fontSubstitution.css).toMatch(
+      /^"KozMinPr6N",g_d(\d+)_sf(\d+),serif$/
+    );
+  });
+
+  it("should substitute HYGoThic-Medium", () => {
+    const fontName = "HYGoThic-Medium";
+    const fontSubstitution = getFontSubstitution(
+      new Map(),
+      idFactory,
+      fontName,
+      undefined,
+      "CIDFontType2"
+    );
+    expect(fontSubstitution).toEqual(
+      jasmine.objectContaining({
+        guessFallback: false,
+        baseFontName: "HYGoThic-Medium",
+        src:
+          "local(Apple SD Gothic Neo),local(AppleGothic)," +
+          "local(Source Han Sans KR),local(Noto Sans KR)," +
+          "local(Noto Sans CJK KR),local(Nanum Gothic)," +
+          "local(Malgun Gothic),local(Dotum),local(Gulim)",
+        style: {
+          style: "normal",
+          weight: "500",
+        },
+      })
+    );
+    expect(fontSubstitution.css).toMatch(
+      /^"HYGoThic",g_d(\d+)_sf(\d+),sans-serif$/
     );
   });
 });

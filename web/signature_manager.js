@@ -21,6 +21,7 @@ import {
   stopEvent,
   SupportedImageMimeTypes,
 } from "pdfjs-lib";
+import { internalOpt } from "./internal_evt.js";
 
 // Default height of the added signature in page coordinates.
 const DEFAULT_HEIGHT_IN_PAGE = 40;
@@ -227,9 +228,13 @@ class SignatureManager {
     );
 
     this.#initTabButtons(typeButton, drawButton, imageButton, panels);
-    imagePicker.accept = SupportedImageMimeTypes.join(",");
+    imagePicker.accept = SupportedImageMimeTypes.keys().join(",");
 
-    eventBus._on("storedsignatureschanged", this.#signaturesChanged.bind(this));
+    eventBus.on(
+      "storedsignatureschanged",
+      this.#signaturesChanged.bind(this),
+      internalOpt
+    );
 
     overlayManager.register(dialog);
   }
@@ -410,7 +415,7 @@ class SignatureManager {
         this.#drawCurves = {
           width: drawWidth,
           height: drawHeight,
-          thickness: parseInt(this.#drawThickness.value),
+          thickness: parseInt(this.#drawThickness.value, 10),
           curves: [],
         };
         this.#disableButtons(true);
@@ -564,7 +569,7 @@ class SignatureManager {
       "change",
       async () => {
         const file = this.#imagePicker.files?.[0];
-        if (!file || !SupportedImageMimeTypes.includes(file.type)) {
+        if (!file || !SupportedImageMimeTypes.has(file.type)) {
           this.#showError("Upload");
           this.#dialog.classList.toggle("waiting", false);
           return;
@@ -585,7 +590,7 @@ class SignatureManager {
       e => {
         const { dataTransfer } = e;
         for (const { type } of dataTransfer.items) {
-          if (!SupportedImageMimeTypes.includes(type)) {
+          if (!SupportedImageMimeTypes.has(type)) {
             continue;
           }
           dataTransfer.dropEffect =
@@ -607,7 +612,7 @@ class SignatureManager {
           return;
         }
         for (const file of files) {
-          if (SupportedImageMimeTypes.includes(file.type)) {
+          if (SupportedImageMimeTypes.has(file.type)) {
             this.#extractSignature(file);
             break;
           }

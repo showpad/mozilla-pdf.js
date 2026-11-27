@@ -19,24 +19,24 @@ import {
   parseDefaultAppearance,
 } from "../../src/core/default_appearance.js";
 import { Dict, Name } from "../../src/core/primitives.js";
-import { NullStream, StringStream } from "../../src/core/stream.js";
 import { GlobalColorSpaceCache } from "../../src/core/image_utils.js";
+import { StringStream } from "../../src/core/stream.js";
 import { XRefMock } from "./test_utils.js";
 
 describe("Default appearance", function () {
   describe("parseDefaultAppearance and createDefaultAppearance", function () {
-    it("should parse and create default appearance", function () {
+    it("should parse and create default appearance", async function () {
       const da = "/F1 12 Tf 0.1 0.2 0.3 rg";
       const result = {
         fontSize: 12,
         fontName: "F1",
         fontColor: new Uint8ClampedArray([26, 51, 76]),
       };
-      expect(parseDefaultAppearance(da)).toEqual(result);
+      expect(await parseDefaultAppearance(da)).toEqual(result);
       expect(createDefaultAppearance(result)).toEqual(da);
 
       expect(
-        parseDefaultAppearance(
+        await parseDefaultAppearance(
           "0.1 0.2 0.3 rg /F1 12 Tf 0.3 0.2 0.1 rg /F2 13 Tf"
         )
       ).toEqual({
@@ -46,9 +46,9 @@ describe("Default appearance", function () {
       });
     });
 
-    it("should parse default appearance with save/restore", function () {
+    it("should parse default appearance with save/restore", async function () {
       const da = "q Q 0.1 0.2 0.3 rg /F1 12 Tf q 0.3 0.2 0.1 rg /F2 13 Tf Q";
-      expect(parseDefaultAppearance(da)).toEqual({
+      expect(await parseDefaultAppearance(da)).toEqual({
         fontSize: 12,
         fontName: "F1",
         fontColor: new Uint8ClampedArray([26, 51, 76]),
@@ -57,24 +57,38 @@ describe("Default appearance", function () {
   });
 
   describe("parseAppearanceStream", () => {
-    let evaluatorOptions, xref, globalColorSpaceCache;
+    let xref, globalColorSpaceCache;
 
     beforeAll(function () {
-      evaluatorOptions = {
-        isEvalSupported: true,
-        isOffscreenCanvasSupported: false,
-      };
       xref = new XRefMock();
       globalColorSpaceCache = new GlobalColorSpaceCache();
     });
 
     afterAll(function () {
-      evaluatorOptions = null;
       xref = null;
       globalColorSpaceCache = null;
     });
 
-    it("should parse a FreeText (from Acrobat) appearance", () => {
+    it("parses the same appearance stream concurrently", async function () {
+      const appearance = new StringStream(
+        "BT /F1 12 Tf /DeviceRGB cs 1 0 0 sc (text) Tj ET"
+      );
+      const expected = {
+        fontSize: 12,
+        fontName: "F1",
+        fontColor: new Uint8ClampedArray([255, 0, 0]),
+      };
+      const parse = () =>
+        parseAppearanceStream(appearance, xref, globalColorSpaceCache);
+
+      expect(await Promise.all([parse(), parse()])).toEqual([
+        expected,
+        expected,
+      ]);
+      expect(appearance.pos).toEqual(0);
+    });
+
+    it("should parse a FreeText (from Acrobat) appearance", async () => {
       const appearance = new StringStream(`
       0 w
       46.5 621.0552 156.389 18.969 re
@@ -105,17 +119,12 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([107, 217, 41]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });
 
-    it("should parse a FreeText (from Firefox) appearance", () => {
+    it("should parse a FreeText (from Firefox) appearance", async () => {
       const appearance = new StringStream(`
       q
       0 0 203.7 28.3 re W n
@@ -131,24 +140,18 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([237, 43, 112]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });
 
-    it("should parse a FreeText (from Preview) appearance", () => {
+    it("should parse a FreeText (from Preview) appearance", async () => {
       const indexedDict = new Dict(xref);
       indexedDict.set("Alternate", Name.get("DeviceRGB"));
       indexedDict.set("N", 3);
       indexedDict.set("Length", 0);
 
-      const indexedStream = new NullStream();
-      indexedStream.dict = indexedDict;
+      const indexedStream = new StringStream("", indexedDict);
 
       const colorSpaceDict = new Dict(xref);
       colorSpaceDict.set("Cs1", [Name.get("ICCBased"), indexedStream]);
@@ -159,13 +162,15 @@ describe("Default appearance", function () {
       const appearanceDict = new Dict(xref);
       appearanceDict.set("Resources", resourcesDict);
 
-      const appearance = new StringStream(`
+      const appearance = new StringStream(
+        `
       q Q q 2.128482 2.128482 247.84 26 re W n /Cs1 cs 0.52799 0.3071 0.99498 sc
       q 1 0 0 -1 -108.3364 459.8485 cm BT 22.00539 0 0 -22.00539 110.5449 452.72
       Tm /TT1 1 Tf [ (H) -0.2 (e) -0.2 (l) -0.2 (l) -0.2 (o) -0.2 ( ) 0.2 (W) 17.7
       (o) -0.2 (rl) -0.2 (d) -0.2 ( ) 0.2 (f) 0.2 (ro) -0.2 (m ) 0.2 (Pre) -0.2
-      (vi) -0.2 (e) -0.2 (w) ] TJ ET Q Q`);
-      appearance.dict = appearanceDict;
+      (vi) -0.2 (e) -0.2 (w) ] TJ ET Q Q`,
+        appearanceDict
+      );
 
       const result = {
         fontSize: 22.00539,
@@ -173,17 +178,12 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([135, 78, 254]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });
 
-    it("should parse a FreeText (from Edge) appearance", () => {
+    it("should parse a FreeText (from Edge) appearance", async () => {
       const appearance = new StringStream(`
       q
       0 0 292.5 18.75 re W n
@@ -201,17 +201,12 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([16, 124, 16]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });
 
-    it("should parse a FreeText (from Foxit) appearance", () => {
+    it("should parse a FreeText (from Foxit) appearance", async () => {
       const appearance = new StringStream(`
       q
       /Tx BMC
@@ -232,17 +227,12 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([149, 63, 60]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });
 
-    it("should parse a FreeText (from Okular) appearance", () => {
+    it("should parse a FreeText (from Okular) appearance", async () => {
       const appearance = new StringStream(`
       q
       0.00 0.00 172.65 41.46 re W n
@@ -261,12 +251,7 @@ describe("Default appearance", function () {
         fontColor: new Uint8ClampedArray([0, 85, 127]),
       };
       expect(
-        parseAppearanceStream(
-          appearance,
-          evaluatorOptions,
-          xref,
-          globalColorSpaceCache
-        )
+        await parseAppearanceStream(appearance, xref, globalColorSpaceCache)
       ).toEqual(result);
       expect(appearance.pos).toEqual(0);
     });

@@ -13,39 +13,35 @@
  * limitations under the License.
  */
 
-import { FeatureTest, shadow, warn } from "../shared/util.js";
+import { shadow, warn } from "../shared/util.js";
+import { ColorSpaceUtils } from "./colorspace_utils.js";
 import { DecodeStream } from "./decode_stream.js";
 import { Dict } from "./primitives.js";
-import { JpegImage } from "./jpg.js";
+import { getJpegImageInfo } from "./jpeg_utils.js";
 
 /**
  * For JPEG's we use a library to decode these images and the stream behaves
  * like all the other DecodeStreams.
  */
 class JpegStream extends DecodeStream {
-  static #isImageDecoderSupported = FeatureTest.isImageDecoderSupported;
+  #pdfManager;
 
-  constructor(stream, maybeLength, params) {
+  constructor(stream, maybeLength, params, pdfManager) {
     super(maybeLength);
 
     this.stream = stream;
     this.dict = stream.dict;
     this.maybeLength = maybeLength;
     this.params = params;
+    this.#pdfManager = pdfManager;
   }
 
   static get canUseImageDecoder() {
     return shadow(
       this,
       "canUseImageDecoder",
-      this.#isImageDecoderSupported
-        ? ImageDecoder.isTypeSupported("image/jpeg")
-        : Promise.resolve(false)
+      ImageDecoder.isTypeSupported("image/jpeg")
     );
-  }
-
-  static setOptions({ isImageDecoderSupported = false }) {
-    this.#isImageDecoderSupported = isImageDecoderSupported;
   }
 
   get bytes() {
@@ -53,40 +49,17 @@ class JpegStream extends DecodeStream {
     return shadow(this, "bytes", this.stream.getBytes(this.maybeLength));
   }
 
-  ensureBuffer(requested) {
-    // No-op, since `this.readBlock` will always parse the entire image and
-    // directly insert all of its data into `this.buffer`.
+  get isAsyncDecoder() {
+    return true;
   }
 
-  readBlock() {
-    this.decodeImage();
+  ensureBuffer(requested) {
+    // The decoder supplies the entire buffer, even for a partial read.
   }
 
   get jpegOptions() {
-    const jpegOptions = {
-      decodeTransform: undefined,
-      colorTransform: undefined,
-    };
+    const jpegOptions = { colorTransform: undefined };
 
-    // Checking if values need to be transformed before conversion.
-    const decodeArr = this.dict.getArray("D", "Decode");
-    if ((this.forceRGBA || this.forceRGB) && Array.isArray(decodeArr)) {
-      const bitsPerComponent = this.dict.get("BPC", "BitsPerComponent") || 8;
-      const decodeArrLength = decodeArr.length;
-      const transform = new Int32Array(decodeArrLength);
-      let transformNeeded = false;
-      const maxValue = (1 << bitsPerComponent) - 1;
-      for (let i = 0; i < decodeArrLength; i += 2) {
-        transform[i] = ((decodeArr[i + 1] - decodeArr[i]) * 256) | 0;
-        transform[i + 1] = (decodeArr[i] * maxValue) | 0;
-        if (transform[i] !== 256 || transform[i + 1] !== 0) {
-          transformNeeded = true;
-        }
-      }
-      if (transformNeeded) {
-        jpegOptions.decodeTransform = transform;
-      }
-    }
     // Fetching the 'ColorTransform' entry, if it exists.
     if (this.params instanceof Dict) {
       const colorTransform = this.params.get("ColorTransform");
@@ -111,11 +84,19 @@ class JpegStream extends DecodeStream {
     return data;
   }
 
-  decodeImage(bytes) {
+  async getImageData(length, decoderOptions) {
+    const data = await super.getImageData(length, decoderOptions);
+    return this.canAsyncDecodeImageFromBuffer ? data : this.getBytes(length);
+  }
+
+  async decodeImage(bytes) {
     if (this.eof) {
       return this.buffer;
     }
     bytes = this.#skipUselessBytes(bytes || this.bytes);
+    const { JpegImage } = await import(
+      /* webpackChunkName: "jpeg" */ "./jpg.js"
+    );
 
     // TODO: if an image has a mask we need to combine the data.
     // So ideally get a VideoFrame from getTransferableImage and then use
@@ -123,12 +104,17 @@ class JpegStream extends DecodeStream {
 
     const jpegImage = new JpegImage(this.jpegOptions);
     jpegImage.parse(bytes);
+    const { forceRGBA, forceRGB } = this;
+    const cmyk =
+      jpegImage.numComponents === 4 && (forceRGBA || forceRGB)
+        ? await ColorSpaceUtils.getCmyk(this.dict?.xref)
+        : undefined;
     const data = jpegImage.getData({
       width: this.drawWidth,
       height: this.drawHeight,
-      forceRGBA: this.forceRGBA,
-      forceRGB: this.forceRGB,
-      isSourcePDF: true,
+      forceRGBA,
+      forceRGB,
+      cmyk,
     });
     this.buffer = data;
     this.bufferLength = data.length;
@@ -141,16 +127,14 @@ class JpegStream extends DecodeStream {
     return this.stream.isAsync;
   }
 
-  async getTransferableImage() {
-    if (!(await JpegStream.canUseImageDecoder)) {
+  async getTransferableImage(width, height) {
+    if (
+      !this.#pdfManager.evaluatorOptions.isImageDecoderSupported ||
+      !(await JpegStream.canUseImageDecoder)
+    ) {
       return null;
     }
     const jpegOptions = this.jpegOptions;
-    if (jpegOptions.decodeTransform) {
-      // TODO: We could decode the image thanks to ImageDecoder and then
-      // get the pixels with copyTo and apply the decodeTransform.
-      return null;
-    }
     let decoder;
     try {
       // TODO: If the stream is Flate & DCT we could try to just pipe the
@@ -164,27 +148,48 @@ class JpegStream extends DecodeStream {
         return null;
       }
       let data = this.#skipUselessBytes(bytes);
-      const useImageDecoder = JpegImage.canUseImageDecoder(
-        data,
-        jpegOptions.colorTransform
-      );
-      if (!useImageDecoder) {
+      const info = getJpegImageInfo(data, jpegOptions.colorTransform);
+      if (!info) {
         return null;
       }
-      if (useImageDecoder.exifStart) {
+      const {
+        width: frameWidth,
+        height: frameHeight,
+        exifStart,
+        exifEnd,
+      } = info;
+      const reducePower = this.#pdfManager.imageResizer.getReducePower(
+        frameWidth,
+        frameHeight
+      );
+      if (
+        (frameWidth !== width || frameHeight !== height) &&
+        (reducePower || !frameHeight)
+      ) {
+        // Only downscale when the SOF and image dictionary dimensions match.
+        return null;
+      }
+      if (exifStart) {
         // Replace the entire EXIF-block with dummy data, to ensure that a
         // non-default EXIF orientation won't cause the image to be rotated
         // when using `ImageDecoder` (fixes bug1942064.pdf).
         //
         // Copy the data first, to avoid modifying the original PDF document.
         data = data.slice();
-        data.fill(0x00, useImageDecoder.exifStart, useImageDecoder.exifEnd);
+        data.fill(0x00, exifStart, exifEnd);
       }
-      decoder = new ImageDecoder({
+      const init = {
         data,
         type: "image/jpeg",
         preferAnimation: false,
-      });
+      };
+      // Request reduced dimensions; ImageDecoder treats them as best-effort.
+      if (reducePower) {
+        const factor = 2 ** reducePower;
+        init.desiredWidth = Math.ceil(frameWidth / factor);
+        init.desiredHeight = Math.ceil(frameHeight / factor);
+      }
+      decoder = new ImageDecoder(init);
 
       return (await decoder.decode()).image;
     } catch (reason) {

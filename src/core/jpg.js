@@ -13,17 +13,11 @@
  * limitations under the License.
  */
 
-import { assert, BaseException, warn } from "../shared/util.js";
+import { BaseException, warn } from "../shared/util.js";
+import { findNextFileMarker, JpegError, readDataBlock } from "./jpeg_utils.js";
 import { ColorSpaceUtils } from "./colorspace_utils.js";
 import { DeviceCmykCS } from "./colorspace.js";
 import { grayToRGBA } from "../shared/image_utils.js";
-import { readUint16 } from "./core_utils.js";
-
-class JpegError extends BaseException {
-  constructor(msg) {
-    super(msg, "JpegError");
-  }
-}
 
 class DNLMarkerError extends BaseException {
   constructor(message, scanLines) {
@@ -122,6 +116,7 @@ function getBlockBufferOffset(component, row, col) {
 
 function decodeScan(
   data,
+  view,
   offset,
   frame,
   components,
@@ -151,7 +146,7 @@ function decodeScan(
         if (nextByte === /* DNL = */ 0xdc && parseDNLMarker) {
           offset += 2; // Skip marker length.
 
-          const scanLines = readUint16(data, offset);
+          const scanLines = view.getUint16(offset);
           offset += 2;
           if (scanLines > 0 && scanLines !== frame.scanLines) {
             throw new DNLMarkerError(
@@ -221,10 +216,7 @@ function decodeScan(
       return readBit() === 1 ? 1 : -1;
     }
     const n = receive(length);
-    if (n >= 1 << (length - 1)) {
-      return n;
-    }
-    return n + (-1 << length) + 1;
+    return n >= 1 << (length - 1) ? n : n + (-1 << length) + 1;
   }
 
   function decodeBaseline(component, blockOffset) {
@@ -434,7 +426,7 @@ function decodeScan(
 
     // find marker
     bitsCount = 0;
-    fileMarker = findNextFileMarker(data, offset);
+    fileMarker = findNextFileMarker(data, view, offset);
     if (!fileMarker) {
       break; // Reached the end of the image data without finding any marker.
     }
@@ -717,35 +709,6 @@ function buildComponentData(frame, component) {
   return component.blockData;
 }
 
-function findNextFileMarker(data, currentPos, startPos = currentPos) {
-  const maxPos = data.length - 1;
-  let newPos = startPos < currentPos ? startPos : currentPos;
-
-  if (currentPos >= maxPos) {
-    return null; // Don't attempt to read non-existent data and just return.
-  }
-  const currentMarker = readUint16(data, currentPos);
-  if (currentMarker >= 0xffc0 && currentMarker <= 0xfffe) {
-    return {
-      invalid: null,
-      marker: currentMarker,
-      offset: currentPos,
-    };
-  }
-  let newMarker = readUint16(data, newPos);
-  while (!(newMarker >= 0xffc0 && newMarker <= 0xfffe)) {
-    if (++newPos >= maxPos) {
-      return null; // Don't attempt to read non-existent data and just return.
-    }
-    newMarker = readUint16(data, newPos);
-  }
-  return {
-    invalid: currentMarker.toString(16),
-    marker: newMarker,
-    offset: newPos,
-  };
-}
-
 function prepareComponents(frame) {
   const mcusPerLine = Math.ceil(frame.samplesPerLine / 8 / frame.maxH);
   const mcusPerColumn = Math.ceil(frame.scanLines / 8 / frame.maxV);
@@ -769,115 +732,14 @@ function prepareComponents(frame) {
   frame.mcusPerColumn = mcusPerColumn;
 }
 
-function readDataBlock(data, offset) {
-  const length = readUint16(data, offset);
-  offset += 2;
-  let endOffset = offset + length - 2;
-
-  const fileMarker = findNextFileMarker(data, endOffset, offset);
-  if (fileMarker?.invalid) {
-    warn(
-      "readDataBlock - incorrect length, current marker is: " +
-        fileMarker.invalid
-    );
-    endOffset = fileMarker.offset;
-  }
-
-  const array = data.subarray(offset, endOffset);
-  return {
-    appData: array,
-    oldOffset: offset,
-    newOffset: offset + array.length,
-  };
-}
-
-function skipData(data, offset) {
-  const length = readUint16(data, offset);
-  offset += 2;
-  const endOffset = offset + length - 2;
-
-  const fileMarker = findNextFileMarker(data, endOffset, offset);
-  if (fileMarker?.invalid) {
-    return fileMarker.offset;
-  }
-  return endOffset;
-}
-
 class JpegImage {
-  constructor({ decodeTransform = null, colorTransform = -1 } = {}) {
-    this._decodeTransform = decodeTransform;
-    this._colorTransform = colorTransform;
-  }
-
-  static canUseImageDecoder(data, colorTransform = -1) {
-    let exifOffsets = null;
-    let offset = 0;
-    let numComponents = null;
-    let fileMarker = readUint16(data, offset);
-    offset += 2;
-    if (fileMarker !== /* SOI (Start of Image) = */ 0xffd8) {
-      throw new JpegError("SOI not found");
-    }
-    fileMarker = readUint16(data, offset);
-    offset += 2;
-
-    markerLoop: while (fileMarker !== /* EOI (End of Image) = */ 0xffd9) {
-      switch (fileMarker) {
-        case 0xffe1: // APP1 - Exif
-          // TODO: Remove this once https://github.com/w3c/webcodecs/issues/870
-          //       is fixed.
-          const { appData, oldOffset, newOffset } = readDataBlock(data, offset);
-          offset = newOffset;
-
-          // 'Exif\x00\x00'
-          if (
-            appData[0] === 0x45 &&
-            appData[1] === 0x78 &&
-            appData[2] === 0x69 &&
-            appData[3] === 0x66 &&
-            appData[4] === 0 &&
-            appData[5] === 0
-          ) {
-            if (exifOffsets) {
-              throw new JpegError("Duplicate EXIF-blocks found.");
-            }
-            // Don't do the EXIF-block replacement here, see `JpegStream`,
-            // since that can modify the original PDF document.
-            exifOffsets = { exifStart: oldOffset + 6, exifEnd: newOffset };
-          }
-          fileMarker = readUint16(data, offset);
-          offset += 2;
-          continue;
-        case 0xffc0: // SOF0 (Start of Frame, Baseline DCT)
-        case 0xffc1: // SOF1 (Start of Frame, Extended DCT)
-        case 0xffc2: // SOF2 (Start of Frame, Progressive DCT)
-          // Skip marker length.
-          // Skip precision.
-          // Skip scanLines.
-          // Skip samplesPerLine.
-          numComponents = data[offset + (2 + 1 + 2 + 2)];
-          break markerLoop;
-        case 0xffff: // Fill bytes
-          if (data[offset] !== 0xff) {
-            // Avoid skipping a valid marker.
-            offset--;
-          }
-          break;
-      }
-      offset = skipData(data, offset);
-      fileMarker = readUint16(data, offset);
-      offset += 2;
-    }
-    if (numComponents === 4) {
-      return null;
-    }
-    if (numComponents === 3 && colorTransform === 0) {
-      return null;
-    }
-    return exifOffsets || {};
+  constructor(options) {
+    this._colorTransform = options?.colorTransform ?? -1;
   }
 
   parse(data, { dnlScanLines = null } = {}) {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const maxOffset = data.length - 1;
     let offset = 0;
     let jfif = null;
     let adobe = null;
@@ -887,12 +749,12 @@ class JpegImage {
     const huffmanTablesAC = [],
       huffmanTablesDC = [];
 
-    let fileMarker = readUint16(data, offset);
+    let fileMarker = view.getUint16(offset);
     offset += 2;
     if (fileMarker !== /* SOI (Start of Image) = */ 0xffd8) {
       throw new JpegError("SOI not found");
     }
-    fileMarker = readUint16(data, offset);
+    fileMarker = view.getUint16(offset);
     offset += 2;
 
     markerLoop: while (fileMarker !== /* EOI (End of Image) = */ 0xffd9) {
@@ -915,7 +777,7 @@ class JpegImage {
         case 0xffee: // APP14
         case 0xffef: // APP15
         case 0xfffe: // COM (Comment)
-          const { appData, newOffset } = readDataBlock(data, offset);
+          const { appData, newOffset } = readDataBlock(data, view, offset);
           offset = newOffset;
 
           if (fileMarker === 0xffe0) {
@@ -962,7 +824,7 @@ class JpegImage {
           break;
 
         case 0xffdb: // DQT (Define Quantization Tables)
-          const quantizationTablesLength = readUint16(data, offset);
+          const quantizationTablesLength = view.getUint16(offset);
           offset += 2;
           const quantizationTablesEnd = quantizationTablesLength + offset - 2;
           let z;
@@ -979,7 +841,7 @@ class JpegImage {
               // 16 bit values
               for (j = 0; j < 64; j++) {
                 z = dctZigZag[j];
-                tableData[z] = readUint16(data, offset);
+                tableData[z] = view.getUint16(offset);
                 offset += 2;
               }
             } else {
@@ -1001,10 +863,10 @@ class JpegImage {
           frame.extended = fileMarker === 0xffc1;
           frame.progressive = fileMarker === 0xffc2;
           frame.precision = data[offset++];
-          const sofScanLines = readUint16(data, offset);
+          const sofScanLines = view.getUint16(offset);
           offset += 2;
           frame.scanLines = dnlScanLines || sofScanLines;
-          frame.samplesPerLine = readUint16(data, offset);
+          frame.samplesPerLine = view.getUint16(offset);
           offset += 2;
           frame.components = [];
           frame.componentIds = {};
@@ -1037,9 +899,9 @@ class JpegImage {
           break;
 
         case 0xffc4: // DHT (Define Huffman Tables)
-          const huffmanLength = readUint16(data, offset);
+          const huffmanLength = view.getUint16(offset);
           offset += 2;
-          for (i = 2; i < huffmanLength; ) {
+          for (i = 2; i < huffmanLength;) {
             const huffmanTableSpec = data[offset++];
             const codeLengths = new Uint8Array(16);
             let codeLengthSum = 0;
@@ -1061,7 +923,7 @@ class JpegImage {
         case 0xffdd: // DRI (Define Restart Interval)
           offset += 2; // Skip marker length.
 
-          resetInterval = readUint16(data, offset);
+          resetInterval = view.getUint16(offset);
           offset += 2;
           break;
 
@@ -1092,6 +954,7 @@ class JpegImage {
           try {
             const processed = decodeScan(
               data,
+              view,
               offset,
               frame,
               components,
@@ -1133,6 +996,7 @@ class JpegImage {
           // `startPos = offset - 3` when looking for the next valid marker.
           const nextFileMarker = findNextFileMarker(
             data,
+            view,
             /* currentPos = */ offset - 2,
             /* startPos = */ offset - 3
           );
@@ -1144,7 +1008,7 @@ class JpegImage {
             offset = nextFileMarker.offset;
             break;
           }
-          if (!nextFileMarker || offset >= data.length - 1) {
+          if (!nextFileMarker || offset >= maxOffset) {
             warn(
               "JpegImage.parse - reached the end of the image data " +
                 "without finding an EOI marker (0xFFD9)."
@@ -1155,8 +1019,13 @@ class JpegImage {
             "JpegImage.parse - unknown marker: " + fileMarker.toString(16)
           );
       }
-      fileMarker = readUint16(data, offset);
-      offset += 2;
+
+      if (offset < maxOffset) {
+        fileMarker = view.getUint16(offset);
+        offset += 2;
+      } else {
+        fileMarker = 0;
+      }
     }
 
     if (!frame) {
@@ -1189,15 +1058,13 @@ class JpegImage {
     return undefined;
   }
 
-  _getLinearizedBlockData(width, height, isSourcePDF = false) {
+  #getLinearizedBlockData(width, height) {
     const scaleX = this.width / width,
       scaleY = this.height / height;
 
     let component, componentScaleX, componentScaleY, blocksPerScanline;
-    let x, y, i, j, k;
-    let index;
+    let x, y, i, j;
     let offset = 0;
-    let output;
     const numComponents = this.components.length;
     const dataLength = width * height * numComponents;
     const data = new Uint8ClampedArray(dataLength);
@@ -1210,7 +1077,7 @@ class JpegImage {
       componentScaleX = component.scaleX * scaleX;
       componentScaleY = component.scaleY * scaleY;
       offset = i;
-      output = component.output;
+      const output = component.output;
       blocksPerScanline = (component.blocksPerLine + 1) << 3;
       // Precalculate the `xScaleBlockOffset`. Since it doesn't depend on the
       // component data, that's only necessary when `componentScaleX` changes.
@@ -1224,7 +1091,7 @@ class JpegImage {
       // linearize the blocks of the component
       for (y = 0; y < height; y++) {
         j = 0 | (y * componentScaleY);
-        index = (blocksPerScanline * (j & mask3LSB)) | ((j & 7) << 3);
+        const index = (blocksPerScanline * (j & mask3LSB)) | ((j & 7) << 3);
         for (x = 0; x < width; x++) {
           data[offset] = output[index + xScaleBlockOffset[x]];
           offset += numComponents;
@@ -1232,31 +1099,6 @@ class JpegImage {
       }
     }
 
-    // decodeTransform contains pairs of multiplier (-256..256) and additive
-    let transform = this._decodeTransform;
-
-    // In PDF files, JPEG images with CMYK colour spaces are usually inverted
-    // (this can be observed by extracting the raw image data).
-    // Since the conversion algorithms (see below) were written primarily for
-    // the PDF use-cases, attempting to use `JpegImage` to parse standalone
-    // JPEG (CMYK) images may thus result in inverted images (see issue 9513).
-    //
-    // Unfortunately it's not (always) possible to tell, from the image data
-    // alone, if it needs to be inverted. Thus in an attempt to provide better
-    // out-of-box behaviour when `JpegImage` is used standalone, default to
-    // inverting JPEG (CMYK) images if and only if the image data does *not*
-    // come from a PDF file and no `decodeTransform` was passed by the user.
-    if (!isSourcePDF && numComponents === 4 && !transform) {
-      transform = new Int32Array([-256, 255, -256, 255, -256, 255, -256, 255]);
-    }
-
-    if (transform) {
-      for (i = 0; i < dataLength; ) {
-        for (j = 0, k = 0; j < numComponents; j++, i++, k += 2) {
-          data[i] = ((data[i] * transform[k]) >> 8) + transform[k + 1];
-        }
-      }
-    }
     return data;
   }
 
@@ -1294,7 +1136,7 @@ class JpegImage {
 
   _convertYccToRgb(data) {
     let Y, Cb, Cr;
-    for (let i = 0, length = data.length; i < length; i += 3) {
+    for (let i = 0, ii = data.length; i < ii; i += 3) {
       Y = data[i];
       Cb = data[i + 1];
       Cr = data[i + 2];
@@ -1306,7 +1148,7 @@ class JpegImage {
   }
 
   _convertYccToRgba(data, out) {
-    for (let i = 0, j = 0, length = data.length; i < length; i += 3, j += 4) {
+    for (let i = 0, j = 0, ii = data.length; i < ii; i += 3, j += 4) {
       const Y = data[i];
       const Cb = data[i + 1];
       const Cr = data[i + 2];
@@ -1318,19 +1160,9 @@ class JpegImage {
     return out;
   }
 
-  _convertYcckToRgb(data) {
-    this._convertYcckToCmyk(data);
-    return this._convertCmykToRgb(data);
-  }
-
-  _convertYcckToRgba(data) {
-    this._convertYcckToCmyk(data);
-    return this._convertCmykToRgba(data);
-  }
-
   _convertYcckToCmyk(data) {
     let Y, Cb, Cr;
-    for (let i = 0, length = data.length; i < length; i += 4) {
+    for (let i = 0, ii = data.length; i < ii; i += 4) {
       Y = data[i];
       Cb = data[i + 1];
       Cr = data[i + 2];
@@ -1342,16 +1174,14 @@ class JpegImage {
     return data;
   }
 
-  _convertCmykToRgb(data) {
+  #convertCmyk(data, cmyk, forceRGBA) {
     const count = data.length / 4;
-    ColorSpaceUtils.cmyk.getRgbBuffer(data, 0, count, data, 0, 8, 0);
-    return data.subarray(0, count * 3);
-  }
+    cmyk.getRgbBuffer(data, 0, count, data, 0, 8, forceRGBA ? 1 : 0);
+    if (!forceRGBA) {
+      return data.subarray(0, count * 3);
+    }
 
-  _convertCmykToRgba(data) {
-    ColorSpaceUtils.cmyk.getRgbBuffer(data, 0, data.length / 4, data, 0, 8, 1);
-
-    if (ColorSpaceUtils.cmyk instanceof DeviceCmykCS) {
+    if (cmyk instanceof DeviceCmykCS) {
       // The alpha-component isn't updated by `DeviceCmykCS`, doing it manually.
       for (let i = 3, ii = data.length; i < ii; i += 4) {
         data[i] = 255;
@@ -1365,27 +1195,21 @@ class JpegImage {
     height,
     forceRGBA = false,
     forceRGB = false,
-    isSourcePDF = false,
+    cmyk = ColorSpaceUtils.deviceCmyk,
   }) {
-    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
-      assert(
-        isSourcePDF === true,
-        'JpegImage.getData: Unexpected "isSourcePDF" value for PDF files.'
-      );
-    }
     if (this.numComponents > 4) {
       throw new JpegError("Unsupported color mode");
     }
     // Type of data: Uint8ClampedArray(width * height * numComponents)
-    const data = this._getLinearizedBlockData(width, height, isSourcePDF);
+    const data = this.#getLinearizedBlockData(width, height);
 
     if (this.numComponents === 1 && (forceRGBA || forceRGB)) {
       const len = data.length * (forceRGBA ? 4 : 3);
       const rgbaData = new Uint8ClampedArray(len);
-      let offset = 0;
       if (forceRGBA) {
         grayToRGBA(data, new Uint32Array(rgbaData.buffer));
       } else {
+        let offset = 0;
         for (const grayColor of data) {
           rgbaData[offset++] = grayColor;
           rgbaData[offset++] = grayColor;
@@ -1401,17 +1225,10 @@ class JpegImage {
       return this._convertYccToRgb(data);
     } else if (this.numComponents === 4) {
       if (this._isColorConversionNeeded) {
-        if (forceRGBA) {
-          return this._convertYcckToRgba(data);
-        }
-        if (forceRGB) {
-          return this._convertYcckToRgb(data);
-        }
-        return this._convertYcckToCmyk(data);
-      } else if (forceRGBA) {
-        return this._convertCmykToRgba(data);
-      } else if (forceRGB) {
-        return this._convertCmykToRgb(data);
+        this._convertYcckToCmyk(data);
+      }
+      if (forceRGBA || forceRGB) {
+        return this.#convertCmyk(data, cmyk, forceRGBA);
       }
     }
     return data;

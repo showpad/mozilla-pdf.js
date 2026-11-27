@@ -20,19 +20,23 @@ import {
   escapePDFName,
   escapeString,
   getInheritableProperty,
+  getModificationDate,
+  getRotationMatrix,
   getSizeInBytes,
-  isAscii,
   isWhiteSpace,
-  log2,
+  normalizeCSSFontFamily,
   numberToString,
   parseXFAPath,
   recoverJsURL,
-  stringToUTF16HexString,
-  stringToUTF16String,
   toRomanNumerals,
   validateCSSFont,
 } from "../../src/core/core_utils.js";
-import { Dict, Ref } from "../../src/core/primitives.js";
+import {
+  clearPrimitiveCaches,
+  Dict,
+  Name,
+  Ref,
+} from "../../src/core/primitives.js";
 import { XRefMock } from "./test_utils.js";
 
 describe("core_utils", function () {
@@ -167,7 +171,7 @@ describe("core_utils", function () {
       for (const input of ["foo", -1, 0]) {
         expect(function () {
           toRomanNumerals(input);
-        }).toThrow(new Error("The number should be a positive integer."));
+        }).toThrowError("The number should be a positive integer.");
       }
     });
 
@@ -198,20 +202,6 @@ describe("core_utils", function () {
     });
   });
 
-  describe("log2", function () {
-    it("handles values smaller than/equal to zero", function () {
-      expect(log2(0)).toEqual(0);
-      expect(log2(-1)).toEqual(0);
-    });
-
-    it("handles values larger than zero", function () {
-      expect(log2(1)).toEqual(0);
-      expect(log2(2)).toEqual(1);
-      expect(log2(3)).toEqual(2);
-      expect(log2(3.14)).toEqual(2);
-    });
-  });
-
   describe("numberToString", function () {
     it("should stringify integers", function () {
       expect(numberToString(1)).toEqual("1");
@@ -229,16 +219,16 @@ describe("core_utils", function () {
 
   describe("isWhiteSpace", function () {
     it("handles space characters", function () {
-      expect(isWhiteSpace(0x20)).toEqual(true);
-      expect(isWhiteSpace(0x09)).toEqual(true);
-      expect(isWhiteSpace(0x0d)).toEqual(true);
-      expect(isWhiteSpace(0x0a)).toEqual(true);
+      expect(isWhiteSpace(0x20)).toBeTrue();
+      expect(isWhiteSpace(0x09)).toBeTrue();
+      expect(isWhiteSpace(0x0d)).toBeTrue();
+      expect(isWhiteSpace(0x0a)).toBeTrue();
     });
 
     it("handles non-space characters", function () {
-      expect(isWhiteSpace(0x0b)).toEqual(false);
-      expect(isWhiteSpace(null)).toEqual(false);
-      expect(isWhiteSpace(undefined)).toEqual(false);
+      expect(isWhiteSpace(0x0b)).toBeFalse();
+      expect(isWhiteSpace(null)).toBeFalse();
+      expect(isWhiteSpace(undefined)).toBeFalse();
     });
   });
 
@@ -253,6 +243,32 @@ describe("core_utils", function () {
         { name: "FOO", pos: 123 },
         { name: "BAR", pos: 456 },
       ]);
+    });
+
+    it("should ignore a malformed position", function () {
+      expect(parseXFAPath("foo[].bar[1x].oof[].[3]")).toEqual([
+        { name: "foo[]", pos: 0 },
+        { name: "bar[1x]", pos: 0 },
+        { name: "oof[]", pos: 0 },
+        { name: "[3]", pos: 0 },
+      ]);
+    });
+
+    it("should keep the longest name when a component has several brackets", function () {
+      expect(parseXFAPath("foo[1][2]")).toEqual([{ name: "foo[1]", pos: 2 }]);
+    });
+
+    it("should handle a long component efficiently", function () {
+      // Looking for the position with a leading `.+` is quadratic in the
+      // length of a component which doesn't end with one.
+      const name = "a".repeat(200000);
+
+      const startTime = performance.now();
+      const parsedPath = parseXFAPath(name);
+      const duration = performance.now() - startTime;
+
+      expect(parsedPath).toEqual([{ name, pos: 0 }]);
+      expect(duration).toBeLessThan(1000);
     });
   });
 
@@ -302,6 +318,11 @@ describe("core_utils", function () {
         "#23#28#29#3c#3e#5b#5d#7b#7d#2f#25"
       );
     });
+
+    it("should escape control characters using two hexadecimal digits", function () {
+      expect(escapePDFName("\x00\x09\x0a\x1f")).toEqual("#00#09#0a#1f");
+      expect(escapePDFName("a\tb")).toEqual("a#09b");
+    });
   });
 
   describe("escapeString", function () {
@@ -324,6 +345,46 @@ describe("core_utils", function () {
       const str = "hello world";
       expect(encodeToXmlString(str)).toEqual(str);
     });
+
+    it("should keep the character after U+FFFE or U+FFFF", function () {
+      expect(encodeToXmlString("￿A")).toEqual("&#xFFFF;A");
+      expect(encodeToXmlString("￾B")).toEqual("&#xFFFE;B");
+    });
+  });
+
+  describe("normalizeCSSFontFamily", function () {
+    it("should strip the spaces preceding a digit", function () {
+      expect(normalizeCSSFontFamily("Wingdings 3")).toEqual("Wingdings3");
+      expect(normalizeCSSFontFamily("Wingdings   3")).toEqual("Wingdings3");
+      expect(normalizeCSSFontFamily(" 1 2 3")).toEqual("123");
+      expect(normalizeCSSFontFamily("MS Gothic 2 Bold 7")).toEqual(
+        "MS Gothic2 Bold7"
+      );
+    });
+
+    it("should keep the spaces which don't precede a digit", function () {
+      expect(normalizeCSSFontFamily("")).toEqual("");
+      expect(normalizeCSSFontFamily("Times New Roman")).toEqual(
+        "Times New Roman"
+      );
+      // The runs of spaces must be preserved as-is.
+      expect(normalizeCSSFontFamily("  Times   New Roman ")).toEqual(
+        " Times New Roman "
+      );
+      // A digit which isn't preceded by a space is left alone.
+      expect(normalizeCSSFontFamily("Wingdings3")).toEqual("Wingdings3");
+    });
+
+    it("should handle long runs of spaces efficiently", function () {
+      // Guard against a regular expression that backtracks over the spaces,
+      // which makes the replacement quadratic: that needs several seconds
+      // here, whereas a linear one needs well under a millisecond.
+      const fontFamily = `Wingdings${" ".repeat(100000)}`;
+
+      const startTime = performance.now();
+      expect(normalizeCSSFontFamily(fontFamily)).toEqual("Wingdings ");
+      expect(performance.now() - startTime).toBeLessThan(1000);
+    });
   });
 
   describe("validateCSSFont", function () {
@@ -334,49 +395,73 @@ describe("core_utils", function () {
         italicAngle: 0,
       };
 
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = `"blah blah \\" blah blah"`;
-      expect(validateCSSFont(cssFontInfo)).toEqual(true);
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
 
       cssFontInfo.fontFamily = `'blah blah ' blah blah'`;
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = `'blah blah \\' blah blah'`;
-      expect(validateCSSFont(cssFontInfo)).toEqual(true);
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
 
       cssFontInfo.fontFamily = `"blah blah `;
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = `blah blah"`;
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = `'blah blah `;
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = `blah blah'`;
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = "blah blah blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(true);
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
 
       cssFontInfo.fontFamily = "blah 0blah blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = "blah blah -0blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = "blah blah --blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
 
       cssFontInfo.fontFamily = "blah blah -blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(true);
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
 
       cssFontInfo.fontFamily = "blah fdqAJqjHJK23kl23__--Kj blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(true);
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
 
       cssFontInfo.fontFamily = "blah fdqAJqjH$JK23kl23__--Kj blah";
-      expect(validateCSSFont(cssFontInfo)).toEqual(false);
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
+    });
+
+    it("Check font family containing control characters", function () {
+      const cssFontInfo = {
+        fontFamily: "",
+        fontWeight: 0,
+        italicAngle: 0,
+      };
+
+      // A form feed is a newline in CSS, hence it terminates the <string>.
+      cssFontInfo.fontFamily = `"blah\fblah"`;
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
+
+      cssFontInfo.fontFamily = `"blah\x00blah"`;
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
+
+      cssFontInfo.fontFamily = `"blah\tblah"`;
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
+
+      cssFontInfo.fontFamily = `"blah\nblah"`;
+      expect(validateCSSFont(cssFontInfo)).toBeFalse();
+
+      cssFontInfo.fontFamily = `"blah blah"`;
+      expect(validateCSSFont(cssFontInfo)).toBeTrue();
     });
 
     it("Check font weight", function () {
@@ -425,56 +510,6 @@ describe("core_utils", function () {
     });
   });
 
-  describe("isAscii", function () {
-    it("handles ascii/non-ascii strings", function () {
-      expect(isAscii("hello world")).toEqual(true);
-      expect(isAscii("こんにちは世界の")).toEqual(false);
-      expect(isAscii("hello world in Japanese is こんにちは世界の")).toEqual(
-        false
-      );
-      expect(isAscii("")).toEqual(true);
-      expect(isAscii(123)).toEqual(false);
-      expect(isAscii(null)).toEqual(false);
-      expect(isAscii(undefined)).toEqual(false);
-    });
-  });
-
-  describe("stringToUTF16HexString", function () {
-    it("should encode a string in UTF16 hexadecimal format", function () {
-      expect(stringToUTF16HexString("hello world")).toEqual(
-        "00680065006c006c006f00200077006f0072006c0064"
-      );
-
-      expect(stringToUTF16HexString("こんにちは世界の")).toEqual(
-        "30533093306b3061306f4e16754c306e"
-      );
-    });
-  });
-
-  describe("stringToUTF16String", function () {
-    it("should encode a string in UTF16", function () {
-      expect(stringToUTF16String("hello world")).toEqual(
-        "\0h\0e\0l\0l\0o\0 \0w\0o\0r\0l\0d"
-      );
-
-      expect(stringToUTF16String("こんにちは世界の")).toEqual(
-        "\x30\x53\x30\x93\x30\x6b\x30\x61\x30\x6f\x4e\x16\x75\x4c\x30\x6e"
-      );
-    });
-
-    it("should encode a string in UTF16BE with a BOM", function () {
-      expect(
-        stringToUTF16String("hello world", /* bigEndian = */ true)
-      ).toEqual("\xfe\xff\0h\0e\0l\0l\0o\0 \0w\0o\0r\0l\0d");
-
-      expect(
-        stringToUTF16String("こんにちは世界の", /* bigEndian = */ true)
-      ).toEqual(
-        "\xfe\xff\x30\x53\x30\x93\x30\x6b\x30\x61\x30\x6f\x4e\x16\x75\x4c\x30\x6e"
-      );
-    });
-  });
-
   describe("deepCompare", function () {
     it("should return true for the same reference", function () {
       const dict = new Dict();
@@ -510,6 +545,20 @@ describe("core_utils", function () {
       a.set("Foo", ref);
       const b = new Dict();
       b.set("Foo", ref);
+      expect(deepCompare(a, b)).toBeTrue();
+    });
+
+    it("should return true for Dicts with same Ref values, after clearing cached Refs", function () {
+      const refA = Ref.get(10, 0);
+      clearPrimitiveCaches();
+      const refB = Ref.get(10, 0);
+      // Ensure that Ref-objects are not identical, after clearing the cache.
+      expect(refA).not.toBe(refB);
+
+      const a = new Dict();
+      a.set("Foo", refA);
+      const b = new Dict();
+      b.set("Foo", refB);
       expect(deepCompare(a, b)).toBeTrue();
     });
 
@@ -569,6 +618,52 @@ describe("core_utils", function () {
 
     it("should return false for arrays with different values", function () {
       expect(deepCompare([Ref.get(1, 0)], [Ref.get(2, 0)])).toBeFalse();
+    });
+
+    it("should return true for equal Names", function () {
+      const name1 = Name.get("name"),
+        name2 = Name.get("name");
+      expect(name1).toBe(name2); // Names are cached.
+
+      expect(deepCompare(name1, name2)).toBeTrue();
+    });
+
+    it("should return false for different Names", function () {
+      const name1 = Name.get("name"),
+        name2 = Name.get("otherName");
+      expect(deepCompare(name1, name2)).toBeFalse();
+    });
+
+    it("should return true for equal Names, after clearing cached Names", function () {
+      const name1 = Name.get("name");
+      clearPrimitiveCaches();
+      const name2 = Name.get("name");
+      // Ensure that Name-objects are not identical, after clearing the cache.
+      expect(name1).not.toBe(name2);
+
+      expect(deepCompare(name1, name2)).toBeTrue();
+    });
+  });
+
+  describe("getModificationDate", function () {
+    it("should get a correctly formatted date", function () {
+      const date = new Date(Date.UTC(3141, 5, 9, 2, 6, 53));
+      expect(getModificationDate(date)).toEqual("31410609020653");
+      expect(getModificationDate(date.toString())).toEqual("31410609020653");
+    });
+  });
+
+  describe("getRotationMatrix", function () {
+    it("should get a rotation matrix for valid rotation values", function () {
+      expect(getRotationMatrix(90, 10, 20)).toEqual([0, 1, -1, 0, 10, 0]);
+      expect(getRotationMatrix(180, 10, 20)).toEqual([-1, 0, 0, -1, 10, 20]);
+      expect(getRotationMatrix(270, 10, 20)).toEqual([0, -1, 1, 0, 0, 20]);
+    });
+
+    it("throws an exception for invalid rotation values", function () {
+      expect(() => getRotationMatrix(42, 10, 20)).toThrowError(
+        "Invalid rotation"
+      );
     });
   });
 

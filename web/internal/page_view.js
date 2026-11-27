@@ -21,7 +21,7 @@ import {
 } from "./draw_ops_view.js";
 import { OPS, TextLayer } from "pdfjs-lib";
 import { CanvasContextDetailsView } from "./canvas_context_details_view.js";
-import { DOMCanvasFactory } from "pdfjs/display/canvas_factory.js";
+import { DOMCanvasFactory } from "pdfjs/display/dom_canvas_factory.js";
 import { FontView } from "./font_view.js";
 import { SplitView } from "./split_view.js";
 
@@ -242,9 +242,7 @@ class PageView {
       _isTextExecOp: i => TEXT_EXEC_OP_IDS.has(this.#currentOpList?.fnArray[i]),
       // Returns the total number of ops in the current op list.
       _opCount: () => this.#currentOpList?.fnArray.length ?? 0,
-      create() {
-        return globalThis.StepperManager._active;
-      },
+      create: () => globalThis.StepperManager._active,
     };
 
     // Keep --dpr in sync so CSS can scale temp canvases correctly.
@@ -355,7 +353,9 @@ class PageView {
       destroy(canvasAndCtx) {
         const idx = this.#alive.findIndex(e => e.canvasAndCtx === canvasAndCtx);
         if (idx !== -1) {
-          this.#alive[idx].wrapper.remove();
+          const { wrapper, ctxLabel } = this.#alive[idx];
+          wrapper.remove();
+          gfxStateComp.removeContext(ctxLabel);
           this.#alive.splice(idx, 1);
         }
         super.destroy(canvasAndCtx);
@@ -393,7 +393,7 @@ class PageView {
         checker.className = "canvas-checker";
         checker.append(canvasAndCtx.canvas);
         wrapper.append(labelEl, checker);
-        const entry = { canvasAndCtx, wrapper, labelEl };
+        const entry = { canvasAndCtx, wrapper, labelEl, ctxLabel };
         this.#alive.push(entry);
         this.#attachWrapper(entry);
       }
@@ -482,7 +482,10 @@ class PageView {
     });
 
     this.#stepButton.addEventListener("click", () => {
-      globalThis.StepperManager._active?.stepNext();
+      if (globalThis.StepperManager._active) {
+        this.#gfxStateComp.freeze();
+        globalThis.StepperManager._active.stepNext();
+      }
     });
 
     this.#continueButton.addEventListener("click", () => {
@@ -580,9 +583,11 @@ class PageView {
       }
       if (e.key === "s") {
         e.preventDefault();
+        this.#gfxStateComp.freeze();
         stepper.stepNext();
       } else if (e.key === "c") {
         e.preventDefault();
+        this.#gfxStateComp.freeze();
         stepper.continueToBreakpoint();
       }
     });
